@@ -99,7 +99,31 @@ def collision_and_stream_adj_math(fhat, feq, rho, vel):
     fhat = collision_adj_math(fhat, feq, rho, vel)
     return fhat
 
+def apply_bc1(f):
+    return 5.0*f
 
+def apply_bc2(f):
+    return f + 2.0
+
+def apply_bc1_adj_math(fhat):
+    return 5.0*fhat
+
+def apply_bc2_adj_math(fhat):
+    return fhat
+
+def step(f):
+    f = collision(f)
+    f = apply_bc1(f)
+    f = streaming(f, c)
+    f = apply_bc2(f)
+    return f
+
+def step_adj_math(fhat, feq, rho, vel):
+    fhat = streaming_adj_math(fhat, c)
+    fhat = apply_bc2_adj_math(fhat)
+    fhat = collision_adj_math(fhat, feq, rho, vel)
+    fhat = apply_bc1_adj_math(fhat)
+    return fhat
 
 # Input test parameters
 nx, ny, nz = 5, 7, 3
@@ -148,5 +172,14 @@ if np.allclose(fhat_math, fhat_AD, tol, tol):
 else:
     print(f'FAILED unit test for adjoint collide-stream up to tol={tol}')
 
+
+# Complete LBM time step with BCs
+_, step_adj = vjp(step, fpop)
+fhat_next_math = step_adj_math(fhat, feq, rho, vel)
+fhat_next_AD = step_adj(fhat)[0]
+if np.allclose(fhat_next_math, fhat_next_AD, tol, tol):
+    print(f'PASSED unit test for an LBM time-step up to tol={tol}')
+else:
+    print(f'FAILED unit test for an LBM time-step up to tol={tol}')
 
 
