@@ -67,22 +67,51 @@ def streaming(f, c):
             return jnp.roll(f, (c[0], c[1], c[2]), axis=(0, 1, 2))
     return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, c.T)
 
-def streaming_adj_math(f, c):
-    fhat_rolled = np.zeros_like(f)
-    for i in range(q):
-        fhat_rolled[..., i] = np.roll(f[..., i], (-c[0, i], -c[1, i], -c[2, i]), axis=(0, 1, 2))
-    return fhat_rolled
+def streaming_adj_math(fhat, c):
+    def streaming_i(fhat, c):
+        if dim == 2:
+            return jnp.roll(fhat, (-c[0], -c[1]), axis=(0, 1))
+        elif dim == 3:
+            return jnp.roll(fhat, (-c[0], -c[1], -c[2]), axis=(0, 1, 2))
+    return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(fhat, c.T)
 
+def collision(f):
+    omega = 1.0
+    feq = equilibrium(f)
+    fneq = f - feq
+    fout = f - omega * fneq
+    return fout
+
+def collision_adj_math(fhat, feq, rho, vel):
+    omega = 1.0
+    feq_adj = equilibrium_adj_math(fhat, feq, rho, vel)
+    fneq_adj = fhat - feq_adj
+    fhat = fhat - omega * fneq_adj
+    return fhat
+
+def collision_and_stream(f):
+    f = collision(f)
+    f = streaming(f, c)
+    return f
+
+def collision_and_stream_adj_math(fhat, feq, rho, vel):
+    fhat = streaming_adj_math(fhat, c)
+    fhat = collision_adj_math(fhat, feq, rho, vel)
+    return fhat
+
+
+
+# Input test parameters
 nx, ny, nz = 5, 7, 3
-f = jnp.array(np.random.random((nx, ny, nz, q)))
+fpop = jnp.array(np.random.random((nx, ny, nz, q)))
 fhat = jnp.array(np.random.random((nx, ny, nz, q)))
 tol = 1e-6
 
 
 # Equilibrium
-feq = equilibrium(f)
-_, equilibrium_adj = vjp(equilibrium, f)
-rho, vel = update_macroscopic(f)
+feq = equilibrium(fpop)
+_, equilibrium_adj = vjp(equilibrium, fpop)
+rho, vel = update_macroscopic(fpop)
 fhat_eq_math = equilibrium_adj_math(fhat, feq, rho, vel)
 fhat_eq_AD = equilibrium_adj(fhat)[0]
 if np.allclose(fhat_eq_math, fhat_eq_AD, tol, tol):
@@ -91,13 +120,33 @@ else:
     print(f'FAILED unit test for adjoint equilibrium up to tol={tol}')
 
 # Streaming
-_, streaming_adj = vjp(streaming, f, c)
-fhat_streamed_math = streaming_adj_math(fhat, c)
-fhat_streamed_AD = streaming_adj(fhat)[0]
-if np.allclose(fhat_streamed_math, fhat_streamed_AD, tol, tol):
+_, streaming_adj = vjp(streaming, fpop, c)
+fhat_poststreaming_math = streaming_adj_math(fhat, c)
+fhat_poststreaming_AD = streaming_adj(fhat)[0]
+if np.allclose(fhat_poststreaming_math, fhat_poststreaming_AD, tol, tol):
     print(f'PASSED unit test for adjoint streaming up to tol={tol}')
 else:
     print(f'FAILED unit test for adjoint streaming up to tol={tol}')
+
+# Collide and Streaming sequence of operations
+_, collision_adj = vjp(collision, fpop)
+fhat_postcollision_math = collision_adj_math(fhat, feq, rho, vel)
+fhat_postcollision_AD = collision_adj(fhat)[0]
+if np.allclose(fhat_postcollision_math, fhat_postcollision_AD, tol, tol):
+    print(f'PASSED unit test for adjoint collision up to tol={tol}')
+else:
+    print(f'FAILED unit test for adjoint collision up to tol={tol}')
+    
+
+
+# Collide and Streaming sequence of operations
+_, collision_and_stream_adj = vjp(collision_and_stream, fpop)
+fhat_math = collision_and_stream_adj_math(fhat, feq, rho, vel)
+fhat_AD = collision_and_stream_adj(fhat)[0]
+if np.allclose(fhat_math, fhat_AD, tol, tol):
+    print(f'PASSED unit test for adjoint collide-stream up to tol={tol}')
+else:
+    print(f'FAILED unit test for adjoint collide-stream up to tol={tol}')
 
 
 
