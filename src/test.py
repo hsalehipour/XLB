@@ -1,6 +1,6 @@
 import numpy as np
 import jax.numpy as jnp
-from jax import vjp
+from jax import vjp, vmap
 
 dim = 3
 q = 19
@@ -35,37 +35,69 @@ def equilibrium_adj_math(fhat, feq, rho, vel):
     """
     Adjoint Equilibrium distribution function.
     """
-    ntot = fhat.shape[0]
+    nx, ny, nz = fhat.shape[:-1]
 
     # adjoint density
     rho_adj = density_adj(fhat, feq, rho)
 
     # adjoint momentum
-    mhat = np.zeros((ntot, dim))
-    umhat = np.zeros(ntot)
-    feq_adj = np.zeros((ntot, q))
+    mhat = np.zeros((nx, ny, nz, dim))
+    umhat = np.zeros((nx, ny, nz))
+    feq_adj = np.zeros((nx, ny, nz, q))
     cu = jnp.dot(vel, c)
 
     for d in range(dim):
         for i in range(q):
-            mhat[:, d] += fhat[:, i] * w[i] * \
-                          (c[d, i] + 3.0 * (c[d, i] * cu[:, i] - vel[:, d] / 3.0))
-        umhat += vel[:, d] * mhat[:, d]
+            mhat[..., d] += fhat[..., i] * w[i] * \
+                            (c[d, i] + 3.0 * (c[d, i] * cu[..., i] - vel[..., d] / 3.0))
+        umhat += vel[..., d] * mhat[..., d]
 
     cmhat = np.dot(mhat, c)
     for i in range(q):
-        feq_adj[:, i] = rho_adj + 3.0 * (cmhat[:, i] - umhat)
+        feq_adj[..., i] = rho_adj + 3.0 * (cmhat[..., i] - umhat)
 
     return feq_adj
 
 
-ncell = 10
-f = jnp.array(np.random.random((ncell, q)))
-fhat = jnp.array(np.random.random((ncell, q)))
+def streaming(f, c):
+    def streaming_i(f, c):
+        if dim == 2:
+            return jnp.roll(f, (c[0], c[1]), axis=(0, 1))
+        elif dim == 3:
+            return jnp.roll(f, (c[0], c[1], c[2]), axis=(0, 1, 2))
+    return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, c.T)
+
+def streaming_adj_math(f, c):
+    fhat_rolled = np.zeros_like(f)
+    for i in range(q):
+        fhat_rolled[..., i] = np.roll(f[..., i], (-c[0, i], -c[1, i], -c[2, i]), axis=(0, 1, 2))
+    return fhat_rolled
+
+nx, ny, nz = 5, 7, 3
+f = jnp.array(np.random.random((nx, ny, nz, q)))
+fhat = jnp.array(np.random.random((nx, ny, nz, q)))
+tol = 1e-6
+
+
+# Equilibrium
 feq = equilibrium(f)
 _, equilibrium_adj = vjp(equilibrium, f)
 rho, vel = update_macroscopic(f)
 fhat_eq_math = equilibrium_adj_math(fhat, feq, rho, vel)
 fhat_eq_AD = equilibrium_adj(fhat)[0]
-print(np.allclose(fhat_eq_math, fhat_eq_AD, 1e-6, 1e-6))
+if np.allclose(fhat_eq_math, fhat_eq_AD, tol, tol):
+    print(f'PASSED unit test for adjoint equilibrium up to tol={tol}')
+else:
+    print(f'FAILED unit test for adjoint equilibrium up to tol={tol}')
+
+# Streaming
+_, streaming_adj = vjp(streaming, f, c)
+fhat_streamed_math = streaming_adj_math(fhat, c)
+fhat_streamed_AD = streaming_adj(fhat)[0]
+if np.allclose(fhat_streamed_math, fhat_streamed_AD, tol, tol):
+    print(f'PASSED unit test for adjoint streaming up to tol={tol}')
+else:
+    print(f'FAILED unit test for adjoint streaming up to tol={tol}')
+
+
 
