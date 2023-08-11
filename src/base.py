@@ -117,40 +117,35 @@ class LBMBase(object):
             "lattice": lattice
         }
 
-        P = PartitionSpec
-
         # Define the right permutation
         self.rightPerm = [(i, (i + 1) % self.nDevices) for i in range(self.nDevices)]
         # Define the left permutation
         self.leftPerm = [((i + 1) % self.nDevices, i) for i in range(self.nDevices)]
 
-
         # Set up the sharding and streaming for 2D and 3D simulations
         if self.dim == 2:
             self.devices = mesh_utils.create_device_mesh((self.nDevices, 1, 1))
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "value"))
-            self.sharding = NamedSharding(self.mesh, P("x", "y", "value"))
-
-            self.streaming = jit(shard_map(self.streaming_m, mesh=self.mesh,
-                                                      in_specs=P("x", None, None), out_specs=P("x", None, None), check_rep=False))
-
-            self.compute_bitmask = jit(shard_map(self.compute_bitmask_m, mesh=self.mesh,
-                                                      in_specs=P("x", None, None), out_specs=P("x", None, None), check_rep=False))
-
-        # Set up the sharding and streaming for 2D and 3D simulations
+            self.sharding = NamedSharding(self.mesh, PartitionSpec("x", "y", "value"))
+            inout_specs = PartitionSpec("x", None, None)
         elif self.dim == 3:
             self.devices = mesh_utils.create_device_mesh((self.nDevices, 1, 1, 1))
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "z", "value"))
-            self.sharding = NamedSharding(self.mesh, P("x", "y", "z", "value"))
-
-            self.streaming = jit(shard_map(self.streaming_m, mesh=self.mesh,
-                                                      in_specs=P("x", None, None, None), out_specs=P("x", None, None, None), check_rep=False))
-            
-            self.compute_bitmask = jit(shard_map(self.compute_bitmask_m, mesh=self.mesh,
-                                                      in_specs=P("x", None, None, None), out_specs=P("x", None, None, None), check_rep=False))
+            self.sharding = NamedSharding(self.mesh, PartitionSpec("x", "y", "z", "value"))
+            inout_specs = PartitionSpec("x", None, None, None)
         else:
             raise ValueError(f"dim = {self.dim} not supported")
-        
+
+        # Set up the sharding and streaming
+        self.streaming = jit(shard_map(self.streaming_m, mesh=self.mesh,
+                                       in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
+
+        self.compute_bitmask = jit(shard_map(self.compute_bitmask_m, mesh=self.mesh,
+                                             in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
+        if self.optimize:
+            self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
+                                               in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
+
         # Compute the bounding box indices for boundary conditions
         self.boundingBoxIndices = self.bounding_box_indices()
         # Create boundary data for the simulation
@@ -427,8 +422,8 @@ class LBMBase(object):
     
     def streaming_m(self, f):
         """
-        This function performs the streaming step in the Lattice Boltzmann Method, which is 
-        the propagation of the distribution functions in the lattice.
+        This function performs the streaming step in the Lattice Boltzmann Method and propagates
+        the distribution functions along lattice directions.
 
         To enable multi-GPU/TPU functionality, it extracts the left and right boundary slices of the
         distribution functions that need to be communicated to the neighboring processes.
@@ -447,7 +442,7 @@ class LBMBase(object):
         jax.numpy.ndarray
             The distribution functions after the streaming operation.
         """
-        f = self.streaming_p(f)
+        f = self.streaming_p(f, self.c)
         left_comm, right_comm = f[:1, ..., self.lattice.right_indices], f[-1:, ..., self.lattice.left_indices]
 
         left_comm, right_comm = self.send_right(left_comm, 'x'), self.send_left(right_comm, 'x')
@@ -455,8 +450,38 @@ class LBMBase(object):
         f = f.at[-1:, ..., self.lattice.left_indices].set(right_comm)
         return f
 
+    def streaming_adj_m(self, f):
+        """
+        This function performs the adjoint streaming step in the Lattice Boltzmann Method and propagates
+        the distribution functions in the opposite of lattice directions.
+
+        To enable multi-GPU/TPU functionality, it extracts the left and right boundary slices of the
+        distribution functions that need to be communicated to the neighboring processes.
+
+        The function then sends the left boundary slice to the left neighboring process and the right
+        boundary slice to the right neighboring process. The received data is then set to the
+        corresponding indices in the receiving domain.
+
+        Parameters
+        ----------
+        f: jax.numpy.ndarray
+            The array holding the adjoint distribution functions for the simulation.
+
+        Returns
+        -------
+        jax.numpy.ndarray
+            The adjoint distribution functions after the adjoint streaming operation.
+        """
+        f = self.streaming_p(f, -self.c)
+        left_comm, right_comm = f[:1, ..., self.lattice.left_indices], f[-1:, ..., self.lattice.right_indices]
+
+        left_comm, right_comm = self.send_right(left_comm, 'x'), self.send_left(right_comm, 'x')
+        f = f.at[:1, ..., self.lattice.left_indices].set(left_comm)
+        f = f.at[-1:, ..., self.lattice.right_indices].set(right_comm)
+        return f
+
     @partial(jit, static_argnums=(0,))
-    def streaming_p(self, f):
+    def streaming_p(self, f, c):
         """
         Perform streaming operation on a partitioned (in the x-direction) distribution function.
         
@@ -466,19 +491,20 @@ class LBMBase(object):
         Parameters
         ----------
             f: The distribution function.
+            c: The streaming vector in all lattice directions.
 
         Returns
         -------
             The updated distribution function after streaming.
         """
-        def streaming_i(f, c):
+        def streaming_i(f, ci):
             """
             Perform individual streaming operation in a direction.
 
             Parameters
             ----------
-                f: The distribution function.
-                c: The streaming direction vector.
+                f : The distribution function.
+                ci: The streaming vector along i-th lattice direction.
 
             Returns
             -------
@@ -486,11 +512,11 @@ class LBMBase(object):
                 The updated distribution function after streaming.
             """
             if self.dim == 2:
-                return jnp.roll(f, (c[0], c[1]), axis=(0, 1))
+                return jnp.roll(f, (ci[0], ci[1]), axis=(0, 1))
             elif self.dim == 3:
-                return jnp.roll(f, (c[0], c[1], c[2]), axis=(0, 1, 2))
+                return jnp.roll(f, (ci[0], ci[1], ci[2]), axis=(0, 1, 2))
 
-        return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, self.c.T)
+        return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, c.T)
     
     def compute_bitmask_m(self, b):
         """
