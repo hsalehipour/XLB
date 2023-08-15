@@ -142,9 +142,6 @@ class LBMBase(object):
 
         self.compute_bitmask = jit(shard_map(self.compute_bitmask_m, mesh=self.mesh,
                                              in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
-        if self.optimize:
-            self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
-                                               in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
 
         # Compute the bounding box indices for boundary conditions
         self.boundingBoxIndices = self.bounding_box_indices()
@@ -448,36 +445,6 @@ class LBMBase(object):
         left_comm, right_comm = self.send_right(left_comm, 'x'), self.send_left(right_comm, 'x')
         f = f.at[:1, ..., self.lattice.right_indices].set(left_comm)
         f = f.at[-1:, ..., self.lattice.left_indices].set(right_comm)
-        return f
-
-    def streaming_adj_m(self, f):
-        """
-        This function performs the adjoint streaming step in the Lattice Boltzmann Method and propagates
-        the distribution functions in the opposite of lattice directions.
-
-        To enable multi-GPU/TPU functionality, it extracts the left and right boundary slices of the
-        distribution functions that need to be communicated to the neighboring processes.
-
-        The function then sends the left boundary slice to the left neighboring process and the right
-        boundary slice to the right neighboring process. The received data is then set to the
-        corresponding indices in the receiving domain.
-
-        Parameters
-        ----------
-        f: jax.numpy.ndarray
-            The array holding the adjoint distribution functions for the simulation.
-
-        Returns
-        -------
-        jax.numpy.ndarray
-            The adjoint distribution functions after the adjoint streaming operation.
-        """
-        f = self.streaming_p(f, -self.c)
-        left_comm, right_comm = f[:1, ..., self.lattice.left_indices], f[-1:, ..., self.lattice.right_indices]
-
-        left_comm, right_comm = self.send_right(left_comm, 'x'), self.send_left(right_comm, 'x')
-        f = f.at[:1, ..., self.lattice.left_indices].set(left_comm)
-        f = f.at[-1:, ..., self.lattice.right_indices].set(right_comm)
         return f
 
     @partial(jit, static_argnums=(0,))
@@ -949,7 +916,7 @@ class LBMBase(object):
         fin: jax.numpy.ndarray
             The post-collision distribution functions.
         """
-        pass
+        return fin
 
     def get_force(self):
         """
