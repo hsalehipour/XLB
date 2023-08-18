@@ -27,7 +27,7 @@ class UnitTest(LBMBaseDifferentiable):
         self.BCs[0].isSolid = False
 
 
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0,))
     def collision(self, f):
         """
         BGK collision step for lattice.
@@ -66,48 +66,7 @@ class UnitTest(LBMBaseDifferentiable):
         else:
             print(f'!!!! FAILED !!!! unit test for {func_name} up to tol={tol}')
 
-
-    @partial(jit, static_argnums=(0,))
-    def bounceback_halfway_adj(self, f, fhat):
-        """
-        Adjoint of halfway bounceback boundary condition.
-        """
-        # all voxels
-        # fhat_poststreaming = self.collision_adj(f, self.streaming_adj(fhat))
-        fhat_poststreaming = self.streaming_adj(fhat)
-
-        # # just bc
-        # dim = self.dim
-        # q = self.q
-        # c = self.c
-        # w = self.w
-        #
-        # # get forward information
-        # rho, vel = self.update_macroscopic(f)
-        # feq = self.equilibrium(rho, vel)
-        #
-        # # adjoint density
-        # rho_adj = jnp.sum(feq[..., self.lattice.opp_indices]*fhat, axis=-1, keepdims=True)/rho
-        #
-        # # adjoint momentum
-        # mhat = jnp.zeros_like(vel)
-        # umhat = jnp.zeros_like(rho)
-        # cu = jnp.dot(vel, c)
-        #
-        # for d in range(dim):
-        #     for i in range(q):
-        #         val = fhat[..., i] * w[i] * (-c[d, i] + 3.0 * (c[d, i] * cu[..., i] - vel[..., d] / 3.0))
-        #         mhat = mhat.at[..., d].add(val)
-        #     umhat += jnp.expand_dims(vel[..., d] * mhat[..., d], -1)
-        #
-        # cmhat = jnp.dot(mhat, c)
-        # feq_adj = rho_adj + 3.0 * (cmhat - umhat)
-
-        # add adjoint bounce-back equation applied on top of the BGK model
-        # omega = 1.0
-        # fbd = (1.0 - omega) * fhat[..., self.lattice.opp_indices] + omega * feq_adj
-
-
+    def apply_bounceback_halfway_adj_naive(self, f, fhat, fhat_poststreaming):
         # only at BC
         bc = self.BCs[0]
         nbd = len(bc.indices[0])
@@ -117,13 +76,70 @@ class UnitTest(LBMBaseDifferentiable):
         fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         return fhat_poststreaming
 
+    def apply_bounceback_halfway_adj(self, f, fhat, fhat_postcollision):
+        # only at BC voxels:
+        # add contributions to adjoint BC due to the BGK collision operator!
+        bc = self.BCs[0]
+        nbd = len(bc.indices[0])
+        bindex = np.arange(nbd)[:, None]
+        dim = self.dim
+        q = self.q
+        c = self.c
+        w = self.w
+
+        # get forward information
+        f = f[bc.indices]
+        fhat = fhat[bc.indices]
+        rho, vel = self.update_macroscopic(f)
+        feq = self.equilibrium(rho, vel)
+
+        # adjoint density
+        rho_adj = jnp.sum(feq[..., self.lattice.opp_indices] * fhat, axis=-1, keepdims=True) / rho
+
+        # adjoint momentum
+        mhat = jnp.zeros_like(vel)
+        umhat = jnp.zeros_like(rho)
+        cu = jnp.dot(vel, c)
+
+        for d in range(dim):
+            for i in range(q):
+                val = fhat[..., i] * w[i] * (-c[d, i] + 3.0 * (c[d, i] * cu[..., i] - vel[..., d] / 3.0))
+                mhat = mhat.at[..., d].add(val)
+            umhat += jnp.expand_dims(vel[..., d] * mhat[..., d], -1)
+
+        cmhat = jnp.dot(mhat, c)
+        feq_adj = rho_adj + 3.0 * (cmhat - umhat)
+
+        # add adjoint bounce-back equation applied on top of the BGK model
+        omega = 1.0
+        fbd = fhat_postcollision[bc.indices]
+        val = (1.0 - omega) * fhat[..., self.lattice.opp_indices] + omega * feq_adj
+        fbd = fbd.at[bindex, bc.iknown].set(val)
+
+        # set the boundary values back in the main array
+        fhat_postcollision = fhat_postcollision.at[bc.indices].set(fbd)
+        return fhat_postcollision
+
+
+    @partial(jit, static_argnums=(0,))
+    def step_adjoint_test(self, f, fhat):
+        """
+        Adjoint of halfway bounceback boundary condition.
+        """
+        # all voxels
+        fhat_poststreaming = self.streaming_adj(fhat)
+        fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
+        fhat_postcollision = self.apply_bounceback_halfway_adj(f, fhat_poststreaming, fhat_postcollision)
+        return fhat_postcollision
+
 if __name__ == "__main__":
     precision = "f32/f32"
     lattice = LatticeD2Q9(precision)
 
     # Input test parameters
-    nx, ny, nz = 50, 70, 0
+    nx, ny, nz = 3, 4, 0
     tol = 1e-6
+    timestep = 0
 
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
     kwargs = {
@@ -171,20 +187,34 @@ if __name__ == "__main__":
     test.test_adjoint(fhat, fhat_poststreaming, '"Collide-then-Stream"', lbm_step, f)
 
     # TEST 4:
-    # Apply post-streaming BC after collide & stream
-    timestep = 0
+    # Apply post-streaming BC after stream
     f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
-    bc = test.BCs[0]
-
     start_time = time.time()
-    fhat_poststreaming = test.bounceback_halfway_adj(f, fhat)
+    fhat_poststreaming = test.streaming_adj(fhat)
+    fhat_poststreaming = test.apply_bounceback_halfway_adj_naive(f, fhat, fhat_poststreaming)
     print(f'Ref time is: {time.time() - start_time}')
     def lbm_step_bc(f):
-        # f_postcollision = test.collision(f)
         f_poststreaming = test.streaming(f)
         f_poststreaming = test.apply_bc(f_poststreaming, f, timestep, "PostStreaming")
         return f_poststreaming
 
     ffunc, dfunc_AD = vjp(lbm_step_bc, f)
     dfunc_AD = dfunc_AD(fhat)[0]
-    test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_bc, f)
+    test.test_adjoint(fhat, fhat_poststreaming, '"Stream with halfway BB"', lbm_step_bc, f)
+
+
+    # TEST 5:
+    # Apply post-streaming boudary condition after BGK Collision & Streaming
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
+    start_time = time.time()
+    fhat_poststreaming = test.step_adjoint_test(f, fhat)
+    print(f'Ref time is: {time.time() - start_time}')
+    def lbm_step_full(f):
+        f_postcollision = test.collision(f)
+        f_poststreaming = test.streaming(f_postcollision)
+        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
+        return f_poststreaming
+
+    ffunc, dfunc_AD = vjp(lbm_step_full, f)
+    dfunc_AD = dfunc_AD(fhat)[0]
+    test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_full, f)
