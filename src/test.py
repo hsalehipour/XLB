@@ -6,12 +6,26 @@ from functools import partial
 from src.adjoint import LBMBaseDifferentiable
 import os
 from src.lattice import LatticeD2Q9, LatticeD3Q19
-
+from src.boundary_conditions import *
 
 
 class UnitTest(LBMBaseDifferentiable):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    def set_boundary_conditions(self):
+
+        # concatenate the indices of the left, right, and bottom walls
+        # walls = self.boundingBoxIndices["bottom"]
+        walls = np.concatenate((self.boundingBoxIndices['bottom'],
+                                self.boundingBoxIndices['top'],
+                                self.boundingBoxIndices['left'],
+                                self.boundingBoxIndices['right']))
+        # apply bounce back boundary condition to the walls
+        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
+        self.BCs[0].needsExtraConfiguration = False
+        self.BCs[0].isSolid = False
+
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, f):
@@ -53,13 +67,62 @@ class UnitTest(LBMBaseDifferentiable):
             print(f'!!!! FAILED !!!! unit test for {func_name} up to tol={tol}')
 
 
+    @partial(jit, static_argnums=(0,))
+    def bounceback_halfway_adj(self, f, fhat):
+        """
+        Adjoint of halfway bounceback boundary condition.
+        """
+        # all voxels
+        # fhat_poststreaming = self.collision_adj(f, self.streaming_adj(fhat))
+        fhat_poststreaming = self.streaming_adj(fhat)
+
+        # # just bc
+        # dim = self.dim
+        # q = self.q
+        # c = self.c
+        # w = self.w
+        #
+        # # get forward information
+        # rho, vel = self.update_macroscopic(f)
+        # feq = self.equilibrium(rho, vel)
+        #
+        # # adjoint density
+        # rho_adj = jnp.sum(feq[..., self.lattice.opp_indices]*fhat, axis=-1, keepdims=True)/rho
+        #
+        # # adjoint momentum
+        # mhat = jnp.zeros_like(vel)
+        # umhat = jnp.zeros_like(rho)
+        # cu = jnp.dot(vel, c)
+        #
+        # for d in range(dim):
+        #     for i in range(q):
+        #         val = fhat[..., i] * w[i] * (-c[d, i] + 3.0 * (c[d, i] * cu[..., i] - vel[..., d] / 3.0))
+        #         mhat = mhat.at[..., d].add(val)
+        #     umhat += jnp.expand_dims(vel[..., d] * mhat[..., d], -1)
+        #
+        # cmhat = jnp.dot(mhat, c)
+        # feq_adj = rho_adj + 3.0 * (cmhat - umhat)
+
+        # add adjoint bounce-back equation applied on top of the BGK model
+        # omega = 1.0
+        # fbd = (1.0 - omega) * fhat[..., self.lattice.opp_indices] + omega * feq_adj
+
+
+        # only at BC
+        bc = self.BCs[0]
+        nbd = len(bc.indices[0])
+        bindex = np.arange(nbd)[:, None]
+        fbd = fhat_poststreaming[bc.indices]
+        fbd = fbd.at[bindex, bc.iknown].set(fhat[bc.indices][bindex, bc.imissing])
+        fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+        return fhat_poststreaming
 
 if __name__ == "__main__":
     precision = "f32/f32"
-    lattice = LatticeD3Q19(precision)
+    lattice = LatticeD2Q9(precision)
 
     # Input test parameters
-    nx, ny, nz = 50, 70, 30
+    nx, ny, nz = 50, 70, 0
     tol = 1e-6
 
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
@@ -75,24 +138,31 @@ if __name__ == "__main__":
         'print_info_rate': 500
     }
 
+    # Define the test class
     test = UnitTest(**kwargs)
+
+    # TEST 1:
+    # Collision
     f = test.assign_fields_sharded()
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     fhat = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_postcollision = test.collision_adj(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
     test.test_adjoint(fhat, fhat_postcollision, '"BGK Collision"', test.collision, f)
 
+    # TEST 2:
     # Streaming
-    f = test.assign_fields_sharded()
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_poststreaming = test.streaming_adj(fhat)
     print(f'Ref time is: {time.time() - start_time}')
     test.test_adjoint(fhat, fhat_poststreaming, '"Streaming"', test.streaming, f)
 
 
+    # TEST 3:
     # Collide-then-Stream
-    f = test.assign_fields_sharded()
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_poststreaming = test.collision_adj(f, test.streaming_adj(fhat))
     print(f'Ref time is: {time.time() - start_time}')
@@ -100,50 +170,21 @@ if __name__ == "__main__":
         return test.streaming(test.collision(f))
     test.test_adjoint(fhat, fhat_poststreaming, '"Collide-then-Stream"', lbm_step, f)
 
-#
-#
-# # Complete LBM time step with BCs
-# _, step_adj = vjp(step, fpop)
-# fhat_next_math = step_adj_math(fhat, feq, rho, vel)
-# fhat_next_AD = step_adj(fhat)[0]
-# if np.allclose(fhat_next_math, fhat_next_AD, tol, tol):
-#     print(f'PASSED unit test for an LBM time-step up to tol={tol}')
-# else:
-#     print(f'FAILED unit test for an LBM time-step up to tol={tol}')
+    # TEST 4:
+    # Apply post-streaming BC after collide & stream
+    timestep = 0
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
+    bc = test.BCs[0]
 
+    start_time = time.time()
+    fhat_poststreaming = test.bounceback_halfway_adj(f, fhat)
+    print(f'Ref time is: {time.time() - start_time}')
+    def lbm_step_bc(f):
+        # f_postcollision = test.collision(f)
+        f_poststreaming = test.streaming(f)
+        f_poststreaming = test.apply_bc(f_poststreaming, f, timestep, "PostStreaming")
+        return f_poststreaming
 
-# def collision_and_stream(f):
-#     f = collision(f)
-#     f = streaming(f, c)
-#     return f
-#
-# def collision_and_stream_adj_math(fhat, feq, rho, vel):
-#     fhat = streaming_adj_math(fhat, c)
-#     fhat = collision_adj_math(fhat, feq, rho, vel)
-#     return fhat
-#
-# def apply_bc1(f):
-#     return 5.0*f
-#
-# def apply_bc2(f):
-#     return f + 2.0
-#
-# def apply_bc1_adj_math(fhat):
-#     return 5.0*fhat
-#
-# def apply_bc2_adj_math(fhat):
-#     return fhat
-#
-# def step(f):
-#     f = collision(f)
-#     f = apply_bc1(f)
-#     f = streaming(f, c)
-#     f = apply_bc2(f)
-#     return f
-
-# def step_adj_math(fhat, feq, rho, vel):
-#     fhat = streaming_adj_math(fhat, c)
-#     fhat = apply_bc2_adj_math(fhat)
-#     fhat = collision_adj_math(fhat, feq, rho, vel)
-#     fhat = apply_bc1_adj_math(fhat)
-#     return fhat
+    ffunc, dfunc_AD = vjp(lbm_step_bc, f)
+    dfunc_AD = dfunc_AD(fhat)[0]
+    test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_bc, f)

@@ -91,8 +91,8 @@ class LBMBaseDifferentiable(LBMBase):
         """
         Construct the adjoints for the forward model.
         """
-        _, self.collision_adj = vjp(self.collision, fin)
-        _, self.apply_bc_adj = vjp(self.apply_bc, fout, fin, timestep, 'PostCollision')
+        # _, self.collision_adj = vjp(self.collision, fin)
+        # _, self.apply_bc_adj = vjp(self.apply_bc, fout, fin, timestep, 'PostCollision')
         # _, compute_J_adj = vjp(self.compute_J, fout, phi, self.Js)
         return
 
