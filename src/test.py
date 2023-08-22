@@ -47,7 +47,7 @@ class UnitTest(LBMBaseDifferentiable):
     def collision_adj(self, f, fhat):
         rho, vel = test.update_macroscopic(f)
         feq = test.equilibrium(rho, vel)
-        omega = 1.0
+        omega = self.omega
         feq_adj = self.equilibrium_adj_math(fhat, feq, rho, vel)
         fneq_adj = fhat - feq_adj
         fhat = fhat - omega * fneq_adj
@@ -111,10 +111,10 @@ class UnitTest(LBMBaseDifferentiable):
         feq_adj = rho_adj + 3.0 * (cmhat - umhat)
 
         # add adjoint bounce-back equation applied on top of the BGK model
-        omega = 1.0
+        omega = self.omega
         fbd = fhat_postcollision[bc.indices]
         val = (1.0 - omega) * fhat[..., self.lattice.opp_indices] + omega * feq_adj
-        fbd = fbd.at[bindex, bc.iknown].set(val)
+        fbd = fbd.at[bc.iknownBitmask].set(val[bc.iknownBitmask])
 
         # set the boundary values back in the main array
         fhat_postcollision = fhat_postcollision.at[bc.indices].set(fbd)
@@ -129,7 +129,7 @@ class UnitTest(LBMBaseDifferentiable):
         # all voxels
         fhat_poststreaming = self.streaming_adj(fhat)
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
-        fhat_postcollision = self.apply_bounceback_halfway_adj(f, fhat_poststreaming, fhat_postcollision)
+        fhat_postcollision = self.apply_bounceback_halfway_adj(f, fhat, fhat_postcollision)
         return fhat_postcollision
 
 if __name__ == "__main__":
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     kwargs = {
         'optimize': True,
         'lattice': lattice,
-        'omega': 1.0,
+        'omega': 1.5,
         'nx': nx,
         'ny': ny,
         'nz': nz,
