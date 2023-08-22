@@ -21,6 +21,7 @@ class UnitTest(LBMBaseDifferentiable):
                                 self.boundingBoxIndices['top'],
                                 self.boundingBoxIndices['left'],
                                 self.boundingBoxIndices['right']))
+        walls = np.unique(walls, axis=0)
         # apply bounce back boundary condition to the walls
         self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
         self.BCs[0].needsExtraConfiguration = False
@@ -66,7 +67,7 @@ class UnitTest(LBMBaseDifferentiable):
         else:
             print(f'!!!! FAILED !!!! unit test for {func_name} up to tol={tol}')
 
-    def apply_bounceback_halfway_adj_naive(self, f, fhat, fhat_poststreaming):
+    def apply_bounceback_halfway_adj(self, fhat, fhat_poststreaming):
         # only at BC
         bc = self.BCs[0]
         nbd = len(bc.indices[0])
@@ -76,51 +77,6 @@ class UnitTest(LBMBaseDifferentiable):
         fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         return fhat_poststreaming
 
-    def apply_bounceback_halfway_adj(self, f, fhat, fhat_postcollision):
-        # only at BC voxels:
-        # add contributions to adjoint BC due to the BGK collision operator!
-        bc = self.BCs[0]
-        nbd = len(bc.indices[0])
-        bindex = np.arange(nbd)[:, None]
-        dim = self.dim
-        q = self.q
-        c = self.c
-        w = self.w
-
-        # get forward information
-        f = f[bc.indices]
-        fhat = fhat[bc.indices]
-        rho, vel = self.update_macroscopic(f)
-        feq = self.equilibrium(rho, vel)
-
-        # adjoint density
-        rho_adj = jnp.sum(feq[..., self.lattice.opp_indices] * fhat, axis=-1, keepdims=True) / rho
-
-        # adjoint momentum
-        mhat = jnp.zeros_like(vel)
-        umhat = jnp.zeros_like(rho)
-        cu = jnp.dot(vel, c)
-
-        for d in range(dim):
-            for i in range(q):
-                val = fhat[..., i] * w[i] * (-c[d, i] + 3.0 * (c[d, i] * cu[..., i] - vel[..., d] / 3.0))
-                mhat = mhat.at[..., d].add(val)
-            umhat += jnp.expand_dims(vel[..., d] * mhat[..., d], -1)
-
-        cmhat = jnp.dot(mhat, c)
-        feq_adj = rho_adj + 3.0 * (cmhat - umhat)
-
-        # add adjoint bounce-back equation applied on top of the BGK model
-        omega = self.omega
-        fbd = fhat_postcollision[bc.indices]
-        val = (1.0 - omega) * fhat[..., self.lattice.opp_indices] + omega * feq_adj
-        fbd = fbd.at[bc.iknownBitmask].set(val[bc.iknownBitmask])
-
-        # set the boundary values back in the main array
-        fhat_postcollision = fhat_postcollision.at[bc.indices].set(fbd)
-        return fhat_postcollision
-
-
     @partial(jit, static_argnums=(0,))
     def step_adjoint_test(self, f, fhat):
         """
@@ -128,8 +84,8 @@ class UnitTest(LBMBaseDifferentiable):
         """
         # all voxels
         fhat_poststreaming = self.streaming_adj(fhat)
+        fhat_poststreaming = self.apply_bounceback_halfway_adj(fhat, fhat_poststreaming)
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
-        fhat_postcollision = self.apply_bounceback_halfway_adj(f, fhat, fhat_postcollision)
         return fhat_postcollision
 
 if __name__ == "__main__":
@@ -191,7 +147,7 @@ if __name__ == "__main__":
     f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_poststreaming = test.streaming_adj(fhat)
-    fhat_poststreaming = test.apply_bounceback_halfway_adj_naive(f, fhat, fhat_poststreaming)
+    fhat_poststreaming = test.apply_bounceback_halfway_adj(fhat, fhat_poststreaming)
     print(f'Ref time is: {time.time() - start_time}')
     def lbm_step_bc(f):
         f_poststreaming = test.streaming(f)
