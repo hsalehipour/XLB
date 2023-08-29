@@ -16,16 +16,25 @@ class UnitTest(LBMBaseDifferentiable):
     def set_boundary_conditions(self):
 
         # concatenate the indices of the left, right, and bottom walls
-        # walls = self.boundingBoxIndices["bottom"]
         walls = np.concatenate((self.boundingBoxIndices['bottom'],
                                 self.boundingBoxIndices['top'],
                                 self.boundingBoxIndices['left'],
                                 self.boundingBoxIndices['right']))
-        walls = np.unique(walls, axis=0)
+        # walls = np.concatenate((self.boundingBoxIndices['bottom'],
+        #                         self.boundingBoxIndices['top']))
+        # inlet = self.boundingBoxIndices['left']
+        # outlet = self.boundingBoxIndices['right']
+
         # apply bounce back boundary condition to the walls
         self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[0].needsExtraConfiguration = False
-        self.BCs[0].isSolid = False
+        self.BCs[-1].needsExtraConfiguration = False
+        self.BCs[-1].isSolid = False
+
+        # vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
+        # self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
+        #
+        # rho_outlet = np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+        # self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
 
 
     @partial(jit, static_argnums=(0,))
@@ -54,7 +63,6 @@ class UnitTest(LBMBaseDifferentiable):
         fhat = fhat - omega * fneq_adj
         return fhat
 
-
     def test_adjoint(self, fhat, dfunc_ref, func_name, func, *args):
         # Construct the adjoints for the forward model.
         _, dfunc_AD = vjp(func, *args)
@@ -67,14 +75,39 @@ class UnitTest(LBMBaseDifferentiable):
         else:
             print(f'!!!! FAILED !!!! unit test for {func_name} up to tol={tol}')
 
-    def apply_bounceback_halfway_adj(self, fhat, fhat_poststreaming):
+    def apply_bounceback_halfway_adj(self, bc, fhat_poststreaming, fhat):
         # only at BC
-        bc = self.BCs[0]
         nbd = len(bc.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fhat_poststreaming[bc.indices]
         fbd = fbd.at[bindex, bc.iknown].set(fhat[bc.indices][bindex, bc.imissing])
         fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+        return fhat_poststreaming
+
+    def apply_zouhe_adj(self, bc, fhat_poststreaming, _):
+        #NOTE: bc.rho = 1 at pressure BC, but it is kept in these expressions to be faithful to the derivation.
+        nbd = len(bc.indices[0])
+        bindex = np.arange(nbd)[:, None]
+        fbd = fhat_poststreaming[bc.indices]
+
+        fsum = 6.0 * jnp.sum(self.w * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
+        if bc.type == 'pressure':
+            du_df = 1.0
+            fbd = fbd.at[bindex, bc.iknown].set(fhat_poststreaming[bc.indices][bindex, bc.imissing] - du_df * fsum * bc.imissingBitmask)
+        elif bc.type == 'velocity':
+            unormal = jnp.sum(bc.normals * bc.prescribed, keepdims=True, axis=-1)
+            drho_df = 2.0 / (1.0 + unormal)
+            fbd = fbd.at[bindex, bc.iknown].set(fbd[bindex, bc.imissing] - unormal * drho_df * fsum * bc.imissingBitmask)
+        fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+        return fhat_poststreaming
+
+    @partial(jit, static_argnums=(0,))
+    def apply_bc_adj(self, fhat_poststreaming, fhat):
+        for bc in self.BCs:
+            if bc.name == "BounceBackHalfway":
+                fhat_poststreaming = self.apply_bounceback_halfway_adj(bc, fhat_poststreaming, fhat)
+            if bc.name == "ZouHe":
+                fhat_poststreaming = self.apply_zouhe_adj(bc, fhat_poststreaming, fhat)
         return fhat_poststreaming
 
     @partial(jit, static_argnums=(0,))
@@ -84,7 +117,7 @@ class UnitTest(LBMBaseDifferentiable):
         """
         # all voxels
         fhat_poststreaming = self.streaming_adj(fhat)
-        fhat_poststreaming = self.apply_bounceback_halfway_adj(fhat, fhat_poststreaming)
+        fhat_poststreaming = self.apply_bc_adj(fhat_poststreaming, fhat)
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
         return fhat_postcollision
 
@@ -93,7 +126,7 @@ if __name__ == "__main__":
     lattice = LatticeD2Q9(precision)
 
     # Input test parameters
-    nx, ny, nz = 3, 4, 0
+    nx, ny, nz = 5, 8, 0
     tol = 1e-6
     timestep = 0
 
@@ -147,7 +180,7 @@ if __name__ == "__main__":
     f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_poststreaming = test.streaming_adj(fhat)
-    fhat_poststreaming = test.apply_bounceback_halfway_adj(fhat, fhat_poststreaming)
+    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat)
     print(f'Ref time is: {time.time() - start_time}')
     def lbm_step_bc(f):
         f_poststreaming = test.streaming(f)
