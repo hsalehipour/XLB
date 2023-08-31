@@ -683,11 +683,11 @@ class ZouHe(BoundaryCondition):
         """
         Calculate velocity based on the prescribed pressure/density (Zou/He BC)
         """
-        unormal = -1. + 1. / rho * (jnp.sum(fpop[self.indices] * self.imiddleBitmask, axis=1) +
-                               2. * jnp.sum(fpop[self.indices] * self.iknownBitmask, axis=1))
+        unormal = -1. + 1. / rho * (jnp.sum(fpop[self.indices] * self.imiddleBitmask, keepdims=True, axis=-1) +
+                               2. * jnp.sum(fpop[self.indices] * self.iknownBitmask, keepdims=True, axis=-1))
 
         # Return the above unormal as a normal vector which sets the tangential velocities to zero
-        vel = unormal[:, None] * self.normals
+        vel = unormal * self.normals
         return vel
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -695,10 +695,11 @@ class ZouHe(BoundaryCondition):
         """
         Calculate density based on the prescribed velocity (Zou/He BC)
         """
-        unormal = np.sum(self.normals*vel, axis=1)
+        unormal = jnp.sum(self.normals*vel, keepdims=True, axis=1)
 
-        rho = (1.0/(1.0 + unormal))[..., None] * (jnp.sum(fpop[self.indices] * self.imiddleBitmask, axis=1, keepdims=True) +
-                                  2.*jnp.sum(fpop[self.indices] * self.iknownBitmask, axis=1, keepdims=True))
+        rho = (1.0/(1.0 + unormal)) * (
+                   jnp.sum(fpop[self.indices] * self.imiddleBitmask, axis=-1, keepdims=True) +
+                2.*jnp.sum(fpop[self.indices] * self.iknownBitmask,  axis=-1, keepdims=True))
         return rho
 
     @partial(jit, static_argnums=(0,), inline=True)
@@ -763,7 +764,6 @@ class ZouHe(BoundaryCondition):
 
         # set the unknown f populations based on the non-equilibrium bounce-back method
         fbd = self.bounceback_nonequilibrium(fout, feq)
-
 
         return fbd
 
