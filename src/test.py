@@ -96,20 +96,28 @@ class UnitTest(LBMBaseDifferentiable):
         """
         #NOTE: bc.rho = 1 at pressure BC, but it is kept in these expressions to be faithful to the derivation.
         nbd = len(bc.indices[0])
-        # bindex = np.arange(nbd)[:, None]
+        bindex = np.arange(nbd)[:, None]
 
         if implementationStep == 'PostCollision':
-            # fsum = 6.0 * jnp.sum(self.w * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
             fbd = fhat[bc.indices]
-            fsum = jnp.sum(fhat[bc.indices] * bc.imissingBitmask, keepdims=True, axis=-1)
             if bc.type == 'pressure':
                 du_df = 1.0
                 # fbd = fbd.at[bindex, bc.iknown].set(fhat_poststreaming[bc.indices][bindex, bc.imissing] - du_df * fsum * bc.imissingBitmask)
             elif bc.type == 'velocity':
-                unormal = jnp.sum(bc.normals * bc.prescribed, keepdims=True, axis=-1)*jnp.ones((1, self.q))
-                drho_df = 1.0 / (1.0 + unormal) * fsum
-                fbd = fbd.at[bc.imiddleBitmask].add(drho_df[bc.imiddleBitmask])
-                fbd = fbd.at[bc.iknownBitmask].add(2.*drho_df[bc.iknownBitmask])
+                vel = self.precisionPolicy.cast_to_compute(bc.prescribed)
+                c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype)
+                unormal = jnp.sum(bc.normals * vel, keepdims=True, axis=-1)*jnp.ones((1, self.q))
+                cu = 3.0 * jnp.dot(vel, c)
+                fsum = 2.0 * jnp.sum(self.w * cu * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
+                ddf = 1.0 / (1.0 + unormal) * fsum
+
+                # Note: the zero'th index needs to be corrected before --->
+                fbd = fbd.at[bindex, bc.iknown].add(fbd[bindex, bc.imissing])
+                fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
+
+                # ---> this line. In other words, the above two lines must be executed before the following lines.
+                fbd = fbd.at[bc.imiddleBitmask].add(ddf[bc.imiddleBitmask])
+                fbd = fbd.at[bc.iknownBitmask].add(2.*ddf[bc.iknownBitmask])
                 fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
 
         if implementationStep == 'PostStreaming':
@@ -118,7 +126,6 @@ class UnitTest(LBMBaseDifferentiable):
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         # else:
         #     raise ValueError(f"Failed to impose adjoint Zou-He BC.")
-
 
         return fhat_poststreaming
 
