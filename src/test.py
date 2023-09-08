@@ -15,28 +15,23 @@ class UnitTest(LBMBaseDifferentiable):
     def set_boundary_conditions(self):
 
         # concatenate the indices of the left, right, and bottom walls
-        walls = np.concatenate((self.boundingBoxIndices['bottom'],
-                                self.boundingBoxIndices['top'],
-                                self.boundingBoxIndices['right']))
-        # walls = np.concatenate((self.boundingBoxIndices['bottom'],
-        #                         self.boundingBoxIndices['top']))
+        walls = [self.boundingBoxIndices['bottom'], self.boundingBoxIndices['top'],
+                 self.boundingBoxIndices['left'], self.boundingBoxIndices['right']]
+
         inlet = self.boundingBoxIndices['left'][1:-1]
-        # outlet = self.boundingBoxIndices['right']
+        outlet = self.boundingBoxIndices['right'][1:-1]
 
         # apply bounce back boundary condition to the walls
-        self.BCs.append(BounceBackHalfway(tuple(walls.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[-1].needsExtraConfiguration = False
-        self.BCs[-1].isSolid = False
-
-        self.BCs.append(BounceBackHalfway(tuple(inlet.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[-1].needsExtraConfiguration = False
-        self.BCs[-1].isSolid = False
+        for wall in walls:
+            self.BCs.append(BounceBackHalfway(tuple(wall.T), self.gridInfo, self.precisionPolicy))
+            self.BCs[-1].needsExtraConfiguration = False
+            self.BCs[-1].isSolid = False
 
         vel_inlet = np.random.random(inlet.shape)
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
-        #
-        # rho_outlet = np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        # self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
+
+        rho_outlet = np.random.random((outlet.shape[0], 1))
+        self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
 
 
     @partial(jit, static_argnums=(0,))
@@ -87,55 +82,61 @@ class UnitTest(LBMBaseDifferentiable):
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         return fhat_poststreaming
 
-    def apply_zouhe_adj(self, bc, fhat_poststreaming, fhat, implementationStep):
+    def apply_zouhe_adj(self, bc, fhat_poststreaming, fhat, fpop_fwd, implementationStep):
         """
         # The ZouHe Adjoint BC:
         # since in the forward computation, the boundary condition is imposed on post-streaming populations and has no
         # dependence on pre-streaming fpop, the adjoint ZouHe would be identically be zero for both types of pressure
         # and velocity BC. This is confirmed by AD unit test.
         """
-        #NOTE: bc.rho = 1 at pressure BC, but it is kept in these expressions to be faithful to the derivation.
         nbd = len(bc.indices[0])
         bindex = np.arange(nbd)[:, None]
 
         if implementationStep == 'PostCollision':
-            fbd = fhat[bc.indices]
-            if bc.type == 'pressure':
-                du_df = 1.0
-                # fbd = fbd.at[bindex, bc.iknown].set(fhat_poststreaming[bc.indices][bindex, bc.imissing] - du_df * fsum * bc.imissingBitmask)
-            elif bc.type == 'velocity':
-                vel = self.precisionPolicy.cast_to_compute(bc.prescribed)
-                c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype)
+
+            if bc.type == 'velocity':
+                vel = bc.prescribed
                 unormal = jnp.sum(bc.normals * vel, keepdims=True, axis=-1)*jnp.ones((1, self.q))
-                cu = 3.0 * jnp.dot(vel, c)
-                fsum = 2.0 * jnp.sum(self.w * cu * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
-                ddf = 1.0 / (1.0 + unormal) * fsum
+                coeff = 1.0 / (1.0 + unormal)
+            elif bc.type == 'pressure':
+                rho = bc.prescribed
+                vel = bc.calculate_vel(fpop_fwd, rho)
+                coeff = 1.0 / rho
+            else:
+                raise ValueError(f"type = {bc.type} not supported! Use \'pressure\' or \'velocity\'.")
 
-                # Note: the zero'th index needs to be corrected before --->
-                fbd = fbd.at[bindex, bc.iknown].add(fbd[bindex, bc.imissing])
-                fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
+            # compute dBC/df
+            fbd = fhat[bc.indices]
+            c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype)
+            cu = 3.0 * jnp.dot(vel, c)
+            fsum = 2.0 * jnp.sum(self.w * cu * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
+            ddf = coeff * fsum
 
-                # ---> this line. In other words, the above two lines must be executed before the following lines.
-                fbd = fbd.at[bc.imiddleBitmask].add(ddf[bc.imiddleBitmask])
-                fbd = fbd.at[bc.iknownBitmask].add(2.*ddf[bc.iknownBitmask])
-                fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+            # Note: the zero'th index needs to be corrected before --->
+            fbd = fbd.at[bindex, bc.iknown].add(fbd[bindex, bc.imissing])
+            fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
 
-        if implementationStep == 'PostStreaming':
+            # ---> this line. In other words, the above two lines must be executed before the following lines.
+            fbd = fbd.at[bc.imiddleBitmask].add(ddf[bc.imiddleBitmask])
+            fbd = fbd.at[bc.iknownBitmask].add(2.*ddf[bc.iknownBitmask])
+            fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+
+        elif implementationStep == 'PostStreaming':
             fbd = fhat_poststreaming[bc.indices]
             fbd = fbd.at[bc.iknownBitmask].set(0.0)
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
-        # else:
-        #     raise ValueError(f"Failed to impose adjoint Zou-He BC.")
+        else:
+            raise ValueError(f"Failed to impose adjoint Zou-He BC.")
 
         return fhat_poststreaming
 
-    @partial(jit, static_argnums=(0, 3))
-    def apply_bc_adj(self, fhat_poststreaming, fhat, implementationStep):
+    @partial(jit, static_argnums=(0, 4))
+    def apply_bc_adj(self, fhat_poststreaming, fhat, fpop_fwd, implementationStep):
         for bc in self.BCs:
             if bc.name == "BounceBackHalfway":
                 fhat_poststreaming = self.apply_bounceback_halfway_adj(bc, fhat_poststreaming, fhat, implementationStep)
             if bc.name == "ZouHe":
-                fhat_poststreaming = self.apply_zouhe_adj(bc, fhat_poststreaming, fhat, implementationStep)
+                fhat_poststreaming = self.apply_zouhe_adj(bc, fhat_poststreaming, fhat, fpop_fwd, implementationStep)
         return fhat_poststreaming
 
     @partial(jit, static_argnums=(0,))
@@ -145,7 +146,7 @@ class UnitTest(LBMBaseDifferentiable):
         """
         # all voxels
         fhat_poststreaming = self.streaming_adj(fhat)
-        fhat_poststreaming = self.apply_bc_adj(fhat_poststreaming, fhat, "PostStreaming")
+        fhat_poststreaming = self.apply_bc_adj(fhat_poststreaming, fhat, f, "PostStreaming")
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
         return fhat_postcollision
 
@@ -174,7 +175,7 @@ if __name__ == "__main__":
     # Define the test class
     test = UnitTest(**kwargs)
     BCCopy = copy.deepcopy(test.BCs)
-    wall1, wall2, inlet = BCCopy
+    bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = BCCopy
 
     # TEST 1:
     # Collision
@@ -207,11 +208,11 @@ if __name__ == "__main__":
 
     # # TEST 4:
     # # Apply post-streaming BC after stream
-    # test.BCs = [wall1, wall2]
+    # test.BCs = [bottomWall, topWall, leftWall, rightWall]
     # f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     # start_time = time.time()
     # fhat_poststreaming = test.streaming_adj(fhat)
-    # fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat, "PostStreaming")
+    # fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat, f, "PostStreaming")
     # print(f'Ref time is: {time.time() - start_time}')
     # def lbm_step_bc(f):
     #     f_poststreaming = test.streaming(f)
@@ -225,7 +226,7 @@ if __name__ == "__main__":
     #
     # # TEST 5:
     # # Apply post-streaming boudary condition after BGK Collision & Streaming
-    # test.BCs = [wall1, wall2]
+    # test.BCs = [bottomWall, topWall, leftWall, rightWall]
     # f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     # start_time = time.time()
     # fhat_poststreaming = test.step_adjoint_test(f, fhat)
@@ -243,14 +244,14 @@ if __name__ == "__main__":
 
     # TEST 6:
     # Apply post-streaming BC after stream
-    test.BCs = [wall1, inlet]
+    test.BCs = [bottomWall, topWall, rightWall, leftInlet]
     f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
     start_time = time.time()
     fhat_postcollision = fhat
     fhat_poststreaming = fhat
-    fhat_postcollision = test.apply_bc_adj(fhat_postcollision, fhat_poststreaming, "PostCollision")
+    fhat_postcollision = test.apply_bc_adj(fhat_postcollision, fhat_poststreaming, f, "PostCollision")
     fhat_poststreaming = test.streaming_adj(fhat_postcollision)
-    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat_postcollision, "PostStreaming")
+    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat_postcollision, f, "PostStreaming")
     print(f'Ref time is: {time.time() - start_time}')
     def lbm_step_bc(f):
         f_poststreaming = test.streaming(f)
@@ -259,4 +260,25 @@ if __name__ == "__main__":
 
     ffunc, dfunc_AD = vjp(lbm_step_bc, f)
     dfunc_AD = dfunc_AD(fhat)[0]
-    test.test_adjoint(fhat, fhat_poststreaming, '"Stream with halfway BB and ZouHe BC"', lbm_step_bc, f)
+    test.test_adjoint(fhat, fhat_poststreaming, '"Stream with halfway BB and ZouHe Velocity BC"', lbm_step_bc, f)
+
+
+    # TEST 7:
+    # Apply post-streaming BC after stream
+    test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
+    start_time = time.time()
+    fhat_postcollision = fhat
+    fhat_poststreaming = fhat
+    fhat_postcollision = test.apply_bc_adj(fhat_postcollision, fhat_poststreaming, f, "PostCollision")
+    fhat_poststreaming = test.streaming_adj(fhat_postcollision)
+    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat_postcollision, f, "PostStreaming")
+    print(f'Ref time is: {time.time() - start_time}')
+    def lbm_step_bc(f):
+        f_poststreaming = test.streaming(f)
+        f_poststreaming = test.apply_bc(f_poststreaming, f, timestep, "PostStreaming")
+        return f_poststreaming
+
+    ffunc, dfunc_AD = vjp(lbm_step_bc, f)
+    dfunc_AD = dfunc_AD(fhat)[0]
+    test.test_adjoint(fhat, fhat_poststreaming, '"Stream with halfway BB and ZouHe Velocity and Pressure BC"', lbm_step_bc, f)
