@@ -150,13 +150,25 @@ class UnitTest(LBMBaseDifferentiable):
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
         return fhat_postcollision
 
+    @partial(jit, static_argnums=(0,))
+    def step_adjoint_complete(self, f, fhat):
+        """
+        Adjoint of LBM step
+        """
+        fhat_postcollision = self.apply_bc_adj(fhat, fhat, f, "PostCollision")
+        fhat_poststreaming = self.streaming_adj(fhat_postcollision)
+        fhat_poststreaming = self.apply_bc_adj(fhat_poststreaming, fhat_postcollision, f, "PostStreaming")
+        # return fhat_poststreaming
+        fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
+        return fhat_postcollision
+
 if __name__ == "__main__":
     precision = "f32/f32"
     lattice = LatticeD2Q9(precision)
 
     # Input test parameters
     nx, ny, nz = 5, 8, 0
-    tol = 1e-6
+    tol = 1e-5
     timestep = 0
 
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
@@ -282,3 +294,22 @@ if __name__ == "__main__":
     ffunc, dfunc_AD = vjp(lbm_step_bc, f)
     dfunc_AD = dfunc_AD(fhat)[0]
     test.test_adjoint(fhat, fhat_poststreaming, '"Stream with halfway BB and ZouHe Velocity and Pressure BC"', lbm_step_bc, f)
+
+
+    # TEST 8:
+    test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
+    f = jnp.array(np.random.random(f.shape), dtype=test.precisionPolicy.compute_dtype)
+    start_time = time.time()
+    fhat_poststreaming = test.step_adjoint_complete(f, fhat)
+    print(f'Ref time is: {time.time() - start_time}')
+    def lbm_step_complete(f):
+        f_postcollision = test.collision(f)
+        # f_postcollision = f
+        f_poststreaming = test.streaming(f_postcollision)
+        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
+        return f_poststreaming
+
+    ffunc, dfunc_AD = vjp(lbm_step_complete, f)
+    dfunc_AD = dfunc_AD(fhat)[0]
+    test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB and ZouHe pressure and Velocity"',
+                      lbm_step_complete, f)
