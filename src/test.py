@@ -1,11 +1,12 @@
 import time
-from jax import vjp, jit
-from functools import partial
-from src.adjoint import LBMBaseDifferentiable
+from jax import vjp
 import os
+import copy
+
+from src.adjoint import LBMBaseDifferentiable
 from src.lattice import LatticeD2Q9, LatticeD3Q19
 from src.boundary_conditions import *
-import copy
+
 np.random.seed(0)
 
 class UnitTest(LBMBaseDifferentiable):
@@ -44,7 +45,7 @@ class UnitTest(LBMBaseDifferentiable):
         """
         f = self.precisionPolicy.cast_to_compute(f)
         rho, u = self.update_macroscopic(f)
-        feq = self.equilibrium(rho, u, castOutput=False)
+        feq = self.equilibrium(rho, u, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq
         if self.force is not None:
