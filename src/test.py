@@ -22,15 +22,18 @@ class UnitTest(LBMBaseDifferentiable):
         coord = np.array([(i, j) for i in range(self.nx) for j in range(self.ny)])
         xx, yy = coord[:, 0], coord[:, 1]
         cx, cy = self.nx/2, self.ny/2
-        cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
+        # cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
+        cylinder = (xx <= 1.5*cx) & (xx > 0.5*cx) & (yy <= 1.5*cy) & (yy > 0.5*cy)
         cylinder = coord[cylinder]
-        implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
-        self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(cylinder.T),
-                                                             implicit_distance, self.gridInfo, self.precisionPolicy))
+        # implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
+        # self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(cylinder.T),
+        #                                                      implicit_distance, self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBackHalfway(tuple(cylinder.T), self.gridInfo, self.precisionPolicy))
+        # self.BCs[-1].needsExtraConfiguration = False
 
         # concatenate the indices of the left, right, and bottom walls
         walls = [self.boundingBoxIndices['bottom'], self.boundingBoxIndices['top'],
-                 self.boundingBoxIndices['left'], self.boundingBoxIndices['right']]
+                 self.boundingBoxIndices['left'][1:-1], self.boundingBoxIndices['right'][1:-1]]
 
         inlet = self.boundingBoxIndices['left'][1:-1]
         outlet = self.boundingBoxIndices['right'][1:-1]
@@ -93,12 +96,20 @@ class UnitTest(LBMBaseDifferentiable):
     @partial(jit, static_argnums=(0, 1, 4))
     def apply_bounceback_halfway_adj(self, bc, fhat_poststreaming, fhat, implementationStep):
         # only at BC
-        if implementationStep == 'PostStreaming':
+
+        if implementationStep == 'PostCollision':
+            fbd = fhat[bc.indices]
+            fbd = fbd.at[bc.imissingBitmask].set(0.0)
+            fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+
+        elif implementationStep == 'PostStreaming':
             nbd = len(bc.indices[0])
             bindex = np.arange(nbd)[:, None]
             fbd = fhat_poststreaming[bc.indices]
-            fbd = fbd.at[bindex, bc.iknown].set(fhat[bc.indices][bindex, bc.imissing])
+            fbd = fbd.at[bindex, bc.iknown].add(fhat[bc.indices][bindex, bc.imissing])
+            fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+
         return fhat_poststreaming
 
     @partial(jit, static_argnums=(0, 1, 4))
@@ -242,12 +253,12 @@ def unit_test5(**kwargs):
     start_time = time.time()
     fhat_poststreaming = test.step_adjoint_test(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
-    def lbm_step_full(f):
+    def lbm_step_complete(f):
         f_postcollision = test.collision(f)
         f_poststreaming = test.streaming(f_postcollision)
         f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
         return f_poststreaming
-    test_result = test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_full, f)
+    test_result = test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_complete, f)
     return test_result
 
 def unit_test6(**kwargs):
@@ -306,6 +317,25 @@ def unit_test8(**kwargs):
     test_result = test.test_adjoint(fhat, fhat_poststreaming,
                                     '"BGK collide-stream with halfway BB and ZouHe pressure and Velocity"',
                                     lbm_step_complete, f)
+    return test_result
+
+def unit_test9(**kwargs):
+    # TEST 9:
+    test, f, fhat = init_unit_test(**kwargs)
+    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder]
+    start_time = time.time()
+    fhat_postcollision = test.apply_bc_adj(fhat, fhat, "PostCollision")
+    fhat_poststreaming = test.streaming_adj(fhat_postcollision)
+    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat, "PostStreaming")
+    print(f'Ref time is: {time.time() - start_time}')
+    def lbm_step_bc(f):
+        f_poststreaming = test.streaming(f)
+        f_poststreaming = test.apply_bc(f_poststreaming, f, timestep, "PostStreaming")
+        return f_poststreaming
+    test_result = test.test_adjoint(fhat, fhat_poststreaming,
+                                    '"LBM full step with half-way BB also in the interior of the domain!"',
+                                    lbm_step_bc, f)
     return test_result
 
 if __name__ == "__main__":
