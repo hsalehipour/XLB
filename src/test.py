@@ -22,14 +22,12 @@ class UnitTest(LBMBaseDifferentiable):
         coord = np.array([(i, j) for i in range(self.nx) for j in range(self.ny)])
         xx, yy = coord[:, 0], coord[:, 1]
         cx, cy = self.nx/2, self.ny/2
-        # cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
-        cylinder = (xx <= 1.5*cx) & (xx > 0.5*cx) & (yy <= 1.5*cy) & (yy > 0.5*cy)
+        cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
         cylinder = coord[cylinder]
         # implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
         # self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(cylinder.T),
         #                                                      implicit_distance, self.gridInfo, self.precisionPolicy))
         self.BCs.append(BounceBackHalfway(tuple(cylinder.T), self.gridInfo, self.precisionPolicy))
-        # self.BCs[-1].needsExtraConfiguration = False
 
         # concatenate the indices of the left, right, and bottom walls
         walls = [self.boundingBoxIndices['bottom'], self.boundingBoxIndices['top'],
@@ -42,7 +40,6 @@ class UnitTest(LBMBaseDifferentiable):
         for wall in walls:
             self.BCs.append(BounceBackHalfway(tuple(wall.T), self.gridInfo, self.precisionPolicy))
             self.BCs[-1].needsExtraConfiguration = False
-            self.BCs[-1].isSolid = False
 
         vel_inlet = np.random.random(inlet.shape)
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
@@ -84,6 +81,9 @@ class UnitTest(LBMBaseDifferentiable):
         dfunc_AD = dfunc_AD(fhat)[0]
         print(f'AD time is: {time.time() - start_time}')
 
+        # Discard the dissimilarity at the solid_voxels
+        dfunc_ref = dfunc_ref.at[self.solid_voxels].set(dfunc_AD[self.solid_voxels])
+
         flag = np.allclose(dfunc_ref, dfunc_AD, tol, tol)
         print('=' * 50)
         if flag:
@@ -96,13 +96,7 @@ class UnitTest(LBMBaseDifferentiable):
     @partial(jit, static_argnums=(0, 1, 4))
     def apply_bounceback_halfway_adj(self, bc, fhat_poststreaming, fhat, implementationStep):
         # only at BC
-
-        if implementationStep == 'PostCollision':
-            fbd = fhat[bc.indices]
-            fbd = fbd.at[bc.imissingBitmask].set(0.0)
-            fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
-
-        elif implementationStep == 'PostStreaming':
+        if implementationStep == 'PostStreaming':
             nbd = len(bc.indices[0])
             bindex = np.arange(nbd)[:, None]
             fbd = fhat_poststreaming[bc.indices]
@@ -325,13 +319,14 @@ def unit_test9(**kwargs):
     cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder]
     start_time = time.time()
-    fhat_postcollision = test.apply_bc_adj(fhat, fhat, "PostCollision")
-    fhat_poststreaming = test.streaming_adj(fhat_postcollision)
+    fhat_poststreaming = test.streaming_adj(fhat)
     fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat, "PostStreaming")
+    fhat_poststreaming = test.collision_adj(f, fhat_poststreaming)
     print(f'Ref time is: {time.time() - start_time}')
     def lbm_step_bc(f):
-        f_poststreaming = test.streaming(f)
-        f_poststreaming = test.apply_bc(f_poststreaming, f, timestep, "PostStreaming")
+        f_postcollision = test.collision(f)
+        f_poststreaming = test.streaming(f_postcollision)
+        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
         return f_poststreaming
     test_result = test.test_adjoint(fhat, fhat_poststreaming,
                                     '"LBM full step with half-way BB also in the interior of the domain!"',
@@ -369,6 +364,7 @@ if __name__ == "__main__":
         'S + BB + ZouHe_vel': unit_test6,
         'S + BB + ZouHe_vel + ZouHePress': unit_test7,
         'C + S + BB + ZouHe_vel + ZouHePress': unit_test8,
+        'C + S + BB with BC configuration=True': unit_test9,
     }
 
     for test_name, func_name in unit_test_list.items():

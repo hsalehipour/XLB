@@ -360,6 +360,7 @@ class LBMBase(object):
 
         # Create the grid connectivity bitmask on each process
         start = time.time()
+        self.solid_voxels = tuple(solid_halo_voxels.T)
         connectivity_bitmask = self.create_grid_connectivity_bitmask(solid_halo_voxels)
         print("Time to create the grid connectivity bitmask:", time.time() - start)
 
