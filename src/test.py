@@ -134,7 +134,7 @@ class UnitTest(LBMBaseDifferentiable):
             fbd = fhat[bc.indices]
             c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype)
             cu = 3.0 * jnp.dot(vel, c)
-            fsum = 2.0 * jnp.sum(self.w * cu * fbd * bc.imissingBitmask, keepdims=True, axis=-1)
+            fsum = 2.0 * jnp.sum(self.w * cu * fbd * bc.imissingMask, keepdims=True, axis=-1)
             ddf = coeff * fsum * jnp.ones((1, self.q))
 
             # Note: the zero'th index needs to be corrected before --->
@@ -142,13 +142,13 @@ class UnitTest(LBMBaseDifferentiable):
             fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
 
             # ---> this line. In other words, the above two lines must be executed before the following lines.
-            fbd = fbd.at[bc.imiddleBitmask].add(ddf[bc.imiddleBitmask])
-            fbd = fbd.at[bc.iknownBitmask].add(2.*ddf[bc.iknownBitmask])
+            fbd = fbd.at[bc.imiddleMask].add(ddf[bc.imiddleMask])
+            fbd = fbd.at[bc.iknownMask].add(2.*ddf[bc.iknownMask])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
 
         elif implementationStep == 'PostStreaming':
             fbd = fhat_poststreaming[bc.indices]
-            fbd = fbd.at[bc.iknownBitmask].set(0.0)
+            fbd = fbd.at[bc.iknownMask].set(0.0)
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         else:
             raise ValueError(f"Failed to impose adjoint Zou-He BC.")
@@ -183,7 +183,7 @@ class UnitTest(LBMBaseDifferentiable):
             # ddf = fbd * bc.weights / (1. + bc.weights)
             # fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
             # fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
-            fbd = fbd.at[bc.iknownBitmask].set(0.0)
+            fbd = fbd.at[bc.iknownMask].set(0.0)
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         else:
             raise ValueError(f"Failed to impose adjoint InterpolatedBounceback BC.")

@@ -116,7 +116,7 @@ class LBMBase(object):
         # Define the left permutation
         self.leftPerm = [((i + 1) % self.nDevices, i) for i in range(self.nDevices)]
 
-        # Set up the sharding and streaming for 2D and 3D simulations
+        # Set up the sharding for 2D and 3D simulations
         if self.dim == 2:
             self.devices = mesh_utils.create_device_mesh((self.nDevices, 1, 1))
             self.mesh = Mesh(self.devices, axis_names=("x", "y", "value"))
@@ -130,12 +130,9 @@ class LBMBase(object):
         else:
             raise ValueError(f"dim = {self.dim} not supported")
 
-        # Set up the sharding and streaming
+        # Set up streaming
         self.streaming = jit(shard_map(self.streaming_m, mesh=self.mesh,
                                        in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
-
-        self.compute_bitmask = jit(shard_map(self.compute_bitmask_m, mesh=self.mesh,
-                                             in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
 
         # Compute the bounding box indices for boundary conditions
         self.boundingBoxIndices= self.bounding_box_indices()
@@ -349,26 +346,26 @@ class LBMBase(object):
     def _create_boundary_data(self):
         """
         Create boundary data for the Lattice Boltzmann simulation by setting boundary conditions,
-        creating grid connectivity bitmask, and preparing local bitmasks and normal arrays.
+        creating grid mask, and preparing local masks and normal arrays.
         """
         self.BCs = []
         self.set_boundary_conditions()
-        # Accumulate the indices of all BCs to create the grid connectivity bitmask with FALSE along directions that
+        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
         # stream into a boundary voxel.
         solid_halo_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
         solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
-
-        # Create the grid connectivity bitmask on each process
-        start = time.time()
         self.solid_voxels = tuple(solid_halo_voxels.T)
-        connectivity_bitmask = self.create_grid_connectivity_bitmask(solid_halo_voxels)
-        print("Time to create the grid connectivity bitmask:", time.time() - start)
+
+        # Create the grid mask on each process
+        start = time.time()
+        grid_mask = self.create_grid_mask(solid_halo_voxels)
+        print("Time to create the grid mask:", time.time() - start)
 
         start = time.time()
         for bc in self.BCs:
             assert bc.implementationStep in ['PostStreaming', 'PostCollision']
-            bc.create_local_bitmask_and_normal_arrays(connectivity_bitmask)
-        print("Time to create the local bitmasks and normal arrays:", time.time() - start)
+            bc.create_local_mask_and_normal_arrays(grid_mask)
+        print("Time to create the local masks and normal arrays:", time.time() - start)
 
     # This is another non-JITed way of creating the distributed arrays. It is not used at the moment.
     # def distributed_array_init(self, shape, type, init_val=None):
@@ -410,9 +407,9 @@ class LBMBase(object):
         return jax.lax.with_sharding_constraint(x, sharding)
     
     @partial(jit, static_argnums=(0,))
-    def create_grid_connectivity_bitmask(self, solid_halo_voxels):
+    def create_grid_mask(self, solid_halo_voxels):
         """
-        This function creates a bitmask for the background grid that accounts for the location of the boundaries.
+        This function creates a mask for the background grid that accounts for the location of the boundaries.
         
         Parameters
         ----------
@@ -420,32 +417,32 @@ class LBMBase(object):
             
         Returns
         -------
-            A JAX array representing the connectivity bitmask of the grid.
+            A JAX array representing the grid mask of the grid.
         """
         # Halo width (hw_x is different to accommodate the domain sharding per XLA device)
         hw_x = self.nDevices
         hw_y = hw_z = 1
         if self.dim == 2:
-            connectivity_bitmask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.lattice.q), jnp.bool_, init_val=True)
-            connectivity_bitmask = connectivity_bitmask.at[(slice(hw_x, -hw_x), slice(hw_y, -hw_y), slice(None))].set(False)
+            grid_mask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.lattice.q), jnp.bool_, init_val=True)
+            grid_mask = grid_mask.at[(slice(hw_x, -hw_x), slice(hw_y, -hw_y), slice(None))].set(False)
             if solid_halo_voxels is not None:
                 solid_halo_voxels = solid_halo_voxels.at[:, 0].add(hw_x)
                 solid_halo_voxels = solid_halo_voxels.at[:, 1].add(hw_y)
-                connectivity_bitmask = connectivity_bitmask.at[tuple(solid_halo_voxels.T)].set(True)  
+                grid_mask = grid_mask.at[tuple(solid_halo_voxels.T)].set(True)  
 
-            connectivity_bitmask = self.compute_bitmask(connectivity_bitmask)
-            return lax.with_sharding_constraint(connectivity_bitmask, self.sharding)
+            grid_mask = self.streaming(grid_mask)
+            return lax.with_sharding_constraint(grid_mask, self.sharding)
 
         elif self.dim == 3:
-            connectivity_bitmask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.nz + 2 * hw_z, self.lattice.q), jnp.bool_, init_val=True)
-            connectivity_bitmask = connectivity_bitmask.at[(slice(hw_x, -hw_x), slice(hw_y, -hw_y), slice(hw_z, -hw_z), slice(None))].set(False)
+            grid_mask = self.distributed_array_init((self.nx + 2 * hw_x, self.ny + 2 * hw_y, self.nz + 2 * hw_z, self.lattice.q), jnp.bool_, init_val=True)
+            grid_mask = grid_mask.at[(slice(hw_x, -hw_x), slice(hw_y, -hw_y), slice(hw_z, -hw_z), slice(None))].set(False)
             if solid_halo_voxels is not None:
                 solid_halo_voxels = solid_halo_voxels.at[:, 0].add(hw_x)
                 solid_halo_voxels = solid_halo_voxels.at[:, 1].add(hw_y)
                 solid_halo_voxels = solid_halo_voxels.at[:, 2].add(hw_z)
-                connectivity_bitmask = connectivity_bitmask.at[tuple(solid_halo_voxels.T)].set(True)
-            connectivity_bitmask = self.compute_bitmask(connectivity_bitmask)
-            return lax.with_sharding_constraint(connectivity_bitmask, self.sharding)
+                grid_mask = grid_mask.at[tuple(solid_halo_voxels.T)].set(True)
+            grid_mask = self.streaming(grid_mask)
+            return lax.with_sharding_constraint(grid_mask, self.sharding)
 
     def bounding_box_indices(self):
         """
@@ -681,88 +678,6 @@ class LBMBase(object):
                 return jnp.roll(f, (ci[0], ci[1], ci[2]), axis=(0, 1, 2))
 
         return vmap(streaming_i, in_axes=(-1, 0), out_axes=-1)(f, c.T)
-    
-    def compute_bitmask_m(self, b):
-        """
-        This function computes a bitmask for each direction in the lattice. The bitmask is used to 
-        determine which nodes are fluid nodes and which are boundary nodes.
-
-        To enable multi-GPU/TPU functionality, it extracts the left and right boundary slices of the
-        distribution functions that need to be communicated to the neighboring processes.
-
-        The function then sends the left boundary slice to the right neighboring process and the right 
-        boundary slice to the left neighboring process. The received data is then set to the 
-        corresponding indices in the receiving domain.
-
-        Parameters
-        ----------
-        b: jax.numpy.ndarray
-            The array holding the bitmasks for the simulation.
-
-        Returns
-        -------
-        jax.numpy.ndarray
-            The bitmasks after the streaming operation.
-        """
-        b = self.compute_bitmask_p(b)
-        left_comm, right_comm = b[:1, ..., self.lattice.right_indices], b[-1:, ..., self.lattice.left_indices]
-
-        left_comm, right_comm = self.send_right(left_comm, 'x'), self.send_left(right_comm, 'x')
-        b = b.at[:1, ..., self.lattice.right_indices].set(left_comm)
-        b = b.at[-1:, ..., self.lattice.left_indices].set(right_comm)
-        return b
-
-    def compute_bitmask_p(self, b):    
-        """
-        This function computes a bitmask for each direction in the lattice. The bitmask is used to 
-        determine which nodes are fluid nodes and which are boundary nodes.
-
-        It does this by rolling the input bitmask (b) in the opposite direction of each lattice 
-        direction. The rolling operation shifts the values of the bitmask along the specified axes.
-
-        The function uses the vmap operation provided by the JAX library to vectorize the computation 
-        over all lattice directions.
-
-        Parameters
-        ----------
-        b: ndarray
-            The input bitmask.
-
-        Returns
-        -------
-        jax.numpy.ndarray
-            The computed bitmask for each direction in the lattice.
-        """
-        def compute_bitmask_i(b, i):
-            """
-            This function computes the bitmask for a specific direction in the lattice.
-
-            It does this by rolling the input bitmask (b) in the opposite direction of the specified 
-            lattice direction. The rolling operation shifts the values of the bitmask along the 
-            specified axes.
-
-            Parameters
-            ----------
-            b: jax.numpy.ndarray
-                The input bitmask.
-            i: int
-                The index of the lattice direction.
-
-            Returns
-            -------
-            jax.numpy.ndarray
-                The computed bitmask for the specified direction in the lattice.
-            """
-            if self.dim == 2:
-                rolls = (self.c.T[i, 0], self.c.T[i, 1])
-                axes = (0, 1)
-                return jnp.roll(b[..., self.lattice.opp_indices[i]], rolls, axes)
-            elif self.dim == 3:
-                rolls = (self.c.T[i, 0], self.c.T[i, 1], self.c.T[i, 2])
-                axes = (0, 1, 2)
-                return jnp.roll(b[..., self.lattice.opp_indices[i]], rolls, axes)
-
-        return vmap(compute_bitmask_i, in_axes=(None, 0), out_axes=-1)(b, self.lattice.i_s)
 
     @partial(jit, static_argnums=(0, 3), inline=True)
     def equilibrium(self, rho, u, cast_output=True):
