@@ -155,6 +155,42 @@ class UnitTest(LBMBaseDifferentiable):
 
         return fhat_poststreaming
 
+    @partial(jit, static_argnums=(0, 1, 4))
+    def apply_InterpolatedBounceBackDifferentiable_adj(self, bc, fhat_poststreaming, fhat, implementationStep):
+        """
+        The Adjoint BC of InterpolatedBounceBackDifferentiable:
+        """
+        nbd = len(bc.indices[0])
+        bindex = np.arange(nbd)[:, None]
+
+        if bc.weights is None:
+            bc.set_proximity_ratio()
+
+        if implementationStep == 'PostCollision':
+            # compute dBC/df
+            # Note: The zero'th index needs to be corrected due to the addition above
+            fbd = fhat[bc.indices]
+            ddf = fbd #* (1. - bc.weights) / (1. + bc.weights)
+            fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
+            fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
+            fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+            pass
+
+        elif implementationStep == 'PostStreaming':
+            # compute dBC/df
+            # Note: The zero'th index needs to be corrected due to the addition above
+            fbd = fhat_poststreaming[bc.indices]
+            # ddf = fbd * bc.weights / (1. + bc.weights)
+            # fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
+            # fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
+            fbd = fbd.at[bc.iknownBitmask].set(0.0)
+            fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
+        else:
+            raise ValueError(f"Failed to impose adjoint InterpolatedBounceback BC.")
+
+        return fhat_poststreaming
+
+
     @partial(jit, static_argnums=(0, 3))
     def apply_bc_adj(self, fhat_poststreaming, fhat, implementationStep):
         for bc in self.BCs:
@@ -162,6 +198,10 @@ class UnitTest(LBMBaseDifferentiable):
                 fhat_poststreaming = self.apply_bounceback_halfway_adj(bc, fhat_poststreaming, fhat, implementationStep)
             if bc.name == "ZouHe":
                 fhat_poststreaming = self.apply_zouhe_adj(bc, fhat_poststreaming, fhat, implementationStep)
+            if bc.name == "InterpolatedBounceBackDifferentiable":
+                fhat_poststreaming = self.apply_InterpolatedBounceBackDifferentiable_adj(bc,
+                                                                                         fhat_poststreaming,
+                                                                                         fhat, implementationStep)
         return fhat_poststreaming
 
     @partial(jit, static_argnums=(0,))
