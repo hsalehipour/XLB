@@ -1107,6 +1107,7 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         # combine near and far contributions
         fmissing = jnp.where(self.weights < 0.5, fs_near, fs_far)
         fbd = fbd.at[bindex, self.imissing].set(fmissing)
+        fbd = fbd.at[bindex, 0].set(fout[self.indices][bindex, 0])
 
         if self.vel is not None:
             fbd = self.impose_boundary_vel(fbd, bindex)
