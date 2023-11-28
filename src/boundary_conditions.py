@@ -1169,6 +1169,7 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         fmissing = ((1. - self.weights) * f_poststreaming_iknown +
                     self.weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + self.weights)
         fbd = fbd.at[bindex, self.imissing].set(fmissing)
+        fbd = fbd.at[bindex, 0].set(fout[self.indices][bindex, 0])
 
         if self.vel is not None:
             fbd = self.impose_boundary_vel(fbd, bindex)

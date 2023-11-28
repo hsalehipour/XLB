@@ -180,10 +180,10 @@ class UnitTest(LBMBaseDifferentiable):
             # compute dBC/df
             # Note: The zero'th index needs to be corrected due to the addition above
             fbd = fhat_poststreaming[bc.indices]
-            # ddf = fbd * bc.weights / (1. + bc.weights)
-            # fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
-            # fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
-            fbd = fbd.at[bc.iknownMask].set(0.0)
+            ddf = fhat[bc.indices] * bc.weights / (1. + bc.weights)
+            fbd = fbd.at[bc.imissingMask].add(ddf[bc.imissingMask])
+            fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
+            fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         else:
             raise ValueError(f"Failed to impose adjoint InterpolatedBounceback BC.")
