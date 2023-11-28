@@ -35,6 +35,39 @@ from src.lattice import LatticeD2Q9
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 jax.config.update('jax_enable_x64', True)
 
+
+class CustomMovingBC(BounceBackMoving):
+    def __init__(self, indices, gridInfo, precision_policy, **kwargs):
+        super().__init__(indices, gridInfo, precision_policy, **kwargs)
+
+    # Define update rules for boundary conditions
+    def update_function(self, time: int):
+        """
+        A user-defined update function to be invoked at every iteration after the LBM-step
+        """
+        # Move the cylinder up and down sinusoidally with time
+        # Define the scale for the sinusoidal motion
+        cyl = jnp.array(self.indices).T
+        scale = 10000
+
+        # Amplitude of the motion, a quarter of the y-dimension of the grid
+        A = ny // 4
+
+        # Calculate the new y-coordinates of the cylinder. The cylinder moves up and down,
+        # its motion dictated by the sinusoidal function. We use `astype(int)` to ensure
+        # the indices are integers, as they will be used for array indexing.
+        new_y_coords = cyl[:, 1] + jnp.array((jnp.sin(time / scale) * A).astype(int))
+
+        # Define the indices of the grid points occupied by the cylinder
+        indices = (cyl[:, 0], new_y_coords)
+
+        # Calculate the velocity of the cylinder. The x-component is always 0 (the cylinder
+        # doesn't move horizontally), and the y-component is the derivative of the sinusoidal
+        # function governing the cylinder's motion, scaled by the amplitude and the scale factor.
+        velocity = jnp.array([0., jnp.cos(time / scale) * A / scale], dtype=self.precisionPolicy.compute_dtype)
+
+        return indices, velocity
+
 class Cylinder(KBCSim):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -48,33 +81,8 @@ class Cylinder(KBCSim):
         cx, cy = 2.*diam, 2.*diam
         cyl = ((xx) - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
         cyl = jnp.array(coord[cyl])
-    
-        # Define update rules for boundary conditions
-        def update_function(time: int):
-            # Move the cylinder up and down sinusoidally with time
-            # Define the scale for the sinusoidal motion
-            scale = 10000
-            
-            # Amplitude of the motion, a quarter of the y-dimension of the grid
-            A = ny // 4
-            
-            # Calculate the new y-coordinates of the cylinder. The cylinder moves up and down, 
-            # its motion dictated by the sinusoidal function. We use `astype(int)` to ensure 
-            # the indices are integers, as they will be used for array indexing.
-            new_y_coords = cyl[:, 1] + jnp.array((jnp.sin(time/scale)*A).astype(int))
-            
-            # Define the indices of the grid points occupied by the cylinder
-            indices = (cyl[:, 0], new_y_coords)
-            
-            # Calculate the velocity of the cylinder. The x-component is always 0 (the cylinder 
-            # doesn't move horizontally), and the y-component is the derivative of the sinusoidal 
-            # function governing the cylinder's motion, scaled by the amplitude and the scale factor.
-            velocity = jnp.array([0., jnp.cos(time/scale)* A / scale], dtype=self.precisionPolicy.compute_dtype)
-            
-            return indices, velocity
 
-        self.BCs.append(BounceBackMoving(self.gridInfo, self.precisionPolicy, update_function=update_function))
-
+        self.BCs.append(CustomMovingBC(tuple(cyl.T), self.gridInfo, self.precisionPolicy))
 
         outlet = self.boundingBoxIndices['right']
         self.BCs.append(ExtrapolationOutflow(tuple(outlet.T), self.gridInfo, self.precisionPolicy))

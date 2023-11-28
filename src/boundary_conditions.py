@@ -415,14 +415,20 @@ class BounceBackMoving(BoundaryCondition):
         condition based on the current time step. The signature of the function is `update_function(time) -> (indices, vel)`,
 
     """
-    def __init__(self, gridInfo, precision_policy, update_function=None):
+    def __init__(self, indices, gridInfo, precision_policy, **kwargs):
         # We get the indices at time zero to pass to the parent class for initialization
-        indices, _ = update_function(0)
         super().__init__(indices, gridInfo, precision_policy)
         self.name = "BounceBackFullwayMoving"
         self.implementationStep = "PostCollision"
         self.isDynamic = True
-        self.update_function = jit(update_function)
+        self.__dict__.update(kwargs)
+
+    @partial(jit, static_argnums=(0,))
+    def update_function(self, time):
+        """
+        A user-defined update function to be invoked at every iteration after the LBM-step
+        """
+        return
 
     @partial(jit, static_argnums=(0,))
     def apply(self, fout, fin, time):
