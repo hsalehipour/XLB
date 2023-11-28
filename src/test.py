@@ -24,9 +24,9 @@ class UnitTest(LBMBaseDifferentiable):
         cx, cy = self.nx/2, self.ny/2
         cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
         cylinder = coord[cylinder]
-        # implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
-        # self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(cylinder.T),
-        #                                                      implicit_distance, self.gridInfo, self.precisionPolicy))
+        implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
+        self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(cylinder.T),
+                                                             implicit_distance, self.gridInfo, self.precisionPolicy))
         self.BCs.append(BounceBackHalfway(tuple(cylinder.T), self.gridInfo, self.precisionPolicy))
 
         # concatenate the indices of the left, right, and bottom walls
@@ -170,11 +170,10 @@ class UnitTest(LBMBaseDifferentiable):
             # compute dBC/df
             # Note: The zero'th index needs to be corrected due to the addition above
             fbd = fhat[bc.indices]
-            ddf = fbd #* (1. - bc.weights) / (1. + bc.weights)
+            ddf = fbd * (1. - bc.weights) / (1. + bc.weights)
             fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
             fbd = fbd.at[bindex, 0].set(fhat[bc.indices][bindex, 0])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
-            pass
 
         elif implementationStep == 'PostStreaming':
             # compute dBC/df
@@ -226,6 +225,11 @@ class UnitTest(LBMBaseDifferentiable):
         fhat_postcollision = self.collision_adj(f, fhat_poststreaming)
         return fhat_postcollision
 
+    def lbm_step_complete(self, f):
+        f_postcollision = self.collision(f)
+        f_poststreaming = self.streaming(f_postcollision)
+        f_poststreaming = self.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
+        return f_poststreaming
 
 def init_unit_test(**kwargs):
     test = UnitTest(**kwargs)
@@ -266,7 +270,7 @@ def unit_test3(**kwargs):
 def unit_test4(**kwargs):
     # TEST 4:apply post-streaming BC after stream
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall]
     start_time = time.time()
     fhat_poststreaming = test.streaming_adj(fhat)
@@ -282,23 +286,19 @@ def unit_test4(**kwargs):
 def unit_test5(**kwargs):
     # TEST 5: Apply post-streaming boudary condition after BGK Collision & Streaming
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall]
     start_time = time.time()
     fhat_poststreaming = test.step_adjoint_test(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
-    def lbm_step_complete(f):
-        f_postcollision = test.collision(f)
-        f_poststreaming = test.streaming(f_postcollision)
-        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
-        return f_poststreaming
-    test_result = test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"', lbm_step_complete, f)
+    test_result = test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"',
+                                    test.lbm_step_complete, f)
     return test_result
 
 def unit_test6(**kwargs):
     # TEST 6: Apply post-streaming BC after stream
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
     start_time = time.time()
     fhat_postcollision = fhat
@@ -318,7 +318,7 @@ def unit_test6(**kwargs):
 def unit_test7(**kwargs):
     # TEST 7: Apply post-streaming BC after stream
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
     start_time = time.time()
     fhat_postcollision = fhat
@@ -338,40 +338,42 @@ def unit_test7(**kwargs):
 def unit_test8(**kwargs):
     # TEST 8:
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
     start_time = time.time()
     fhat_poststreaming = test.step_adjoint_complete(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
-    def lbm_step_complete(f):
-        f_postcollision = test.collision(f)
-        f_poststreaming = test.streaming(f_postcollision)
-        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
-        return f_poststreaming
     test_result = test.test_adjoint(fhat, fhat_poststreaming,
                                     '"BGK collide-stream with halfway BB and ZouHe pressure and Velocity"',
-                                    lbm_step_complete, f)
+                                    test.lbm_step_complete, f)
     return test_result
 
 def unit_test9(**kwargs):
     # TEST 9:
     test, f, fhat = init_unit_test(**kwargs)
-    cylinder, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
-    test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder]
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder_BB]
     start_time = time.time()
-    fhat_poststreaming = test.streaming_adj(fhat)
-    fhat_poststreaming = test.apply_bc_adj(fhat_poststreaming, fhat, "PostStreaming")
-    fhat_poststreaming = test.collision_adj(f, fhat_poststreaming)
+    fhat_poststreaming = test.step_adjoint_complete(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
-    def lbm_step_bc(f):
-        f_postcollision = test.collision(f)
-        f_poststreaming = test.streaming(f_postcollision)
-        f_poststreaming = test.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
-        return f_poststreaming
     test_result = test.test_adjoint(fhat, fhat_poststreaming,
                                     '"LBM full step with half-way BB also in the interior of the domain!"',
-                                    lbm_step_bc, f)
+                                    test.lbm_step_complete, f)
     return test_result
+
+def unit_test10(**kwargs):
+    # TEST 10:
+    test, f, fhat = init_unit_test(**kwargs)
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder]
+    start_time = time.time()
+    fhat_poststreaming = test.step_adjoint_complete(f, fhat)
+    print(f'Ref time is: {time.time() - start_time}')
+    test_result = test.test_adjoint(fhat, fhat_poststreaming,
+                                    '"LBM full step with interp-BB also in the interior of the domain!"',
+                                    test.lbm_step_complete, f)
+    return test_result
+
 
 if __name__ == "__main__":
     precision = "f64/f64"
@@ -405,6 +407,7 @@ if __name__ == "__main__":
         'S + BB + ZouHe_vel + ZouHePress': unit_test7,
         'C + S + BB + ZouHe_vel + ZouHePress': unit_test8,
         'C + S + BB with BC configuration=True': unit_test9,
+        'C + S + IBB': unit_test10,
     }
 
     for test_name, func_name in unit_test_list.items():
