@@ -1,13 +1,14 @@
 import math
 from time import time
 from src.boundary_conditions import *
-from jax.config import config
+from jax import config
 from src.utils import *
 import numpy as np
 from src.lattice import LatticeD3Q19, LatticeD3Q27
 from src.models import KBCSim
 import jax.numpy as jnp
 import os
+import phantomgaze as pg
 
 # Use 8 CPU devices
 # os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
@@ -18,16 +19,17 @@ import jax
 
 precision = 'f32/f32'
 
+dir_path = os.path.dirname(os.path.realpath(__file__)) + '/stl-files/kaizen/'
 drone_fname_dic = {
-    'prop1': {'fname': 'stl-files/kaizen/Prop 1 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop2': {'fname': 'stl-files/kaizen/Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
-    'prop3': {'fname': 'stl-files/kaizen/Prop 3 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop4': {'fname': 'stl-files/kaizen/Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
-    'prop5': {'fname': 'stl-files/kaizen/Prop 5 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop6': {'fname': 'stl-files/kaizen/Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
-    'prop7': {'fname': 'stl-files/kaizen/Prop 7 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop8': {'fname': 'stl-files/kaizen/Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
-    'main_body': {'fname': 'stl-files/kaizen/main body.stl', 'translate': [0, 0, 0]}
+    'prop1': {'fname': dir_path + 'Prop 1 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
+    'prop2': {'fname': dir_path + 'Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop3': {'fname': dir_path + 'Prop 3 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
+    'prop4': {'fname': dir_path + 'Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop5': {'fname': dir_path + 'Prop 5 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
+    'prop6': {'fname': dir_path + 'Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop7': {'fname': dir_path + 'Prop 7 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
+    'prop8': {'fname': dir_path + 'Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'main_body': {'fname': dir_path + 'main body.stl', 'translate': [0, 0, 0]}
 }
 
 
@@ -121,18 +123,70 @@ class Drone(KBCSim):
 
 
     def output_data(self, **kwargs):
-        # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
-        iter = kwargs['timestep']
-        rho = np.array(kwargs['rho'][1:-1, 1:-1, :, 0])
-        u = np.array(kwargs['u'][1:-1, 1:-1, ...])
-        u_prev = kwargs['u_prev'][1:-1, 1:-1, ...]
-        u_old = np.linalg.norm(u_prev, axis=2)
-        u_new = np.linalg.norm(u, axis=2)
 
-        err = np.sum(np.abs(u_old - u_new))
-        print('error= {:07.6f}'.format(err))
-        fields = {"rho": rho, "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
-        save_fields_vtk(iter, fields)
+        # get time
+        time = kwargs['timestep']
+
+        # Store viz box
+        viz_box = jnp.zeros((self.nx, self.ny, self.nz), dtype=jnp.float32)
+        for bc in self.BCs[:-3]:
+            idx = bc.update_function(time)[0] if bc.isDynamic else bc.indices
+            viz_box = viz_box.at[idx].set(1.0)
+
+        # Compute q-criterion and vorticity using finite differences
+        # Get velocity field
+        u = kwargs['u']
+        # vorticity and q-criterion
+        norm_mu, q = q_criterion(u)
+
+        # Make phantomgaze volume
+        dx = 0.01
+        origin = (0.0, 0.0, 0.0)
+        upper_bound = (viz_box.shape[0] * dx, viz_box.shape[1] * dx, viz_box.shape[2] * dx)
+        q_volume = pg.objects.Volume(
+            q,
+            spacing=(dx, dx, dx),
+            origin=origin,
+        )
+        norm_mu_volume = pg.objects.Volume(
+            norm_mu,
+            spacing=(dx, dx, dx),
+            origin=origin,
+        )
+        boundary_volume = pg.objects.Volume(
+            viz_box,
+            spacing=(dx, dx, dx),
+            origin=origin,
+        )
+
+        # Make colormap for norm_mu
+        colormap = pg.Colormap("jet", vmin=0.0, vmax=0.05)
+
+        # Get camera parameters
+        focal_point = (viz_box.shape[0] * dx / 2, viz_box.shape[1] * dx / 2, viz_box.shape[2] * dx / 4)
+        radius = 1.0
+        angle = 0.0 #time * 0.001
+        camera_position = (focal_point[0] + radius, focal_point[1] + radius, focal_point[2] - 0.5*radius)
+
+        # Rotate camera
+        camera = pg.Camera(position=camera_position, focal_point=focal_point, view_up=(0.0, 0.0, -1.0), max_depth=30.0, height=1080, width=1920, background=pg.SolidBackground(color=(0.0, 0.0, 0.0)))
+
+        # Make wireframe
+        # screen_buffer = pg.render.wireframe(lower_bound=origin, upper_bound=upper_bound, thickness=0.01, camera=camera)
+
+        # Render axes
+        # screen_buffer = pg.render.axes(size=0.1, center=(0.0, 0.0, 1.1), camera=camera, screen_buffer=screen_buffer)
+
+        # Render q-criterion
+        screen_buffer = pg.render.contour(q_volume, threshold=0.00003, color=norm_mu_volume, colormap=colormap, camera=camera)
+
+        # Render boundary
+        boundary_colormap = pg.Colormap("bone_r", vmin=0.0, vmax=3.0, opacity=np.linspace(0.0, 100.0, 256))
+        screen_buffer = pg.render.volume(boundary_volume, camera=camera, colormap=boundary_colormap, screen_buffer=screen_buffer)
+
+        # Show the rendered image
+        plt.imsave('q_criterion_' + str(kwargs['timestep']).zfill(7) + '.png', np.minimum(screen_buffer.image.get(), 1.0))
+        return
 
 
 if __name__ == '__main__':
@@ -150,16 +204,16 @@ if __name__ == '__main__':
     ny = 24 * prop_radius_lbm
     nz = 24 * prop_radius_lbm
 
-    # Non-dimensional LBM quantities
-    Re = 100000.0
-    u_inlet = 0.003
-    clength = 2 * prop_radius_lbm
-    visc = u_inlet * clength / Re
-    omega = 1.0 / (3. * visc + 0.5)
-
     # Problem dependent non-dimensionalization
+    u_inlet = 0.003
     u_prop_tip = u_inlet * vel_angular_phy * prop_radius_phy / vel_transl_phy
     angularVelocity = u_prop_tip / prop_radius_lbm
+
+    # Non-dimensional LBM quantities
+    Re = 1000.0
+    clength = 2 * prop_radius_lbm
+    visc = u_prop_tip * clength / Re
+    omega = 1.0 / (3. * visc + 0.5)
 
     os.system("rm -rf ./*.vtk && rm -rf ./*.png")
 
