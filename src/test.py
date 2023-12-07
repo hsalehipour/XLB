@@ -204,7 +204,7 @@ class UnitTest(LBMBaseDifferentiable):
         return fhat_poststreaming
 
     @partial(jit, static_argnums=(0,))
-    def step_adjoint_test(self, f, fhat):
+    def step_adjoint_noCollision(self, f, fhat):
         """
         Adjoint of halfway bounceback boundary condition.
         """
@@ -289,7 +289,7 @@ def unit_test5(**kwargs):
     cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall]
     start_time = time.time()
-    fhat_poststreaming = test.step_adjoint_test(f, fhat)
+    fhat_poststreaming = test.step_adjoint_noCollision(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
     test_result = test.test_adjoint(fhat, fhat_poststreaming, '"BGK collide-stream with halfway BB"',
                                     test.lbm_step_complete, f)
@@ -375,6 +375,26 @@ def unit_test10(**kwargs):
     return test_result
 
 
+def unit_test11(**kwargs):
+    # TEST 11:
+    test, f, fhat = init_unit_test(**kwargs)
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    test.BCs = [bottomWall, topWall, leftInlet, rightOutlet, cylinder]
+    start_time = time.time()
+
+    # backward
+    fhat = vjp(test.apply_bc, f, f, timestep, None)[1](fhat)[1]
+    fhat_poststreaming = vjp(test.streaming, f)[1](fhat)[0]
+    fhat_poststreaming = vjp(test.apply_bc, f, f, timestep, None)[1](fhat_poststreaming)[0]
+    fhat_poststreaming = vjp(test.collision, f)[1](fhat_poststreaming)[0]
+
+    print(f'Ref time is: {time.time() - start_time}')
+    test_result = test.test_adjoint(fhat, fhat_poststreaming,
+                                    'Testing construction of individual vjp calls to forward functions',
+                                    test.lbm_step_complete, f)
+    return test_result
+
+
 if __name__ == "__main__":
     precision = "f64/f64"
     lattice = LatticeD2Q9(precision)
@@ -408,6 +428,7 @@ if __name__ == "__main__":
         'C + S + BB + ZouHe_vel + ZouHePress': unit_test8,
         'C + S + BB with BC configuration=True': unit_test9,
         'C + S + IBB': unit_test10,
+        'Individual vjp calls': unit_test11,
     }
 
     for test_name, func_name in unit_test_list.items():
