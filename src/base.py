@@ -801,7 +801,7 @@ class LBMBase(object):
                     
         return fout
 
-    @partial(jit, static_argnums=(0, 3), donate_argnums=(1,))
+    @partial(jit, static_argnums=(0, 3))
     def step(self, f_poststreaming, timestep, return_fpost=False):
         """
         This function performs a single step of the LBM simulation.

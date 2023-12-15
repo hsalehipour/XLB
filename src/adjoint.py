@@ -1,13 +1,11 @@
 import jax.numpy as jnp
-import numpy as np
+from termcolor import colored
 from jax import jit, vjp
 from jax.sharding import PartitionSpec
 from jax.experimental.shard_map import shard_map
 from functools import partial
 from src.base import LBMBase
-"""
-Collision operators are defined in this file for different models.
-"""
+
 
 class LBMBaseDifferentiable(LBMBase):
     """
@@ -24,6 +22,38 @@ class LBMBaseDifferentiable(LBMBase):
 
         self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
                                            in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collision(self, f):
+        """
+        BGK collision step for lattice.
+
+        The collision step is where the main physics of the LBM is applied. In the BGK approximation,
+        the distribution function is relaxed towards the equilibrium distribution function.
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        rho, u = self.update_macroscopic(f)
+        feq = self.equilibrium(rho, u, cast_output=False)
+        fneq = f - feq
+        fout = f - self.omega * fneq
+        if self.force is not None:
+            fout = self.apply_force(fout, feq, rho, u)
+        return self.precisionPolicy.cast_to_output(fout)
+
+    def objective(self, sdf, fpop):
+        """
+        Define the objective function
+
+        Parameters
+        ----------
+        sdf : SDFGrid to evaluate the objective on
+        fpop: state variable in LBM
+
+        Returns
+        -------
+        Objective function value
+        """
+        raise NotImplementedError
 
     def streaming_adj_m(self, f):
         """
@@ -87,13 +117,26 @@ class LBMBaseDifferentiable(LBMBase):
         feq_adj = rho_adj + 3.0 * (cmhat - umhat)
         return feq_adj
 
-    def construct_adjoints(self, fin, fout, timestep):
+    def construct_adjoints(self, sdf, fpop):
         """
         Construct the adjoints for the forward model.
+        ================================
+        Note:
+        ================================
+        fhat = vjp(self.step, fpop, 0., False)[1](fhat)[0]
+
+        is equivalent to:
+
+        def step_vjp(fhat)
+            fhat = vjp(test.apply_bc, f, f, timestep, None)[1](fhat)[1]
+            fhat_poststreaming = vjp(test.streaming, f)[1](fhat)[0]
+            fhat_poststreaming = vjp(test.apply_bc, f, f, timestep, None)[1](fhat_poststreaming)[0]
+            fhat_poststreaming = vjp(test.collision, f)[1](fhat_poststreaming)[0]
+            return fhat_poststreaming
+        ================================
         """
-        # _, self.collision_adj = vjp(self.collision, fin)
-        # _, self.apply_bc_adj = vjp(self.apply_bc, fout, fin, timestep, 'PostCollision')
-        # _, compute_J_adj = vjp(self.compute_J, fout, phi, self.Js)
+        _, self.step_vjp = vjp(self.step, fpop, 0., False)
+        _, self.objective_vjp = vjp(self.objective, sdf, fpop)
         return
 
     @partial(jit, static_argnums=(0,))
@@ -101,14 +144,11 @@ class LBMBaseDifferentiable(LBMBase):
         """
         This function performs a single step of the adjoint LBM simulation.
 
-        It first performs the adjoint streaming step, which is the inverse propagation of the distribution
-        functions in the lattice. It then applies the respective boundary conditions to the post-streaming
-        distribution functions.
-
-        The function then performs adjoint collision step, which is similar to the relaxation of the forward
-        distribution functions towards and adjoint equilibrium state. It then applies the respective boundary
-        conditions to the post-collision distribution functions.
-
+        It first performs applies the respective boundary conditions to the post-collision
+        distribution functions. Then it performs adjoint streaming step, which is the inverse propagation of the
+        distribution functions in the lattice. Again it applies the respective boundary
+        conditions to the post-streaming distribution functions. Finally it performs adjoint collision step, which
+        is similar to the relaxation of the forward distribution functions towards and adjoint equilibrium state.
         Parameters
         ----------
         fhat: jax.numpy.ndarray
@@ -119,8 +159,54 @@ class LBMBaseDifferentiable(LBMBase):
         fhat: jax.numpy.ndarray
             The adjoint distribution functions after the adjoint simulation step.
         """
-        fhat = self.streaming_adj(fhat)
-        fhat = self.apply_bc_adj(fhat)[1]
-        fhat = self.collision_adj(fhat)[0]
-        fhat = self.apply_bc_adj(fhat)[1]
+        fhat = self.step_vjp((fhat, None))[0]
+        fhat = fhat - self.objective_vjp(1.0)[1]
+        return fhat
+
+    def run_adjoint(self, fpop, t_max):
+        """
+        This function runs the adjoint LBM simulation for a specified number of time steps.
+
+        It first initializes the adjoint distribution functions and then enters a loop where it performs the
+        adjoint simulation steps (collision, streaming, and boundary conditions) for each time step.
+
+        The function can also print the progress of the simulation, save the simulation data, and
+        compute the performance of the simulation in million lattice updates per second (MLUPS).
+
+        Parameters
+        ----------
+        t_max: int
+            The total number of time steps to run the simulation.
+        Returns
+        -------
+        fhat: jax.numpy.ndarray
+            The distribution functions after the simulation.
+        """
+        if self.dim == 2:
+            shape = (self.nx, self.ny, self.lattice.q)
+        elif self.dim == 3:
+            shape = (self.nx, self.ny, self.nz, self.lattice.q)
+        else:
+            raise NotImplemented
+        fhat = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=0.0)
+
+        # construct gradients of needed function for performing adjoint computations
+        sdf = self.sdf.array
+        self.construct_adjoints(sdf, fpop)
+
+        # Loop over all time steps
+        start_step = 0
+        for timestep in range(start_step, t_max + 1):
+            print_iter_flag = self.printInfoRate > 0 and timestep % self.printInfoRate == 0
+
+            # Perform one time-step (collision, streaming, and boundary conditions)
+            fhat = self.step_adjoint(fhat)
+
+            # Print the progress of the simulation
+            if print_iter_flag:
+                print(
+                    colored("Timestep ", 'blue') + colored(f"{timestep}", 'green') + colored(" of ", 'blue') + colored(
+                        f"{t_max}", 'green') + colored(" completed", 'blue'))
+
+
         return fhat
