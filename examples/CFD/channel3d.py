@@ -153,5 +153,5 @@ if __name__ == "__main__":
         'io_rate': 500000,
         'print_info_rate': 100000
     }
-    sim = turbulentChannel(**kwargs)
+    sim = TurbulentChannel(**kwargs)
     sim.run(10000000)

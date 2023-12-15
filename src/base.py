@@ -354,8 +354,6 @@ class LBMBase(object):
         # stream into a boundary voxel.
         solid_halo_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
         solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
-        if solid_halo_voxels is not None:
-            self.solid_voxels = tuple(solid_halo_voxels.T)
 
         # Create the grid mask on each process
         start = time.time()

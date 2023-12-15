@@ -2,7 +2,6 @@ import time
 from jax import vjp
 import jax
 import os
-import copy
 
 from src.adjoint import LBMBaseDifferentiable
 from src.lattice import LatticeD2Q9, LatticeD3Q19
@@ -10,6 +9,14 @@ from src.boundary_conditions import *
 
 jax.config.update('jax_enable_x64', True)
 np.random.seed(0)
+
+def discard_solids(bclist, fld1, fld2):
+    solid_halo_list = [np.array(bc.solid_indices).T for bc in bclist if bc.isSolid]
+    solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
+    if solid_halo_voxels is not None:
+        solid_voxels = tuple(solid_halo_voxels.T)
+        fld1 = fld1.at[solid_voxels].set(fld2[solid_voxels])
+    return fld1, fld2
 
 class UnitTest(LBMBaseDifferentiable):
     def __init__(self, **kwargs):
@@ -31,7 +38,7 @@ class UnitTest(LBMBaseDifferentiable):
 
         # concatenate the indices of the left, right, and bottom walls
         walls = [self.boundingBoxIndices['bottom'], self.boundingBoxIndices['top'],
-                 self.boundingBoxIndices['left'][1:-1], self.boundingBoxIndices['right'][1:-1]]
+                 self.boundingBoxIndices['left'], self.boundingBoxIndices['right']]
 
         inlet = self.boundingBoxIndices['left'][1:-1]
         outlet = self.boundingBoxIndices['right'][1:-1]
@@ -40,13 +47,15 @@ class UnitTest(LBMBaseDifferentiable):
         for wall in walls:
             self.BCs.append(BounceBackHalfway(tuple(wall.T), self.gridInfo, self.precisionPolicy))
             self.BCs[-1].needsExtraConfiguration = False
+            self.BCs[-1].isSolid = False
 
         vel_inlet = np.random.random(inlet.shape)
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
+        self.BCs[-1].needsExtraConfiguration = False
 
         rho_outlet = np.random.random((outlet.shape[0], 1))
         self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
-
+        self.BCs[-1].needsExtraConfiguration = False
 
     @partial(jit, static_argnums=(0,))
     def collision(self, f):
@@ -81,8 +90,8 @@ class UnitTest(LBMBaseDifferentiable):
         dfunc_AD = dfunc_AD(fhat)[0]
         print(f'AD time is: {time.time() - start_time}')
 
-        # Discard the dissimilarity at the solid_voxels
-        dfunc_ref = dfunc_ref.at[self.solid_voxels].set(dfunc_AD[self.solid_voxels])
+        # Discard the dissimilarity at the solid voxels
+        dfunc_ref, dfunc_AD = discard_solids(self.BCs, dfunc_ref, dfunc_AD)
 
         flag = np.allclose(dfunc_ref, dfunc_AD, tol, tol)
         print('=' * 50)
@@ -100,8 +109,7 @@ class UnitTest(LBMBaseDifferentiable):
             nbd = len(bc.indices[0])
             bindex = np.arange(nbd)[:, None]
             fbd = fhat_poststreaming[bc.indices]
-            fbd = fbd.at[bindex, bc.iknown].add(fhat[bc.indices][bindex, bc.imissing])
-            fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
+            fbd = fbd.at[bindex, bc.iknown].set(fhat[bc.indices][bindex, bc.imissing])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
 
         return fhat_poststreaming
@@ -181,7 +189,7 @@ class UnitTest(LBMBaseDifferentiable):
             fbd = fhat_poststreaming[bc.indices]
             ddf = fhat[bc.indices] * bc.weights / (1. + bc.weights)
             fbd = fbd.at[bc.imissingMask].add(ddf[bc.imissingMask])
-            fbd = fbd.at[bindex, bc.iknown].add(ddf[bindex, bc.imissing])
+            fbd = fbd.at[bindex, bc.iknown].set(ddf[bindex, bc.imissing])
             fbd = fbd.at[bindex, 0].set(fhat_poststreaming[bc.indices][bindex, 0])
             fhat_poststreaming = fhat_poststreaming.at[bc.indices].set(fbd)
         else:
@@ -299,7 +307,7 @@ def unit_test6(**kwargs):
     # TEST 6: Apply post-streaming BC after stream
     test, f, fhat = init_unit_test(**kwargs)
     cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
-    test.BCs = [bottomWall, topWall, rightOutlet, leftInlet]
+    test.BCs = [bottomWall, topWall, rightWall, leftInlet]
     start_time = time.time()
     fhat_postcollision = fhat
     fhat_poststreaming = fhat
@@ -353,6 +361,12 @@ def unit_test9(**kwargs):
     test, f, fhat = init_unit_test(**kwargs)
     cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder_BB]
+
+    # This is necessary to ensure fhat streamed from outside of fluid domain does not contribute to adjoint BC
+    # which AD assumes incorrectly and by default when those solid voxels are inside the array and not at the matrix
+    # boundaries
+    fhat, _ = discard_solids(test.BCs, fhat, fhat*0.0)
+
     start_time = time.time()
     fhat_poststreaming = test.step_adjoint_complete(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
@@ -366,6 +380,12 @@ def unit_test10(**kwargs):
     test, f, fhat = init_unit_test(**kwargs)
     cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
     test.BCs = [bottomWall, topWall, leftWall, rightWall, cylinder]
+
+    # This is necessary to ensure fhat streamed from outside of fluid domain does not contribute to adjoint BC
+    # which AD assumes incorrectly and by default when those solid voxels are inside the array and not at the matrix
+    # boundaries
+    fhat, _ = discard_solids(test.BCs, fhat, fhat*0.0)
+
     start_time = time.time()
     fhat_poststreaming = test.step_adjoint_complete(f, fhat)
     print(f'Ref time is: {time.time() - start_time}')
@@ -393,6 +413,53 @@ def unit_test11(**kwargs):
                                     'Testing construction of individual vjp calls to forward functions',
                                     test.lbm_step_complete, f)
     return test_result
+
+
+def unit_test12(**kwargs):
+    # TEST 12: Testing addition of objective function
+    test, f, fhat = init_unit_test(**kwargs)
+    cylinder, cylinder_BB, bottomWall, topWall, leftWall, rightWall, leftInlet, rightOutlet = test.BCs
+    test.BCs = [bottomWall, topWall, leftInlet, rightOutlet]
+
+    def objective_func(sdf, fpop):
+        # rho, _ = test.update_macroscopic(fpop)
+        inlet = test.BCs[2]
+        outlet = test.BCs[3]
+        pout = np.mean(outlet.prescribed) / 3.0
+        pin = np.mean(inlet.calculate_rho(fpop, inlet.prescribed)) / 3.0
+        prd = pin - pout
+        return prd
+
+    # backward
+    start_time = time.time()
+    fhat_ref = test.step_adjoint_complete(f, fhat)
+    bc = test.BCs[2]
+    unormal = jnp.sum(bc.normals * bc.prescribed, keepdims=True, axis=-1)
+    grad = 2.0 / 3.0 / (1.0 + unormal) * jnp.ones((1, test.q))
+    grad = grad.at[bc.imissingMask].set(0.0)
+    grad = grad.at[bc.imiddleMask].divide(2.0)
+    grad /= unormal.shape[0]
+    fhat_ref = fhat_ref.at[bc.indices].add(-grad)
+    print(f'Ref time is: {time.time() - start_time}')
+
+    # Construct the adjoints for the forward model.
+    obj_vjp = vjp(objective_func, 0.0, f)[1]
+    step_vjp = vjp(test.lbm_step_complete, f)[1]
+    fhat_AD = step_vjp(fhat)[0]
+    fhat_AD = fhat_AD - obj_vjp(1.0)[1]
+
+    # Discard the dissimilarity at the solid voxels
+    fhat_ref, fhat_AD = discard_solids(test.BCs, fhat_ref, fhat_AD)
+
+    flag = np.allclose(fhat_ref, fhat_AD, tol, tol)
+    print('=' * 50)
+    if flag:
+        print(f'**** PASSED **** unit test for {func_name} up to tol={tol}')
+    else:
+        print(f'!!!! FAILED !!!! unit test for {func_name} up to tol={tol}')
+    print('=' * 50)
+
+    return
 
 
 if __name__ == "__main__":
@@ -429,6 +496,7 @@ if __name__ == "__main__":
         'C + S + BB with BC configuration=True': unit_test9,
         'C + S + IBB': unit_test10,
         'Individual vjp calls': unit_test11,
+        'pressure drop obj func': unit_test12,
     }
 
     for test_name, func_name in unit_test_list.items():

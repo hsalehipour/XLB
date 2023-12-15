@@ -497,6 +497,7 @@ class BounceBackHalfway(BoundaryCondition):
         the boundary nodes to be the indices of fluid nodes adjacent of the solid nodes.
         """
         # Perform index shift for halfway BB.
+        self.solid_indices = self.indices
         hasFluidNeighbour = ~boundaryMask[:, self.lattice.opp_indices]
         nbd_orig = len(self.indices[0])
         idx = np.array(self.indices).T
