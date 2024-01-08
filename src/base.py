@@ -331,7 +331,7 @@ class LBMBase(object):
         }
         simulation_name = self.__class__.__name__
         
-        print(colored(f'**** Simulation Parameters for {simulation_name} ****', 'green'))
+        print(colored(f'\n**** Simulation Parameters for {simulation_name} ****', 'green'))
                 
         header = f"{colored('Parameter', 'blue'):>30} | {colored('Value', 'yellow')}"
         print(header)
@@ -343,6 +343,13 @@ class LBMBase(object):
             row = f"{colored(descriptive_name, 'blue'):>30} | {colored(value, 'yellow')}"
             print(row)
 
+    def get_solid_voxels(self):
+        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
+        # stream into a boundary voxel.
+        solid_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
+        solid_voxels = np.unique(np.vstack(solid_list), axis=0) if solid_list else None
+        return solid_voxels
+
     def _create_boundary_data(self):
         """
         Create boundary data for the Lattice Boltzmann simulation by setting boundary conditions,
@@ -350,14 +357,11 @@ class LBMBase(object):
         """
         self.BCs = []
         self.set_boundary_conditions()
-        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
-        # stream into a boundary voxel.
-        solid_halo_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
-        solid_halo_voxels = np.unique(np.vstack(solid_halo_list), axis=0) if solid_halo_list else None
+        solid_voxels = self.get_solid_voxels()
 
         # Create the grid mask on each process
         start = time.time()
-        grid_mask = self.create_grid_mask(solid_halo_voxels)
+        grid_mask = self.create_grid_mask(solid_voxels)
         print("Time to create the grid mask:", time.time() - start)
 
         start = time.time()
@@ -365,6 +369,7 @@ class LBMBase(object):
             assert bc.implementationStep in ['PostStreaming', 'PostCollision']
             bc.create_local_mask_and_normal_arrays(grid_mask)
         print("Time to create the local masks and normal arrays:", time.time() - start)
+        return
 
     # This is another non-JITed way of creating the distributed arrays. It is not used at the moment.
     # def distributed_array_init(self, shape, type, init_val=None):
