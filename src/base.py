@@ -947,7 +947,10 @@ class LBMBase(object):
                 print(colored("Number of voxels: ", 'blue') + colored(f"{self.nx * self.ny * self.nz}", 'green'))
                 print(colored("MLUPS: ", 'blue') + colored(f"{self.nx * self.ny * self.nz * t_max / (end - start) / 1e6}", 'red'))
 
-        return f
+        if self.returnFpost:
+            return f, fstar
+        else:
+            return f, None
 
     def handle_io_timestep(self, timestep, f, fstar, rho, u, rho_prev, u_prev):
         """
