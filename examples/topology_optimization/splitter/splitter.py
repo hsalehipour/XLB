@@ -1,9 +1,5 @@
 from pathlib import Path
 
-import jax.numpy as jnp
-import numpy as np
-import trimesh
-
 from doppler.callbacks.csv_logger import CSVLogger
 from doppler.callbacks.shape_checkpoint import ShapeCheckpoint
 from doppler.topopt import ALTopOpt, ALConstraint, ALConstraintType
@@ -35,25 +31,6 @@ class Splitter(LBMBaseDifferentiable):
     def __init__(self, sdf, **kwargs):
         self.sdf = sdf
         super().__init__(**kwargs)
-
-    def get_solid_voxels(self):
-        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
-        # stream into a boundary voxel.
-        solid_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
-        solid_voxels = np.unique(np.vstack(solid_list), axis=0) if solid_list else None
-
-        # add external solid walls to the wall indices
-        # Note: the SDF data structure is that of SDFGrid class in doppler
-        if hasattr(self, "sdf"):
-            voxel_coordinates = self.sdf.voxel_grid_coordinates()
-            solid_wall = self.sdf.array > 0.0
-            solid_wall_cord = voxel_coordinates[solid_wall[..., 0], :]
-            solid_wall_indices = self.sdf.index_from_coord(solid_wall_cord)
-            if solid_voxels is None:
-                return solid_wall_indices
-            else:
-                return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
-
 
     def set_boundary_conditions(self):
         voxel_coordinates = self.sdf.voxel_grid_coordinates()

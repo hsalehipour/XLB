@@ -5,7 +5,7 @@ from jax.sharding import PartitionSpec
 from jax.experimental.shard_map import shard_map
 from functools import partial
 from src.base import LBMBase
-
+import numpy as np
 
 class LBMBaseDifferentiable(LBMBase):
     """
@@ -22,6 +22,24 @@ class LBMBaseDifferentiable(LBMBase):
 
         self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
                                            in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
+
+    def get_solid_voxels(self):
+        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
+        # stream into a boundary voxel.
+        solid_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
+        solid_voxels = np.unique(np.vstack(solid_list), axis=0) if solid_list else None
+
+        # add external solid walls to the wall indices
+        # Note: the SDF data structure is that of SDFGrid class in doppler
+        if hasattr(self, "sdf"):
+            voxel_coordinates = self.sdf.voxel_grid_coordinates()
+            solid_wall = self.sdf.array > 0.0
+            solid_wall_cord = voxel_coordinates[solid_wall[..., 0], :]
+            solid_wall_indices = self.sdf.index_from_coord(solid_wall_cord)
+            if solid_voxels is None:
+                return solid_wall_indices
+            else:
+                return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, f):
