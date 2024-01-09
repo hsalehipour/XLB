@@ -256,6 +256,32 @@ class BoundaryCondition(object):
         pass
 
     @partial(jit, static_argnums=(0,))
+    def shapeDerivative(self, fout, fin):
+        """
+        Applies the gradient of boundary condition scheme wrt the signed distance field.
+
+        Parameters
+        ----------
+        fout : jax.numpy.ndarray
+            The output distribution functions.
+        fin : jax.numpy.ndarray
+            The input distribution functions.
+
+        Returns
+        -------
+        df_dphi: jax.numpy.ndarray
+            The derivative of distribution functions wrt the signed distance field phi.
+
+        Notes
+        -----
+        This method should be overridden in subclasses that rely on signed distance field. Only applicable to
+        InterpolatedBounceBackDifferentiable subclass at the moment.
+        """
+        df_dphi = fout[self.indices] * 0.0
+        return df_dphi
+
+
+    @partial(jit, static_argnums=(0,))
     def equilibrium(self, rho, u):
         """
         Compute equilibrium distribution function.
@@ -1141,6 +1167,7 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
 
         super().__init__(indices, implicit_distances, grid_info, precision_policy, vel=vel)
         self.name = "InterpolatedBounceBackDifferentiable"
+        self.weights_grad = None
 
 
     @partial(jit, static_argnums=(0,))
@@ -1176,3 +1203,54 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         if self.vel is not None:
             fbd = self.impose_boundary_vel(fbd, bindex)
         return fbd
+
+    @partial(jit, static_argnums=(0,))
+    def shapeDerivative(self, fout, fin):
+        """
+        Applies the gradient of boundary condition scheme wrt the signed distance field.
+
+        Parameters
+        ----------
+        fout : jax.numpy.ndarray
+            The output distribution functions.
+        fin : jax.numpy.ndarray
+            The input distribution functions.
+
+        Returns
+        -------
+        df_dphi: jax.numpy.ndarray
+            The derivative of distribution functions wrt the signed distance field phi.
+
+        """
+        if self.weights_grad is None:
+            self.set_proximity_ratio_gradient()
+        nbd = len(self.indices[0])
+        bindex = np.arange(nbd)[:, None]
+        df_dphi = fout[self.indices] * 0.0
+        f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
+        f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
+        f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
+        fbd = -2. * f_poststreaming_iknown + f_postcollision_imissing + f_postcollision_iknown
+        fbd /= (1.0 + self.weights)**2.0
+        df_dphi = df_dphi.at[self.imissingMask].set(fbd[self.imissingMask])
+        return df_dphi
+
+    def set_proximity_ratio_gradient(self):
+        """
+        Creates the gradient of the interpolation data needed for computing the shape gradient.
+
+        Returns
+        -------
+        None. The function updates the object's weights attribute in place.
+        """
+        idx = np.array(self.indices).T
+        self.weights_grad = np.zeros((idx.shape[0], self.lattice.q))
+        c = np.array(self.lattice.c)
+        sdf_f = self.implicit_distances[self.indices]
+        for q in range(1, self.lattice.q):
+            solid_indices = idx + c[:, q]
+            solid_indices_tuple = tuple(map(tuple, solid_indices.T))
+            sdf_s = self.implicit_distances[solid_indices_tuple]
+            mask = self.iknownMask[:, q]
+            self.weights_grad[mask, q] = -sdf_s[mask] / (sdf_f[mask] - sdf_s[mask])**2
+        return

@@ -135,6 +135,18 @@ class LBMBaseDifferentiable(LBMBase):
         feq_adj = rho_adj + 3.0 * (cmhat - umhat)
         return feq_adj
 
+
+    def apply_shapeDerivative(self, f_poststreaming, f_postcollision):
+        """
+        Compute df_i/dphi = df_deta * deta / dphi where eta is the weight functions of Interpolated BB and phi is the
+        signed distance field. f_poststreaming and f_postcollision are the outputs of the forward run.
+        """
+        df_dphi = f_poststreaming * 0.0
+        for bc in self.BCs:
+            df_dphi = df_dphi.at[bc.indices].set(bc.shapeDerivative(f_poststreaming, f_postcollision))
+        return df_dphi
+
+
     def construct_adjoints(self, sdf, fpop):
         """
         Construct the adjoints for the forward model.
@@ -209,7 +221,7 @@ class LBMBaseDifferentiable(LBMBase):
         fhat = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=0.0)
 
         # construct gradients of needed function for performing adjoint computations
-        sdf = self.sdf.array
+        sdf = self.sdf
         self.construct_adjoints(sdf, fpop)
 
         # Loop over all time steps
