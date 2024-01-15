@@ -54,7 +54,7 @@ class Splitter(LBMBaseDifferentiable):
 
         # Inlet BC
         vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet[:, 0] = 0.02
+        vel_inlet[:, 0] = 0.08
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
 
         # Outlet BC
@@ -69,12 +69,22 @@ class Splitter(LBMBaseDifferentiable):
         self.BCs[-1].needsExtraConfiguration = False
         self.BCs[-1].isSolid = False
 
+    def output_data(self, **kwargs):
+        # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
+        rho = np.array(kwargs["rho"])
+        u = np.array(kwargs["u"])
+        timestep = kwargs["timestep"]
+        fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
+        if timestep % 100 == 0:
+            save_fields_vtk(timestep, fields)
+            save_BCs_vtk(timestep, self.BCs, self.gridInfo)
+
 def main():
     orig_mesh = trimesh.load(filename)
     extents = orig_mesh.extents
-    nx, ny, nz = 96, 96, 16 # tuple((extents * 2).astype(np.int64))
+    nx, ny, nz = 48, 48, 8 # tuple((extents * 2).astype(np.int64))
     shape = (nx, ny, nz)
-    pad_width = 8
+    pad_width = 4
     sdf_grid = SDFGrid.load_from_mesh(orig_mesh, shape, dtype=jnp.float32, pad_width=pad_width)
     nx += 2*pad_width
     ny += 2*pad_width
@@ -92,20 +102,20 @@ def main():
             'ny': ny,
             'nz': nz,
             'precision': precision,
-            'io_rate': 1,
-            'print_info_rate': 1,
+            'io_rate': 100,
+            'print_info_rate': 100,
         }
         return Splitter(sdf_grid, **kwargs)
 
     # Minimize the variance of the shape
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid)]
+    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
 
     # subject to a volume constraint to avoid collapsing to a point
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.5,
                                 constraint_type=ALConstraintType.EqualTo)]
 
-    callbacks = [CSVLogger(Path(__file__).parent / "outputs" / "ex1_shape_variance"),
-                 ShapeCheckpoint(Path(__file__).parent / "outputs" / "ex1_shape_variance" / "checkpoints")]
+    callbacks = [CSVLogger(Path(__file__).parent / "outputs"),
+                 ShapeCheckpoint(Path(__file__).parent / "outputs" / "checkpoints")]
 
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
