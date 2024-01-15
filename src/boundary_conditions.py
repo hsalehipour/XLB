@@ -1232,6 +1232,7 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
         fbd = -2. * f_poststreaming_iknown + f_postcollision_imissing + f_postcollision_iknown
         fbd /= (1.0 + self.weights)**2.0
+        fbd *= self.weights_grad
         df_dphi = df_dphi.at[self.imissingMask].set(fbd[self.imissingMask])
         return df_dphi
 
