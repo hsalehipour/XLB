@@ -165,7 +165,7 @@ class LBMBaseDifferentiable(LBMBase):
             return fhat_poststreaming
         ================================
         """
-        _, self.step_vjp = vjp(self.step, fpop, 0., False)
+        _, self.step_vjp = vjp(self.step, fpop, 0., sdf, False)
         _, self.objective_vjp = vjp(self.objective, sdf, fpop)
         return
 
@@ -221,7 +221,7 @@ class LBMBaseDifferentiable(LBMBase):
         fhat = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=0.0)
 
         # construct gradients of needed function for performing adjoint computations
-        sdf = self.sdf
+        sdf = self.sdf.array[..., 0]
         self.construct_adjoints(sdf, fpop)
 
         # Loop over all time steps

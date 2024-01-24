@@ -17,13 +17,8 @@ In this example you'll be introduced to the following concepts:
 5. Visualization: The simulation outputs data in VTK format for visualization. It also generates images of the velocity field. The data can be visualized using software like ParaView.
 
 """
-import os
 import json
 import jax
-from time import time
-from jax import config
-import numpy as np
-import jax.numpy as jnp
 
 from src.utils import *
 from src.boundary_conditions import *
@@ -39,14 +34,12 @@ class Cylinder(BGKSim):
         super().__init__(**kwargs)
 
     def set_boundary_conditions(self):
-        # Define the cylinder surface
-        coord = np.array([(i, j) for i in range(self.nx) for j in range(self.ny)])
-        xx, yy = coord[:, 0], coord[:, 1]
-        cx, cy = 2.*diam, 2.*diam
-        cylinder = (xx - cx)**2 + (yy-cy)**2 <= (diam/2.)**2
+
+        # Define the cylinder using its sdf field
+        sdf, coord = cylinder_sdf(self.nx, self.ny, diam)
+        cylinder = sdf <= 0.0
         cylinder = coord[cylinder]
-        implicit_distance = np.reshape((xx - cx)**2 + (yy-cy)**2 - (diam/2.)**2, (self.nx, self.ny))
-        self.BCs.append(InterpolatedBounceBackBouzidi(tuple(cylinder.T), implicit_distance, self.gridInfo, self.precisionPolicy))
+        self.BCs.append(InterpolatedBounceBackBouzidi(tuple(cylinder.T), self.gridInfo, self.precisionPolicy))
 
         # Outflow BC
         outlet = self.boundingBoxIndices['right']
@@ -54,6 +47,7 @@ class Cylinder(BGKSim):
         self.BCs.append(ExtrapolationOutflow(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
 
         # Inlet BC
+        yy = coord[:, 1]
         inlet = self.boundingBoxIndices['left']
         rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
         vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
@@ -99,6 +93,15 @@ class Cylinder(BGKSim):
 # Helper function to specify a parabolic poiseuille profile
 poiseuille_profile  = lambda x,x0,d,umax: np.maximum(0.,4.*umax/(d**2)*((x-x0)*d-(x-x0)**2))
 
+
+def cylinder_sdf(nx, ny, diam):
+    # Define the cylinder surface
+    coord = np.array([(i, j) for i in range(nx) for j in range(ny)])
+    xx, yy = coord[:, 0], coord[:, 1]
+    cx, cy = 2. * diam, 2. * diam
+    sdf = (xx - cx) ** 2 + (yy - cy) ** 2 - (diam / 2.) ** 2
+    return sdf, coord
+
 if __name__ == '__main__':
     precision = 'f64/f64'
     # diam_list = [10, 20, 30, 40, 60, 80]
@@ -131,9 +134,13 @@ if __name__ == '__main__':
             'print_info_rate': int(10000 / scale_factor),
             'return_fpost': True    # Need to retain fpost-collision for computation of lift and drag
         }
+
+        # coordinate of cylinder and its sdf field
+        sdf, _ = cylinder_sdf(nx, ny, diam)
+
         sim = Cylinder(**kwargs)
         t_max = int(1000000 / scale_factor)
-        sim.run(t_max)
+        sim.run(t_max, sdf.reshape((nx, ny)))
         CL_list.append(sim.CL_max)
         CD_list.append(sim.CD_max)
 

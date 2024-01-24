@@ -233,7 +233,7 @@ class BoundaryCondition(object):
         return imissingMask, iknownMask, imiddleMask
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the boundary condition.
 
@@ -243,6 +243,8 @@ class BoundaryCondition(object):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -395,7 +397,7 @@ class BounceBack(BoundaryCondition):
         self.implementationStep = "PostCollision"
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the bounce-back boundary condition.
 
@@ -405,6 +407,8 @@ class BounceBack(BoundaryCondition):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -548,7 +552,7 @@ class BounceBackHalfway(BoundaryCondition):
         return fbd
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the halfway bounce-back boundary condition.
 
@@ -558,6 +562,8 @@ class BounceBackHalfway(BoundaryCondition):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -598,7 +604,7 @@ class EquilibriumBC(BoundaryCondition):
         self.implementationStep = "PostStreaming"
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the equilibrium boundary condition.
 
@@ -608,6 +614,8 @@ class EquilibriumBC(BoundaryCondition):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -652,9 +660,8 @@ class DoNothing(BoundaryCondition):
         self.name = "DoNothing"
         self.implementationStep = "PostStreaming"
 
-
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the do-nothing boundary condition.
 
@@ -664,6 +671,8 @@ class DoNothing(BoundaryCondition):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -780,7 +789,7 @@ class ZouHe(BoundaryCondition):
         return fbd
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, _):
+    def apply(self, fout, _, sdf):
         """
         Applies the Zou-He boundary condition.
 
@@ -790,6 +799,8 @@ class ZouHe(BoundaryCondition):
             The output distribution functions.
         _ : jax.numpy.ndarray
             The input distribution functions. This is not used in this method.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -905,7 +916,7 @@ class Regularized(ZouHe):
         return fpop_regularized
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, _):
+    def apply(self, fout, _, sdf):
         """
         Applies the regularized boundary condition.
 
@@ -915,6 +926,8 @@ class Regularized(ZouHe):
             The output distribution functions.
         _ : jax.numpy.ndarray
             The input distribution functions. This is not used in this method.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -1027,7 +1040,7 @@ class ExtrapolationOutflow(BoundaryCondition):
         return f_postcollision
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the extrapolation outflow boundary condition.
 
@@ -1037,6 +1050,8 @@ class ExtrapolationOutflow(BoundaryCondition):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
@@ -1070,14 +1085,13 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         position defined as: weights(dir_i) = |x_fluid - x_boundary(dir_i)| / |x_fluid - x_solid(dir_i)|.
     """
 
-    def __init__(self, indices, implicit_distances, grid_info, precision_policy, vel=None):
+    def __init__(self, indices, grid_info, precision_policy, vel=None):
 
         super().__init__(indices, grid_info, precision_policy, vel=vel)
         self.name = "InterpolatedBounceBackBouzidi"
-        self.implicit_distances = implicit_distances
-        self.weights = None
 
-    def set_proximity_ratio(self):
+    @partial(jit, static_argnums=(0,))
+    def set_proximity_ratio(self, implicit_distances):
         """
         Creates the interpolation data needed for the boundary condition.
 
@@ -1086,19 +1100,19 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         None. The function updates the object's weights attribute in place.
         """
         idx = np.array(self.indices).T
-        self.weights = np.full((idx.shape[0], self.lattice.q), 0.5)
+        weights = jnp.full((idx.shape[0], self.lattice.q), 0.5)
         c = np.array(self.lattice.c)
-        sdf_f = self.implicit_distances[self.indices]
+        sdf_f = implicit_distances[self.indices]
         for q in range(1, self.lattice.q):
             solid_indices = idx + c[:, q]
             solid_indices_tuple = tuple(map(tuple, solid_indices.T))
-            sdf_s = self.implicit_distances[solid_indices_tuple]
+            sdf_s = implicit_distances[solid_indices_tuple]
             mask = self.iknownMask[:, q]
-            self.weights[mask, q] = sdf_f[mask] / (sdf_f[mask] - sdf_s[mask])
-        return
+            weights = weights.at[mask, q].set(sdf_f[mask] / (sdf_f[mask] - sdf_s[mask]))
+        return weights
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the halfway bounce-back boundary condition.
 
@@ -1108,14 +1122,15 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
         jax.numpy.ndarray
             The modified output distribution functions after applying the boundary condition.
         """
-        if self.weights is None:
-            self.set_proximity_ratio()
+        weights = self.set_proximity_ratio(sdf)
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
@@ -1124,15 +1139,15 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
 
         # if weights<0.5
-        fs_near = 2. * self.weights * f_postcollision_iknown + \
-                  (1.0 - 2.0 * self.weights) * f_poststreaming_iknown
+        fs_near = 2. * weights * f_postcollision_iknown + \
+                  (1.0 - 2.0 * weights) * f_poststreaming_iknown
 
         # if weights>=0.5
-        fs_far = 1.0 / (2. * self.weights) * f_postcollision_iknown + \
-                 (2.0 * self.weights - 1.0) / (2. * self.weights) * f_postcollision_imissing
+        fs_far = 1.0 / (2. * weights) * f_postcollision_iknown + \
+                 (2.0 * weights - 1.0) / (2. * weights) * f_postcollision_imissing
 
         # combine near and far contributions
-        fmissing = jnp.where(self.weights < 0.5, fs_near, fs_far)
+        fmissing = jnp.where(weights < 0.5, fs_near, fs_far)
         fbd = fbd.at[bindex, self.imissing].set(fmissing)
         fbd = fbd.at[bindex, 0].set(fout[self.indices][bindex, 0])
 
@@ -1144,7 +1159,7 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
 class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
     """
     A differentiable variant of the "InterpolatedBounceBackBouzidi" BC scheme. This BC is now differentiable at
-    self.weight = 0.5 unlike the original Bouzidi scheme which switches between 2 equations at weight=0.5. Refer to
+    weight = 0.5 unlike the original Bouzidi scheme which switches between 2 equations at weight=0.5. Refer to
     [1] (their Appendix E) for more information.
 
     References
@@ -1163,15 +1178,15 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         The name of the boundary condition. For this class, it is "InterpolatedBounceBackDifferentiable".
     """
 
-    def __init__(self, indices, implicit_distances, grid_info, precision_policy, vel=None):
+    def __init__(self, indices, grid_info, precision_policy, vel=None):
 
-        super().__init__(indices, implicit_distances, grid_info, precision_policy, vel=vel)
+        super().__init__(indices, grid_info, precision_policy, vel=vel)
         self.name = "InterpolatedBounceBackDifferentiable"
         self.weights_grad = None
 
 
     @partial(jit, static_argnums=(0,))
-    def apply(self, fout, fin):
+    def apply(self, fout, fin, sdf):
         """
         Applies the halfway bounce-back boundary condition.
 
@@ -1181,77 +1196,77 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
             The output distribution functions.
         fin : jax.numpy.ndarray
             The input distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
 
         Returns
         -------
         jax.numpy.ndarray
             The modified output distribution functions after applying the boundary condition.
         """
-        if self.weights is None:
-            self.set_proximity_ratio()
+        weights = self.set_proximity_ratio(sdf)
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
         f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
         f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
         f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
-        fmissing = ((1. - self.weights) * f_poststreaming_iknown +
-                    self.weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + self.weights)
+        fmissing = ((1. - weights) * f_poststreaming_iknown +
+                    weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + weights)
         fbd = fbd.at[bindex, self.imissing].set(fmissing)
         fbd = fbd.at[bindex, 0].set(fout[self.indices][bindex, 0])
-
         if self.vel is not None:
             fbd = self.impose_boundary_vel(fbd, bindex)
         return fbd
 
-    @partial(jit, static_argnums=(0,))
-    def shapeDerivative(self, fout, fin):
-        """
-        Applies the gradient of boundary condition scheme wrt the signed distance field.
-
-        Parameters
-        ----------
-        fout : jax.numpy.ndarray
-            The output distribution functions.
-        fin : jax.numpy.ndarray
-            The input distribution functions.
-
-        Returns
-        -------
-        df_dphi: jax.numpy.ndarray
-            The derivative of distribution functions wrt the signed distance field phi.
-
-        """
-        if self.weights_grad is None:
-            self.set_proximity_ratio_gradient()
-        nbd = len(self.indices[0])
-        bindex = np.arange(nbd)[:, None]
-        df_dphi = fout[self.indices] * 0.0
-        f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
-        f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
-        f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
-        fbd = -2. * f_poststreaming_iknown + f_postcollision_imissing + f_postcollision_iknown
-        fbd /= (1.0 + self.weights)**2.0
-        fbd *= self.weights_grad
-        df_dphi = df_dphi.at[self.imissingMask].set(fbd[self.imissingMask])
-        return df_dphi
-
-    def set_proximity_ratio_gradient(self):
-        """
-        Creates the gradient of the interpolation data needed for computing the shape gradient.
-
-        Returns
-        -------
-        None. The function updates the object's weights attribute in place.
-        """
-        idx = np.array(self.indices).T
-        self.weights_grad = np.zeros((idx.shape[0], self.lattice.q))
-        c = np.array(self.lattice.c)
-        sdf_f = self.implicit_distances[self.indices]
-        for q in range(1, self.lattice.q):
-            solid_indices = idx + c[:, q]
-            solid_indices_tuple = tuple(map(tuple, solid_indices.T))
-            sdf_s = self.implicit_distances[solid_indices_tuple]
-            mask = self.iknownMask[:, q]
-            self.weights_grad[mask, q] = -sdf_s[mask] / (sdf_f[mask] - sdf_s[mask])**2
-        return
+    # @partial(jit, static_argnums=(0,))
+    # def shapeDerivative(self, fout, fin):
+    #     """
+    #     Applies the gradient of boundary condition scheme wrt the signed distance field.
+    #
+    #     Parameters
+    #     ----------
+    #     fout : jax.numpy.ndarray
+    #         The output distribution functions.
+    #     fin : jax.numpy.ndarray
+    #         The input distribution functions.
+    #
+    #     Returns
+    #     -------
+    #     df_dphi: jax.numpy.ndarray
+    #         The derivative of distribution functions wrt the signed distance field phi.
+    #
+    #     """
+    #     if self.weights_grad is None:
+    #         self.set_proximity_ratio_gradient()
+    #     nbd = len(self.indices[0])
+    #     bindex = np.arange(nbd)[:, None]
+    #     df_dphi = fout[self.indices] * 0.0
+    #     f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
+    #     f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
+    #     f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
+    #     fbd = -2. * f_poststreaming_iknown + f_postcollision_imissing + f_postcollision_iknown
+    #     fbd /= (1.0 + self.weights)**2.0
+    #     fbd *= self.weights_grad
+    #     df_dphi = df_dphi.at[self.imissingMask].set(fbd[self.imissingMask])
+    #     return df_dphi
+    #
+    # def set_proximity_ratio_gradient(self, weights, implicit_distances):
+    #     """
+    #     Creates the gradient of the interpolation data needed for computing the shape gradient.
+    #
+    #     Returns
+    #     -------
+    #     None. The function updates the object's weights attribute in place.
+    #     """
+    #     idx = np.array(self.indices).T
+    #     self.weights_grad = np.zeros((idx.shape[0], self.lattice.q))
+    #     c = np.array(self.lattice.c)
+    #     sdf_f = implicit_distances[self.indices]
+    #     for q in range(1, self.lattice.q):
+    #         solid_indices = idx + c[:, q]
+    #         solid_indices_tuple = tuple(map(tuple, solid_indices.T))
+    #         sdf_s = implicit_distances[solid_indices_tuple]
+    #         mask = self.iknownMask[:, q]
+    #         self.weights_grad[mask, q] = -sdf_s[mask] * (weights[mask, q]/sdf_f[mask])**2
+    #     return

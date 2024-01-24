@@ -773,8 +773,8 @@ class LBMBase(object):
 
         return rho, u
     
-    @partial(jit, static_argnums=(0, 4), inline=True)
-    def apply_bc(self, fout, fin, timestep, implementation_step):
+    @partial(jit, static_argnums=(0, 5), inline=True)
+    def apply_bc(self, fout, fin, timestep, sdf, implementation_step):
         """
         This function applies the boundary conditions to the distribution functions.
 
@@ -788,6 +788,8 @@ class LBMBase(object):
             The post-collision distribution functions.
         fin: jax.numpy.ndarray
             The post-streaming distribution functions.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
         implementation_step: str
             The implementation step at which the boundary conditions should be applied.
 
@@ -802,12 +804,12 @@ class LBMBase(object):
                 if bc.isDynamic:
                     fout = bc.apply(fout, fin, timestep)
                 else:
-                    fout = fout.at[bc.indices].set(bc.apply(fout, fin))
+                    fout = fout.at[bc.indices].set(bc.apply(fout, fin, sdf))
                     
         return fout
 
-    @partial(jit, static_argnums=(0, 3))
-    def step(self, f_poststreaming, timestep, return_fpost=False):
+    @partial(jit, static_argnums=(0, 4))
+    def step(self, f_poststreaming, timestep, sdf, return_fpost=False):
         """
         This function performs a single step of the LBM simulation.
 
@@ -825,6 +827,8 @@ class LBMBase(object):
             The post-streaming distribution functions.
         timestep: int
             The current timestep of the simulation.
+        sdf: jax.numpy.ndarray, optional
+            signed distance field.
         return_fpost: bool, optional
             If True, the function also returns the post-collision distribution functions.
 
@@ -837,16 +841,16 @@ class LBMBase(object):
             return_fpost is False.
         """
         f_postcollision = self.collision(f_poststreaming)
-        f_postcollision = self.apply_bc(f_postcollision, f_poststreaming, timestep, "PostCollision")
+        f_postcollision = self.apply_bc(f_postcollision, f_poststreaming, timestep, sdf, "PostCollision")
         f_poststreaming = self.streaming(f_postcollision)
-        f_poststreaming = self.apply_bc(f_poststreaming, f_postcollision, timestep, "PostStreaming")
+        f_poststreaming = self.apply_bc(f_poststreaming, f_postcollision, timestep, sdf, "PostStreaming")
 
         if return_fpost:
             return f_poststreaming, f_postcollision
         else:
             return f_poststreaming, None
 
-    def run(self, t_max):
+    def run(self, t_max, sdf=None):
         """
         This function runs the LBM simulation for a specified number of time steps.
 
@@ -860,6 +864,8 @@ class LBMBase(object):
         ----------
         t_max: int
             The total number of time steps to run the simulation.
+        sdf: jax.numpy.ndarray, optional
+            a signed distance field (if provide) used in imposing interpolated boundary condition
         Returns
         -------
         f: jax.numpy.ndarray
@@ -903,7 +909,7 @@ class LBMBase(object):
 
 
             # Perform one time-step (collision, streaming, and boundary conditions)
-            f, fstar = self.step(f, timestep, return_fpost=self.returnFpost)
+            f, fstar = self.step(f, timestep, sdf, return_fpost=self.returnFpost)
             # Print the progress of the simulation
             if print_iter_flag:
                 print(colored("Timestep ", 'blue') + colored(f"{timestep}", 'green') + colored(" of ", 'blue') + colored(f"{t_max}", 'green') + colored(" completed", 'blue'))
