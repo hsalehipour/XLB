@@ -22,13 +22,13 @@ precision = 'f32/f32'
 dir_path = os.path.dirname(os.path.realpath(__file__)) + '/stl-files/kaizen/'
 drone_fname_dic = {
     'prop1': {'fname': dir_path + 'Prop 1 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop2': {'fname': dir_path + 'Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    # 'prop2': {'fname': dir_path + 'Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop3': {'fname': dir_path + 'Prop 3 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop4': {'fname': dir_path + 'Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    # 'prop4': {'fname': dir_path + 'Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop5': {'fname': dir_path + 'Prop 5 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop6': {'fname': dir_path + 'Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    # 'prop6': {'fname': dir_path + 'Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop7': {'fname': dir_path + 'Prop 7 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    'prop8': {'fname': dir_path + 'Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    # 'prop8': {'fname': dir_path + 'Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'main_body': {'fname': dir_path + 'main body.stl', 'translate': [0, 0, 0]}
 }
 
@@ -96,29 +96,21 @@ class Drone(KBCSim):
                                             rotationOrigin=rotationOrigin,
                                             angularVelocity=angularVelocity))
 
+        # side walls
         wall = np.concatenate((self.boundingBoxIndices['front'], self.boundingBoxIndices['back'],
                                self.boundingBoxIndices['left'], self.boundingBoxIndices['right']))
         self.BCs.append(BounceBack(tuple(wall.T), self.gridInfo, self.precisionPolicy))
 
+        # Outlet
         outlet = self.boundingBoxIndices['top']
-        self.BCs.append(DoNothing(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
-        self.BCs[-1].implementationStep = 'PostCollision'
-        # rho_outlet = np.ones(outlet.shape[0], dtype=self.precision_policy.compute_dtype)
-        # self.BCs.append(Regularized(tuple(outlet.T),
-        #                                          self.grid_info,
-        #                                          self.precision_policy,
-        #                                          'pressure', rho_outlet))
+        self.BCs.append(ExtrapolationOutflow(tuple(outlet.T), self.gridInfo, self.precisionPolicy))
 
+        # inlet
         inlet = self.boundingBoxIndices['bottom']
         rho_inlet = np.ones((inlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
         vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
-
         vel_inlet[:, 2] = u_inlet
-        self.BCs.append(EquilibriumBC(tuple(inlet.T), self.gridInfo, self.precisionPolicy, rho_inlet, vel_inlet))
-        # self.BCs.append(ZouHe(tuple(inlet.T),
-        #                                          self.grid_info,
-        #                                          self.precision_policy,
-        #                                          'velocity', vel_inlet))
+        self.BCs.append(Regularized(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
         return
 
 
@@ -164,8 +156,7 @@ class Drone(KBCSim):
 
         # Get camera parameters
         focal_point = (viz_box.shape[0] * dx / 2, viz_box.shape[1] * dx / 2, viz_box.shape[2] * dx / 4)
-        radius = 1.0
-        angle = 0.0 #time * 0.001
+        radius = 2.0
         camera_position = (focal_point[0] + radius, focal_point[1] + radius, focal_point[2] - 0.5*radius)
 
         # Rotate camera
@@ -193,7 +184,7 @@ if __name__ == '__main__':
     lattice = LatticeD3Q27(precision)
 
     # Problem dependent dimensional quantities
-    rpm = 3000  # round per minute
+    rpm = 100  # round per minute
     vel_angular_phy = 2.0 * math.pi * rpm / 60  # rad / sec
     vel_transl_phy = 15  # m / sec
     prop_radius_phy = 0.5  # meter
@@ -205,12 +196,12 @@ if __name__ == '__main__':
     nz = 24 * prop_radius_lbm
 
     # Problem dependent non-dimensionalization
-    u_inlet = 0.003
+    u_inlet = 0.04
     u_prop_tip = u_inlet * vel_angular_phy * prop_radius_phy / vel_transl_phy
     angularVelocity = u_prop_tip / prop_radius_lbm
 
     # Non-dimensional LBM quantities
-    Re = 1000.0
+    Re = 100.0
     clength = 2 * prop_radius_lbm
     visc = u_prop_tip * clength / Re
     omega = 1.0 / (3. * visc + 0.5)
@@ -224,7 +215,7 @@ if __name__ == '__main__':
         'ny': ny,
         'nz': nz,
         'precision': precision,
-        'io_rate': 100,
+        'io_rate': 50,
         'print_info_rate': 100,
         'restore_checkpoint': False,
     }
