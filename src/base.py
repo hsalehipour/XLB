@@ -525,7 +525,7 @@ class LBMBase(object):
         print("         To set explicit initial density and velocity, use self.initialize_macroscopic_fields.")
         return None, None
 
-    def assign_fields_sharded(self):
+    def assign_fields_sharded(self, init_val=None):
         """
         This function is used to initialize the simulation by assigning the macroscopic fields and populations.
 
@@ -552,7 +552,9 @@ class LBMBase(object):
             shape = (self.nx, self.ny, self.nz, self.lattice.q)
     
         if rho0 is None or u0 is None:
-            f = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=self.w)
+            if init_val is None:
+                init_val = self.w
+            f = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=init_val)
         else:
             f = self.initialize_populations(rho0, u0)
 
@@ -956,7 +958,7 @@ class LBMBase(object):
         if self.returnFpost:
             return f, fstar
         else:
-            return f, None
+            return f
 
     def handle_io_timestep(self, timestep, f, fstar, rho, u, rho_prev, u_prev):
         """
