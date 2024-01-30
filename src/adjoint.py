@@ -42,15 +42,18 @@ class LBMBaseDifferentiable(LBMBase):
                 return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, f):
+    def collision(self, f, sdf):
         """
         BGK collision step for lattice.
 
         The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
         """
+        eta = 0.5 - 0.5*jnp.tanh(sdf/ 0.5)
+        eta = eta.at[self.sdf.keepOut].set(1.0)
         f = self.precisionPolicy.cast_to_compute(f)
         rho, u = self.update_macroscopic(f)
+        u = u*eta[..., None]
         feq = self.equilibrium(rho, u, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq
@@ -190,7 +193,7 @@ class LBMBaseDifferentiable(LBMBase):
             The adjoint distribution functions after the adjoint simulation step.
         """
         fhat = self.step_vjp((fhat, None))[0]
-        fhat = fhat - self.objective_vjp(1.0)[1]
+        fhat = fhat + self.objective_vjp(1.0)[1]
         return fhat
 
     def run_adjoint(self, fpop, t_max):
@@ -227,6 +230,7 @@ class LBMBaseDifferentiable(LBMBase):
         # Loop over all time steps
         start_step = 0
         for timestep in range(start_step, t_max + 1):
+            io_flag = self.ioRate > 0 and (timestep % self.ioRate == 0 or timestep == t_max)
             print_iter_flag = self.printInfoRate > 0 and timestep % self.printInfoRate == 0
 
             # Perform one time-step (collision, streaming, and boundary conditions)
@@ -237,6 +241,21 @@ class LBMBaseDifferentiable(LBMBase):
                 print(
                     colored("Timestep ", 'blue') + colored(f"{timestep}", 'green') + colored(" of ", 'blue') + colored(
                         f"{t_max}", 'green') + colored(" completed", 'blue'))
+                
+            # if io_flag:
+            #     # Save the simulation data
+            #     print(f"Saving data at timestep {timestep}/{t_max}")
+            #     rho_adj = jnp.sum(fhat, axis=-1, keepdims=True)
+            #     c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
+            #     u = jnp.dot(fhat, c)
+            #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
+            #     fields = {"rho": rho_adj[..., 0], 
+            #               "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2),
+            #               "shape_derivative": lbm_shapeDerivative}
+            #     save_fields_vtk(timestep, fields, prefix='adjfields')
+
+            #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
+                
 
 
         return fhat

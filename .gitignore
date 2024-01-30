@@ -12,6 +12,7 @@
 *mhd
 *png
 *pdf
+*csv
 # Exclusions
 !jax-lbm.png
 !airfoil.png

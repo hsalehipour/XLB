@@ -1,5 +1,8 @@
+import os, sys
 from pathlib import Path
 from jax import config
+sys.path.append(os.path.abspath('../doppler'))
+sys.path.append(os.path.abspath('../XLB'))
 
 import numpy as np
 from doppler.callbacks.csv_logger import CSVLogger
@@ -78,8 +81,8 @@ class Splitter(LBMBaseDifferentiable):
         # outlet = (yy == yy.min()) & \
         #          (xx < xx.min() + 0.8*Lx) & (xx > xx.min() + 0.6*Lx) & \
         #          (zz < zz.min() + 0.8*Lz) & (zz > zz.min() + 0.2*Lz)
-        Lx, Ly, Lz = 47., 47.0, 7.
-        xxmin, yymin, zzmin = 0.5, 0.5, 0.5
+        Lx, Ly, Lz = 47., 44.0, 7.
+        xxmin, yymin, zzmin = self.sdf.spacing/2., self.sdf.spacing/2., self.sdf.spacing/2.
         inlet = (xx == xxmin) & \
                 (yy < yymin + 0.8*Ly) & (yy > yymin + 0.6*Ly) & \
                 (zz < zzmin + 0.8*Lz) & (zz > zzmin + 0.2*Lz)
@@ -95,7 +98,7 @@ class Splitter(LBMBaseDifferentiable):
 
         # Inlet BC
         vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet[:, 0] = 0.08
+        vel_inlet[:, 0] = 0.04
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
 
         # Outlet BC
@@ -104,8 +107,9 @@ class Splitter(LBMBaseDifferentiable):
 
         # No-slip BC for all no-slip boundaries that are part of optimization
         # sdf_wall = self.sdf.array[tuple(wall.T)]
-        self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(wall.T),
-                                                             self.gridInfo, self.precisionPolicy))
+        # self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(wall.T),
+        #                                                      self.gridInfo, self.precisionPolicy))
+        self.BCs.append(BounceBackHalfway(tuple(wall.T), self.gridInfo, self.precisionPolicy))
         self.BCs[-1].needsExtraConfiguration = False
         self.BCs[-1].isSolid = False
 
@@ -114,10 +118,10 @@ class Splitter(LBMBaseDifferentiable):
     #     rho = np.array(kwargs["rho"])
     #     u = np.array(kwargs["u"])
     #     timestep = kwargs["timestep"]
-    #     fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2]}
-    #     if timestep % 100 == 0:
-    #         save_fields_vtk(timestep, fields)
-    #         save_BCs_vtk(timestep, self.BCs, self.gridInfo)
+    #     fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], 
+    #               "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2)}
+    #     save_fields_vtk(timestep, fields)
+    #     save_BCs_vtk(timestep, self.BCs, self.gridInfo)
 
 # def port_coord(shape: SDFGrid):
 #     voxel_coordinates = shape.voxel_grid_coordinates()
@@ -140,9 +144,9 @@ class Splitter(LBMBaseDifferentiable):
 def main():
     orig_mesh = trimesh.load(filename)
     extents = orig_mesh.extents
-    nx, ny, nz = 48, 48, 8 # tuple((extents * 2).astype(np.int64))
+    nx, ny, nz = 48, 45, 8 # tuple((extents * 2).astype(np.int64))
     shape = (nx, ny, nz)
-    pad_width = 4
+    pad_width = 8
     sdf_grid = SDFGrid.load_from_mesh(orig_mesh, shape, dtype=jnp.float32, pad_width=pad_width)
     nx += 2*pad_width
     ny += 2*pad_width
@@ -151,7 +155,7 @@ def main():
     def xlb_instantiator(sdf_grid):
         precision = 'f32/f32'
         lattice = LatticeD3Q19(precision)
-        omega = 1.6#
+        omega = 1.6
 
         kwargs = {
             'lattice': lattice,
@@ -160,27 +164,28 @@ def main():
             'ny': ny,
             'nz': nz,
             'precision': precision,
-            'io_rate': 100,
-            'print_info_rate': 100,
+            'io_rate': 500,
+            'print_info_rate': 500,
         }
         return Splitter(sdf_grid, **kwargs)
 
-    os.system('rm -rf ./*.vtk && rm -rf outputs')
+    file_path = Path(__file__).parent   
+    os.system('rm -rf ' + str(file_path)+ '/*.vtk && rm -rf ' + str(file_path) + '/outputs')
 
     # Minimize the variance of the shape
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=500)]
+    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
 
     # subject to a volume constraint to avoid collapsing to a point
-    constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.5,
+    constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.25,
                                 constraint_type=ALConstraintType.EqualTo)]
 
-    callbacks = [CSVLogger(Path(__file__).parent / "outputs"),
-                 ShapeCheckpoint(Path(__file__).parent / "outputs" / "checkpoints")]
+    callbacks = [CSVLogger(file_path / "outputs"),
+                 ShapeCheckpoint(file_path / "outputs" / "checkpoints")]
 
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
-    topopt = ALTopOpt(sdf_grid, objectives=objectives, constraints=constraints, max_iter=20, max_inner_loop_iter=4,
-                      callbacks=callbacks, band_voxels=3, line_search_iter=1)
+    topopt = ALTopOpt(sdf_grid, objectives=objectives, constraints=constraints, max_iter=20, max_inner_loop_iter=8,
+                      callbacks=callbacks, band_voxels=3, line_search_iter=3)
     # The final shape is in topopt.shape or saved to VTI and PLY files if the ShapeCheckpoint callback was provided
     topopt.run()
 
