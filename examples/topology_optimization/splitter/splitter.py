@@ -89,16 +89,23 @@ class Splitter(LBMBaseDifferentiable):
         outlet = (yy == yymin) & \
                  (xx < xxmin + 0.8*Lx) & (xx > xxmin + 0.6*Lx) & \
                  (zz < zzmin + 0.8*Lz) & (zz > zzmin + 0.2*Lz)
-        wall = ~(inlet | outlet)
+        noslip = ~(inlet | outlet)
 
         # Get boundary voxel indices from the above masks
+        yy_inlet = yy[inlet]
         inlet = bdry_indices[inlet]
         outlet = bdry_indices[outlet]
-        wall = bdry_indices[wall]
+        noslip = bdry_indices[noslip]
 
+        # wall_keepOut = noslip[self.sdf.keepOut[tuple(noslip.T)]]
+        # wall_design = noslip[~self.sdf.keepOut[tuple(noslip.T)]]
+        
         # Inlet BC
         vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
-        vel_inlet[:, 0] = 0.04
+        prescribed_vel = 0.04
+        vel_inlet[:, 0] = poiseuille_profile(yy_inlet,
+                                        yy_inlet.min(),
+                                        yy_inlet.max()-yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
         self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
 
         # Outlet BC
@@ -106,12 +113,11 @@ class Splitter(LBMBaseDifferentiable):
         self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
 
         # No-slip BC for all no-slip boundaries that are part of optimization
-        # sdf_wall = self.sdf.array[tuple(wall.T)]
-        # self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(wall.T),
-        #                                                      self.gridInfo, self.precisionPolicy))
-        self.BCs.append(BounceBackHalfway(tuple(wall.T), self.gridInfo, self.precisionPolicy))
+        self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(noslip.T),
+                                                             self.gridInfo, self.precisionPolicy))
         self.BCs[-1].needsExtraConfiguration = False
         self.BCs[-1].isSolid = False
+        return
 
     # def output_data(self, **kwargs):
     #     # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
@@ -140,6 +146,10 @@ class Splitter(LBMBaseDifferentiable):
 #     port_dic = {'inlet': inlet_coord,
 #                 'outlet': outlet_coord}
 #     return port_dic
+
+
+# Helper function to specify a parabolic poiseuille profile
+poiseuille_profile  = lambda x,x0,d,umax: np.maximum(0.,4.*umax/(d**2)*((x-x0)*d-(x-x0)**2))
 
 def main():
     orig_mesh = trimesh.load(filename)
@@ -185,7 +195,7 @@ def main():
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
     topopt = ALTopOpt(sdf_grid, objectives=objectives, constraints=constraints, max_iter=20, max_inner_loop_iter=8,
-                      callbacks=callbacks, band_voxels=3, line_search_iter=3)
+                      callbacks=callbacks, band_voxels=3, line_search_iter=3, line_search_method='golden')
     # The final shape is in topopt.shape or saved to VTI and PLY files if the ShapeCheckpoint callback was provided
     topopt.run()
 
