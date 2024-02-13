@@ -42,18 +42,15 @@ class LBMBaseDifferentiable(LBMBase):
                 return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, f, sdf):
+    def collision(self, f):
         """
         BGK collision step for lattice.
 
         The collision step is where the main physics of the LBM is applied. In the BGK approximation,
         the distribution function is relaxed towards the equilibrium distribution function.
         """
-        eta = 0.5 - 0.5*jnp.tanh(sdf/ 0.5)
-        eta = eta.at[self.sdf.keepOut].set(1.0)
         f = self.precisionPolicy.cast_to_compute(f)
         rho, u = self.update_macroscopic(f)
-        u = u*eta[..., None]
         feq = self.equilibrium(rho, u, cast_output=False)
         fneq = f - feq
         fout = f - self.omega * fneq

@@ -842,7 +842,7 @@ class LBMBase(object):
             The post-collision distribution functions after the simulation step, or None if 
             return_fpost is False.
         """
-        f_postcollision = self.collision(f_poststreaming, sdf)
+        f_postcollision = self.collision(f_poststreaming)
         f_postcollision = self.apply_bc(f_postcollision, f_poststreaming, timestep, sdf, "PostCollision")
         f_poststreaming = self.streaming(f_postcollision)
         f_poststreaming = self.apply_bc(f_poststreaming, f_postcollision, timestep, sdf, "PostStreaming")

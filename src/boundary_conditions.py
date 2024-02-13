@@ -1074,6 +1074,7 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         -------
         None. The function updates the object's weights attribute in place.
         """
+        epsilon = 1e-12
         idx = np.array(self.indices).T
         weights = jnp.full((idx.shape[0], self.lattice.q), 0.5)
         c = np.array(self.lattice.c)
@@ -1082,7 +1083,7 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
             solid_indices = idx + c[:, q]
             solid_indices_tuple = tuple(map(tuple, solid_indices.T))
             sdf_s = implicit_distances[solid_indices_tuple]
-            weights = weights.at[:, q].set(sdf_f / (sdf_f - sdf_s + 1e-12))
+            weights = weights.at[:, q].set(sdf_f / (sdf_f - sdf_s + epsilon))
         return weights
 
     @partial(jit, static_argnums=(0,))
@@ -1108,7 +1109,6 @@ class InterpolatedBounceBackBouzidi(BounceBackHalfway):
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
         weights = self.set_proximity_ratio(sdf)[bindex, self.iknown]
-        weights = weights.at[:, 0].set(0.5)
         f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
         f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
         f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
@@ -1183,7 +1183,6 @@ class InterpolatedBounceBackDifferentiable(InterpolatedBounceBackBouzidi):
         bindex = np.arange(nbd)[:, None]
         fbd = fout[self.indices]
         weights = self.set_proximity_ratio(sdf)[bindex, self.iknown]
-        weights = weights.at[:, 0].set(0.5)
         f_postcollision_iknown = fin[self.indices][bindex, self.iknown]
         f_postcollision_imissing = fin[self.indices][bindex, self.imissing]
         f_poststreaming_iknown = fout[self.indices][bindex, self.iknown]
