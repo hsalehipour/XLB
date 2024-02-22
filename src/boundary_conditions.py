@@ -198,7 +198,7 @@ class BoundaryCondition(object):
 
         # Find imissing, iknown 1-to-1 corresponding indices
         # Note: the "zero" index is used as default value here and won't affect BC computations
-        nbd = len(self.indices[0])
+        nbd = boundaryMask.shape[0]
         imissing = np.vstack([np.arange(self.lattice.q, dtype='uint8')] * nbd)
         iknown = np.vstack([self.lattice.opp_indices] * nbd)
         imissing[~boundaryMask] = 0
@@ -745,15 +745,14 @@ class ZouHe(BoundaryCondition):
         return feq
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def bounceback_nonequilibrium(self, fpop, feq):
+    def bounceback_nonequilibrium(self, fbd, feq):
         """
         Calculate unknown populations using bounce-back of non-equilibrium populations
         a la original Zou & He formulation
         """
-        nbd = len(self.indices[0])
+        nbd = fbd.shape[0]            
         bindex = np.arange(nbd)[:, None]
-        fbd = fpop[self.indices]
-        fknown = fpop[self.indices][bindex, self.iknown] + feq[bindex, self.imissing] - feq[bindex, self.iknown]
+        fknown = fbd[bindex, self.iknown] + feq[bindex, self.imissing] - feq[bindex, self.iknown]
         fbd = fbd.at[bindex, self.imissing].set(fknown)
         return fbd
 
@@ -787,7 +786,8 @@ class ZouHe(BoundaryCondition):
         feq = self.calculate_equilibrium(fout)
 
         # set the unknown f populations based on the non-equilibrium bounce-back method
-        fbd = self.bounceback_nonequilibrium(fout, feq)
+        fbd = fout[self.indices]
+        fbd = self.bounceback_nonequilibrium(fbd, feq)
 
 
         return fbd
@@ -911,7 +911,8 @@ class Regularized(ZouHe):
         feq = self.calculate_equilibrium(fout)
 
         # set the unknown f populations based on the non-equilibrium bounce-back method
-        fbd = self.bounceback_nonequilibrium(fout, feq)
+        fbd = fout[self.indices]
+        fbd = self.bounceback_nonequilibrium(fbd, feq)
 
         # Regularize the boundary fpop
         fbd = self.regularize_fpop(fbd, feq)
