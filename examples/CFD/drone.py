@@ -22,20 +22,25 @@ precision = 'f32/f32'
 dir_path = os.path.dirname(os.path.realpath(__file__)) + '/stl-files/kaizen/'
 drone_fname_dic = {
     'prop1': {'fname': dir_path + 'Prop 1 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    # 'prop2': {'fname': dir_path + 'Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop2': {'fname': dir_path + 'Prop 2 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop3': {'fname': dir_path + 'Prop 3 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    # 'prop4': {'fname': dir_path + 'Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop4': {'fname': dir_path + 'Prop 4 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop5': {'fname': dir_path + 'Prop 5 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    # 'prop6': {'fname': dir_path + 'Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop6': {'fname': dir_path + 'Prop 6 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'prop7': {'fname': dir_path + 'Prop 7 v1.stl', 'axis': [0, 0, -1], 'translate': [0, 0, -2]},
-    # 'prop8': {'fname': dir_path + 'Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
+    'prop8': {'fname': dir_path + 'Prop 8 v1.stl', 'axis': [0, 0, 1], 'translate': [0, 0, 2]},
     'main_body': {'fname': dir_path + 'main body.stl', 'translate': [0, 0, 0]}
 }
 
 
-class PropellorBC(BounceBackMoving):
+class PropellorBC(Regularized):
     def __init__(self, indices, gridInfo, precision_policy, **kwargs):
-        super().__init__(indices, gridInfo, precision_policy, **kwargs)
+        shape = len(indices), len(indices[0])
+        vel_prescribed = np.zeros(shape, dtype=precision_policy.compute_dtype)
+        super().__init__(indices, gridInfo, precision_policy, 'velocity', vel_prescribed) 
+        self.needsExtraConfiguration = False
+        self.isDynamic = True
+        self.__dict__.update(kwargs)
 
     def update_function(self, time):
         """
@@ -48,6 +53,27 @@ class PropellorBC(BounceBackMoving):
         vel = jnp.cross(jnp.array(self.rotationAxis) * angularVelocity,
                         jnp.array(self.indices).T - self.rotationOrigin)
         return prop_indices_rotated, vel
+    
+    @partial(jit, static_argnums=(0,))
+    def apply(self, fout, fin, time):
+        """
+        Applies the a regularized type boundary condition with dynamically changing indices 
+        and without using non-equilibrium bounceback that requires imissing and iknown 
+        reconstruction at every time step.
+        """
+        indices, vel = self.update_function(time)
+        
+        # set the unknown f populations based on the non-equilibrium bounce-back method
+        fbd = fout[indices]
+
+        # compute the equilibrium based on prescribed values and the type of BC
+        rho = jnp.sum(fbd, axis=-1, keepdims=True)
+        feq = self.equilibrium(rho, vel)
+
+        # Regularize the boundary fpop
+        fbd = self.regularize_fpop(fbd, feq)
+        return fout.at[indices].set(fbd)
+    
 
 # main code
 class Drone(KBCSim):
@@ -75,7 +101,7 @@ class Drone(KBCSim):
         stl_filename = drone_fname_dic['main_body']['fname']
         body_voxelized, pitch = voxelize_stl(stl_filename, 5 * prop_radius_lbm)
         tx, ty, tz = np.array([nx, ny, nz]) - body_voxelized.matrix.shape
-        shift = [tx // 2, ty // 2, tz // 4]
+        shift = [tx // 2, ty // 2, tz // 8]
         body_indices = np.argwhere(body_voxelized.matrix) + shift + drone_fname_dic['main_body']['translate']
         reference_origin = body_voxelized.points_to_indices(np.array([0, 0, 0])) + shift
         self.BCs.append(BounceBack(tuple(body_indices.T), self.gridInfo, self.precisionPolicy))
@@ -125,9 +151,15 @@ class Drone(KBCSim):
             idx = bc.update_function(time)[0] if bc.isDynamic else bc.indices
             viz_box = viz_box.at[idx].set(1.0)
 
-        # Compute q-criterion and vorticity using finite differences
         # Get velocity field
         u = kwargs['u']
+        rho = kwargs['rho']
+
+        # output the vtk file
+        # fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], 'umag': np.sqrt(np.sum(u**2, axis=-1))}
+        # save_fields_vtk(time, fields)
+
+        # Compute q-criterion and vorticity using finite differences
         # vorticity and q-criterion
         norm_mu, q = q_criterion(u)
 
@@ -156,11 +188,11 @@ class Drone(KBCSim):
 
         # Get camera parameters
         focal_point = (viz_box.shape[0] * dx / 2, viz_box.shape[1] * dx / 2, viz_box.shape[2] * dx / 4)
-        radius = 2.0
-        camera_position = (focal_point[0] + radius, focal_point[1] + radius, focal_point[2] - 0.5*radius)
+        radius = 0.1*prop_radius_lbm
+        camera_position = (focal_point[0] + radius, focal_point[1] + radius, focal_point[2] - 0.75*radius)
 
         # Rotate camera
-        camera = pg.Camera(position=camera_position, focal_point=focal_point, view_up=(0.0, 0.0, -1.0), max_depth=30.0, height=1080, width=1920, background=pg.SolidBackground(color=(0.0, 0.0, 0.0)))
+        camera = pg.Camera(position=camera_position, focal_point=focal_point, view_up=(0.0, 0.0, -1.0), max_depth=30.0, width=1920, height=1920, background=pg.SolidBackground(color=(0.0, 0.0, 0.0)))
 
         # Make wireframe
         # screen_buffer = pg.render.wireframe(lower_bound=origin, upper_bound=upper_bound, thickness=0.01, camera=camera)
@@ -184,16 +216,16 @@ if __name__ == '__main__':
     lattice = LatticeD3Q27(precision)
 
     # Problem dependent dimensional quantities
-    rpm = 100  # round per minute
+    rpm = 500  # round per minute
     vel_angular_phy = 2.0 * math.pi * rpm / 60  # rad / sec
     vel_transl_phy = 15  # m / sec
     prop_radius_phy = 0.5  # meter
-    prop_radius_lbm = 20
+    prop_radius_lbm = 10
 
     # Computational domain size
     nx = 24 * prop_radius_lbm
     ny = 24 * prop_radius_lbm
-    nz = 24 * prop_radius_lbm
+    nz = 48 * prop_radius_lbm
 
     # Problem dependent non-dimensionalization
     u_inlet = 0.04
@@ -201,7 +233,7 @@ if __name__ == '__main__':
     angularVelocity = u_prop_tip / prop_radius_lbm
 
     # Non-dimensional LBM quantities
-    Re = 100.0
+    Re = 10000.0
     clength = 2 * prop_radius_lbm
     visc = u_prop_tip * clength / Re
     omega = 1.0 / (3. * visc + 0.5)
@@ -215,11 +247,11 @@ if __name__ == '__main__':
         'ny': ny,
         'nz': nz,
         'precision': precision,
-        'io_rate': 50,
-        'print_info_rate': 100,
+        'io_rate': 500,
+        'print_info_rate': 1000,
         'restore_checkpoint': False,
     }
 
     sim = Drone(**kwargs)
-    sim.run(5000)
+    sim.run(50000)
 
