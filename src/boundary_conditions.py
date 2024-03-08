@@ -50,6 +50,7 @@ class BoundaryCondition(object):
         self.isSolid = False
         self.isDynamic = False
         self.needsExtraConfiguration = False
+        self.removed_voxels = None
         self.implementationStep = "PostStreaming"
 
     def create_local_mask_and_normal_arrays(self, grid_mask):
@@ -703,7 +704,7 @@ class ZouHe(BoundaryCondition):
         """
         nv = np.dot(self.lattice.c, ~boundaryMask.T)
         corner_voxels = np.count_nonzero(nv, axis=0) > 1
-        # removed_voxels = np.array(self.indices)[:, corner_voxels]
+        self.removed_voxels = np.array(self.indices)[:, corner_voxels]
         self.indices = tuple(np.array(self.indices)[:, ~corner_voxels])
         self.prescribed = self.prescribed[~corner_voxels]
         return

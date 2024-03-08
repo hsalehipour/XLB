@@ -22,6 +22,7 @@ from functools import partial
 
 # Local/Custom Libraries
 from src.utils import downsample_field
+from src.boundary_conditions import BounceBackHalfway
 
 jax.config.update("jax_spmd_mode", 'allow_all')
 # Disables annoying TF warnings
@@ -365,9 +366,23 @@ class LBMBase(object):
         print("Time to create the grid mask:", time.time() - start)
 
         start = time.time()
+        removed_voxels_list = []
         for bc in self.BCs:
             assert bc.implementationStep in ['PostStreaming', 'PostCollision']
             bc.create_local_mask_and_normal_arrays(grid_mask)
+            if bc.removed_voxels is not None:
+                removed_voxels_list.append(bc.removed_voxels)
+
+        # No-slip BC for all removed voxels
+        # TODO: is there a better/cleaner way to do this!
+        if removed_voxels_list:
+            noslip = np.hstack(removed_voxels_list)
+            bc = BounceBackHalfway(tuple(noslip), self.gridInfo, self.precisionPolicy)
+            bc.needsExtraConfiguration = False
+            bc.isSolid = False
+            bc.create_local_mask_and_normal_arrays(grid_mask)
+            self.BCs.append(bc)
+
         print("Time to create the local masks and normal arrays:", time.time() - start)
         return
 
