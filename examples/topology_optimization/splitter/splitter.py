@@ -150,24 +150,6 @@ class Splitter(LBMBaseDifferentiable):
         save_fields_vtk(timestep, fields)
         save_BCs_vtk(timestep, self.BCs, self.gridInfo)
 
-# def port_coord(shape: SDFGrid):
-#     voxel_coordinates = shape.voxel_grid_coordinates()
-#     bmask = shape.boundary_mask()
-#     bdry_cord = voxel_coordinates[bmask[..., 0], :]
-#     xx, yy, zz = bdry_cord[:, 0], bdry_cord[:, 1], bdry_cord[:, 2]
-#     Lx, Ly, Lz = xx.max() - xx.min(), yy.max() - yy.min(), zz.max() - zz.min()
-#     inlet = (xx == xx.min()) & \
-#             (yy < yy.min() + 0.8*Ly) & (yy > yy.min() + 0.6*Ly) & \
-#             (zz < zz.min() + 0.8*Lz) & (zz > zz.min() + 0.2*Lz)
-#     outlet = (yy == yy.min()) & \
-#              (xx < xx.min() + 0.8*Lx) & (xx > xx.min() + 0.6*Lx) & \
-#              (zz < zz.min() + 0.8*Lz) & (zz > zz.min() + 0.2*Lz)
-#     inlet_coord = bdry_cord[inlet]
-#     outlet_coord = bdry_cord[outlet]
-#     port_dic = {'inlet': inlet_coord,
-#                 'outlet': outlet_coord}
-#     return port_dic
-
 
 # Helper function to specify a parabolic poiseuille profile
 poiseuille_profile  = lambda x,x0,d,umax: np.maximum(0.,4.*umax/(d**2)*((x-x0)*d-(x-x0)**2))
@@ -188,6 +170,7 @@ def main():
     nx += 2*pad_width
     ny += 2*pad_width
     nz += 2*pad_width
+    shape = (nx, ny, nz)
 
     # Create SDFGrid objects for keep_ins and keep_outs
     filename_keep_ins = data_json['keepIns']
@@ -195,10 +178,18 @@ def main():
     keepins, keepouts = [], []
     for filename in filename_keep_ins:
         mesh = trimesh.load(dir_path + '/' + filename)
-        keepins.append(SDFGrid.load_from_mesh(mesh, shape, dtype=jnp.float32, pad_width=pad_width))
+        keepins.append(SDFGrid.load_from_mesh(mesh,
+                                              shape,
+                                              spacing=sdf_grid.spacing,
+                                              origin=sdf_grid.origin,
+                                              dtype=jnp.float32))
     for filename in filename_keep_outs:
         mesh = trimesh.load(dir_path + '/' + filename)
-        keepouts.append(SDFGrid.load_from_mesh(mesh, shape, dtype=jnp.float32, pad_width=pad_width))
+        keepouts.append(SDFGrid.load_from_mesh(mesh,
+                                               shape,
+                                               spacing=sdf_grid.spacing,
+                                               origin=sdf_grid.origin,
+                                               dtype=jnp.float32))
 
     def xlb_instantiator(sdf_grid):
         precision = 'f32/f32'
