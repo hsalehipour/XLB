@@ -17,8 +17,6 @@ from src.adjoint import LBMBaseDifferentiable
 from src.models import BGKSim
 from src.lattice import LatticeD3Q19
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-filename = dir_path + '/' + "block.stl"
 
 # class SimulationParameters:
 #     lattice: LatticeD3Q27('f32/f32')
@@ -33,6 +31,15 @@ filename = dir_path + '/' + "block.stl"
 # config = SimulationParameters()
 
 # config.update('jax_enable_x64', True)
+
+dir_path = os.path.dirname(os.path.realpath(__file__))
+
+def read_json(dir_path):
+    # Read the JSON file
+    import json
+    with open(dir_path + '/' + 'project.json', 'r') as file:
+        data = json.load(file)
+    return data
 
 class Splitter(LBMBaseDifferentiable):
     def __init__(self, sdf, **kwargs):
@@ -71,46 +78,35 @@ class Splitter(LBMBaseDifferentiable):
 
 
     def set_boundary_conditions(self):
+        # Set boundary conditions
+
+        # read json file
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        data_json = read_json(dir_path)
+
+        # Extract boundaryID and faceIndices
         bdry_indices = self.boundary(self.sdf)
-        bdry_cord = self.sdf.coord_from_index(bdry_indices)
-        xx, yy, zz = bdry_cord[:, 0], bdry_cord[:, 1], bdry_cord[:, 2]
-        # Lx, Ly, Lz = xx.max() - xx.min(), yy.max() - yy.min(), zz.max() - zz.min()
-        # inlet = (xx == xx.min()) & \
-        #         (yy < yy.min() + 0.8*Ly) & (yy > yy.min() + 0.6*Ly) & \
-        #         (zz < zz.min() + 0.8*Lz) & (zz > zz.min() + 0.2*Lz)
-        # outlet = (yy == yy.min()) & \
-        #          (xx < xx.min() + 0.8*Lx) & (xx > xx.min() + 0.6*Lx) & \
-        #          (zz < zz.min() + 0.8*Lz) & (zz > zz.min() + 0.2*Lz)
-        Lx, Ly, Lz = 47., 44.0, 7.
-        xxmin, yymin, zzmin = self.sdf.spacing/2., self.sdf.spacing/2., self.sdf.spacing/2.
-        inlet = (xx == xxmin) & \
-                (yy < yymin + 0.8*Ly) & (yy > yymin + 0.6*Ly) & \
-                (zz < zzmin + 0.8*Lz) & (zz > zzmin + 0.2*Lz)
-        outlet = (yy == yymin) & \
-                 (xx < xxmin + 0.8*Lx) & (xx > xxmin + 0.6*Lx) & \
-                 (zz < zzmin + 0.8*Lz) & (zz > zzmin + 0.2*Lz)
-        noslip = ~(inlet | outlet)
+        port_indices = []
+        fluid_cases = data_json['fluidProj']['fluidCases']
+        for fluid_case in fluid_cases:
+            fluid_bcs = fluid_case['fluidBCs']
+            for fluid_bc in fluid_bcs:
+                bc_indices = self.read_bc_data(fluid_bc, bdry_indices)
+                bc_type = self.read_bc_type(fluid_bc)
+                port_indices.append(bc_indices)
+                if bc_type == "velocity":
+                    vel_vec = np.zeros(bc_indices.shape, dtype=self.precisionPolicy.compute_dtype)
+                    vel_vec += self.read_vel_bc_value(fluid_bc)
+                    self.BCs.append(ZouHe(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
+                                          'velocity', vel_vec))
+                elif bc_type == "pressure":
+                    rho_outlet = np.ones((bc_indices.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
+                    self.BCs.append(ZouHe(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
+                                          'pressure', rho_outlet))
 
-        # Get boundary voxel indices from the above masks
-        yy_inlet = yy[inlet]
-        inlet = bdry_indices[inlet]
-        outlet = bdry_indices[outlet]
-        noslip = bdry_indices[noslip]
-
-        # wall_keepOut = noslip[self.sdf.keepOut[tuple(noslip.T)]]
-        # wall_design = noslip[~self.sdf.keepOut[tuple(noslip.T)]]
-        
-        # Inlet BC
-        vel_inlet = np.zeros(inlet.shape, dtype=self.precisionPolicy.compute_dtype)
-        prescribed_vel = 0.04
-        vel_inlet[:, 0] = poiseuille_profile(yy_inlet,
-                                        yy_inlet.min(),
-                                        yy_inlet.max()-yy_inlet.min(), 3.0 / 2.0 * prescribed_vel)
-        self.BCs.append(ZouHe(tuple(inlet.T), self.gridInfo, self.precisionPolicy, 'velocity', vel_inlet))
-
-        # Outlet BC
-        rho_outlet = np.ones((outlet.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-        self.BCs.append(ZouHe(tuple(outlet.T), self.gridInfo, self.precisionPolicy, 'pressure', rho_outlet))
+        # Find no-slip boundaries as the remaining boundary voxels
+        port_indices = np.vstack(port_indices)
+        noslip = np.array(list(set(list(map(tuple, bdry_indices))) - set(list(map(tuple, port_indices)))))
 
         # No-slip BC for all no-slip boundaries that are part of optimization
         self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(noslip.T),
@@ -119,15 +115,40 @@ class Splitter(LBMBaseDifferentiable):
         self.BCs[-1].isSolid = False
         return
 
-    # def output_data(self, **kwargs):
-    #     # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
-    #     rho = np.array(kwargs["rho"])
-    #     u = np.array(kwargs["u"])
-    #     timestep = kwargs["timestep"]
-    #     fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], 
-    #               "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2)}
-    #     save_fields_vtk(timestep, fields)
-    #     save_BCs_vtk(timestep, self.BCs, self.gridInfo)
+    def read_bc_data(self, fluid_bc, bdry_indices):
+        import itertools
+        boundary_id = fluid_bc['boundaryID']
+        face_indices = fluid_bc['faceIndices']
+        mesh = trimesh.load(dir_path + '/' + boundary_id)
+        coord = mesh.vertices[np.hstack(mesh.faces[face_indices, :]), :]
+        port_indices = self.sdf.index_from_coord(coord)
+        port_indices = np.unique(port_indices, axis=0)
+
+        # It is important to clip the indices because the verticies of bc faces do not coincide with the voxel center.
+        _min, _max = port_indices.min(axis=0), port_indices.max(axis=0)
+        _min_global, _max_global = bdry_indices.min(axis=0), bdry_indices.max(axis=0)
+        _min = np.clip(_min, _min_global, _max_global)
+        _max = np.clip(_max, _min_global, _max_global)
+        xx = np.arange(_min[0], _max[0] + 1)
+        yy = np.arange(_min[1], _max[1] + 1)
+        zz = np.arange(_min[2], _max[2] + 1)
+        return np.array(list(itertools.product(xx, yy, zz)))
+
+    def read_bc_type(self, fluid_bc):
+        return fluid_bc['fluidDef']['bcType']
+
+    def read_vel_bc_value(self, fluid_bc):
+        return np.array(list(fluid_bc['fluidDef']['velocity'].values()))
+
+    def output_data(self, **kwargs):
+        # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
+        rho = np.array(kwargs["rho"])
+        u = np.array(kwargs["u"])
+        timestep = kwargs["timestep"]
+        fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2],
+                  "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2)}
+        save_fields_vtk(timestep, fields)
+        save_BCs_vtk(timestep, self.BCs, self.gridInfo)
 
 # def port_coord(shape: SDFGrid):
 #     voxel_coordinates = shape.voxel_grid_coordinates()
@@ -152,6 +173,12 @@ class Splitter(LBMBaseDifferentiable):
 poiseuille_profile  = lambda x,x0,d,umax: np.maximum(0.,4.*umax/(d**2)*((x-x0)*d-(x-x0)**2))
 
 def main():
+
+    # read json file
+    data_json = read_json(dir_path)
+
+    # Create seed geometry and its sdf object
+    filename = dir_path + '/' + data_json['seedGeom']
     orig_mesh = trimesh.load(filename)
     extents = orig_mesh.extents
     nx, ny, nz = 48, 45, 8 # tuple((extents * 2).astype(np.int64))
@@ -161,6 +188,17 @@ def main():
     nx += 2*pad_width
     ny += 2*pad_width
     nz += 2*pad_width
+
+    # Create SDFGrid objects for keep_ins and keep_outs
+    filename_keep_ins = data_json['keepIns']
+    filename_keep_outs = data_json['keepOuts']
+    keepins, keepouts = [], []
+    for filename in filename_keep_ins:
+        mesh = trimesh.load(dir_path + '/' + filename)
+        keepins.append(SDFGrid.load_from_mesh(mesh, shape, dtype=jnp.float32, pad_width=pad_width))
+    for filename in filename_keep_outs:
+        mesh = trimesh.load(dir_path + '/' + filename)
+        keepouts.append(SDFGrid.load_from_mesh(mesh, shape, dtype=jnp.float32, pad_width=pad_width))
 
     def xlb_instantiator(sdf_grid):
         precision = 'f32/f32'
@@ -183,7 +221,7 @@ def main():
     os.system('rm -rf ' + str(file_path)+ '/*.vtk && rm -rf ' + str(file_path) + '/outputs')
 
     # Minimize the variance of the shape
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
+    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=500)]
 
     # subject to a volume constraint to avoid collapsing to a point
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.15,
@@ -194,7 +232,7 @@ def main():
 
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
-    topopt = ALTopOpt(sdf_grid, objectives=objectives, constraints=constraints, max_iter=40, max_inner_loop_iter=6,
+    topopt = ALTopOpt(sdf_grid, keepins, keepouts, objectives=objectives, constraints=constraints, max_iter=40, max_inner_loop_iter=6,
                       callbacks=callbacks, band_voxels=1, line_search_iter=3, line_search_method='golden')
     # The final shape is in topopt.shape or saved to VTI and PLY files if the ShapeCheckpoint callback was provided
     topopt.run()
