@@ -352,6 +352,42 @@ class BoundaryCondition(object):
         force = jnp.sum(c[:, self.iknown] * phi, axis=-1).T
         return force
 
+    @partial(jit, static_argnums=(0,), inline=True)
+    def get_vel(self, f):
+        """
+        a function pointer wrapper for BC specific methods of calculating or setting boundary velocity
+
+        Parameters
+        ----------
+        f : jax.numpy.ndarray
+
+        Returns
+        -------
+        jax.numpy.ndarray
+            The velocity at the boundary voxels.
+        """
+        rho = jnp.sum(f, axis=-1, keepdims=True)
+        c = jnp.array(self.lattice.c, dtype=self.precisionPolicy.compute_dtype).T
+        u = jnp.dot(f, c) / rho
+        return u
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def get_rho(self, f):
+        """
+        a function pointer wrapper for BC specific methods of calculating or setting boundary velocity
+
+        Parameters
+        ----------
+        f : jax.numpy.ndarray
+
+        Returns
+        -------
+        jax.numpy.ndarray
+            The velocity at the boundary voxels.
+        """
+        rho = jnp.sum(f, axis=-1, keepdims=True)
+        return rho
+
 class BounceBack(BoundaryCondition):
     """
     Bounce-back boundary condition for a lattice Boltzmann method simulation.
@@ -697,6 +733,28 @@ class ZouHe(BoundaryCondition):
         self.prescribed = prescribed
         self.needsExtraConfiguration = True
 
+    @partial(jit, static_argnums=(0,), inline=True)
+    def get_rho(self, fpop):
+        if self.type == 'velocity':
+            vel = self.get_vel(fpop)
+            rho = self.calculate_rho(fpop, vel)
+        elif self.type == 'pressure':
+            rho = self.prescribed
+        else:
+            raise ValueError(f"type = {self.type} not supported! Use \'pressure\' or \'velocity\'.")
+        return rho
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def get_vel(self, fpop):
+        if self.type == 'velocity':
+            vel = self.prescribed
+        elif self.type == 'pressure':
+            rho = self.get_rho(fpop)
+            vel = self.calculate_vel(fpop, rho)
+        else:
+            raise ValueError(f"type = {self.type} not supported! Use \'pressure\' or \'velocity\'.")
+        return vel
+
     def configure(self, boundaryMask):
         """
         Correct boundary indices to ensure that only voxelized surfaces with normal vectors along main cartesian axes
@@ -710,57 +768,50 @@ class ZouHe(BoundaryCondition):
         return
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def calculate_vel(self, fpop, rho):
+    def calculate_vel(self, fbd, rho):
         """
         Calculate velocity based on the prescribed pressure/density (Zou/He BC)
         """
-        unormal = -1. + 1. / rho * (jnp.sum(fpop[self.indices] * self.imiddleMask, keepdims=True, axis=-1) +
-                               2. * jnp.sum(fpop[self.indices] * self.iknownMask, keepdims=True, axis=-1))
+        unormal = -1. + 1. / rho * (jnp.sum(fbd * self.imiddleMask, keepdims=True, axis=-1) +
+                               2. * jnp.sum(fbd * self.iknownMask, keepdims=True, axis=-1))
 
         # Return the above unormal as a normal vector which sets the tangential velocities to zero
         vel = unormal * self.normals
         return vel
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def calculate_rho(self, fpop, vel):
+    def calculate_rho(self, fbd, vel):
         """
         Calculate density based on the prescribed velocity (Zou/He BC)
         """
         unormal = jnp.sum(self.normals*vel, keepdims=True, axis=1)
 
         rho = (1.0/(1.0 + unormal)) * (
-                   jnp.sum(fpop[self.indices] * self.imiddleMask, axis=-1, keepdims=True) +
-                2.*jnp.sum(fpop[self.indices] * self.iknownMask,  axis=-1, keepdims=True))
+                   jnp.sum(fbd * self.imiddleMask, axis=-1, keepdims=True) +
+                2.*jnp.sum(fbd * self.iknownMask,  axis=-1, keepdims=True))
         return rho
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def calculate_equilibrium(self, fpop):
+    def calculate_equilibrium(self, fbd):
         """
         This is the ZouHe method of calculating the missing macroscopic variables at the boundary.
         """
-        if self.type == 'velocity':
-            vel = self.prescribed
-            rho = self.calculate_rho(fpop, vel)
-        elif self.type == 'pressure':
-            rho = self.prescribed
-            vel = self.calculate_vel(fpop, rho)
-        else:
-            raise ValueError(f"type = {self.type} not supported! Use \'pressure\' or \'velocity\'.")
+        rho = self.get_rho(fbd)
+        vel = self.get_vel(fbd)
 
         # compute feq at the boundary
         feq = self.equilibrium(rho, vel)
         return feq
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def bounceback_nonequilibrium(self, fpop, feq):
+    def bounceback_nonequilibrium(self, fbd, feq):
         """
         Calculate unknown populations using bounce-back of non-equilibrium populations
         a la original Zou & He formulation
         """
         nbd = len(self.indices[0])
         bindex = np.arange(nbd)[:, None]
-        fbd = fpop[self.indices]
-        fknown = fpop[self.indices][bindex, self.iknown] + feq[bindex, self.imissing] - feq[bindex, self.iknown]
+        fknown = fbd[bindex, self.iknown] + feq[bindex, self.imissing] - feq[bindex, self.iknown]
         fbd = fbd.at[bindex, self.imissing].set(fknown)
         return fbd
 
@@ -793,10 +844,11 @@ class ZouHe(BoundaryCondition):
         Reynolds numbers. One needs to use "Regularized" BC at higher Reynolds.
         """
         # compute the equilibrium based on prescribed values and the type of BC
-        feq = self.calculate_equilibrium(fout)
+        fbd = fout[self.indices]
+        feq = self.calculate_equilibrium(fbd)
 
         # set the unknown f populations based on the non-equilibrium bounce-back method
-        fbd = self.bounceback_nonequilibrium(fout, feq)
+        fbd = self.bounceback_nonequilibrium(fbd, feq)
 
         return fbd
 
@@ -918,10 +970,11 @@ class Regularized(ZouHe):
         """
 
         # compute the equilibrium based on prescribed values and the type of BC
-        feq = self.calculate_equilibrium(fout)
+        fbd = fout[self.indices]
+        feq = self.calculate_equilibrium(fbd)
 
         # set the unknown f populations based on the non-equilibrium bounce-back method
-        fbd = self.bounceback_nonequilibrium(fout, feq)
+        fbd = self.bounceback_nonequilibrium(fbd, feq)
 
         # Regularize the boundary fpop
         fbd = self.regularize_fpop(fbd, feq)
