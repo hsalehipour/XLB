@@ -762,7 +762,8 @@ class ZouHe(BoundaryCondition):
         """
         nv = np.dot(self.lattice.c, ~boundaryMask.T)
         corner_voxels = np.count_nonzero(nv, axis=0) > 1
-        self.removed_voxels = np.array(self.indices)[:, corner_voxels]
+        if any(corner_voxels):
+            self.removed_voxels = np.array(self.indices)[:, corner_voxels]
         self.indices = tuple(np.array(self.indices)[:, ~corner_voxels])
         self.prescribed = self.prescribed[~corner_voxels]
         return
