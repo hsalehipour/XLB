@@ -220,7 +220,7 @@ if __name__ == '__main__':
     vel_angular_phy = 2.0 * math.pi * rpm / 60  # rad / sec
     vel_transl_phy = 15  # m / sec
     prop_radius_phy = 0.5  # meter
-    prop_radius_lbm = 10
+    prop_radius_lbm = 20
 
     # Computational domain size
     nx = 24 * prop_radius_lbm
@@ -247,7 +247,7 @@ if __name__ == '__main__':
         'ny': ny,
         'nz': nz,
         'precision': precision,
-        'io_rate': 500,
+        'io_rate': 50,
         'print_info_rate': 1000,
         'restore_checkpoint': False,
     }
