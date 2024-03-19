@@ -218,8 +218,8 @@ def main():
         }
         return Splitter(sdf_grid, **kwargs)
 
-    file_path = Path(__file__).parent   
-    os.system('rm -rf ' + str(file_path)+ '/*.vtk && rm -rf ' + str(file_path) + '/outputs')
+    # clean up previous files
+    os.system('rm -rf ' + dir_path + '/*.vtk && rm -rf ' + dir_path + '/outputs')
 
     # Minimize the variance of the shape
     objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
@@ -228,8 +228,8 @@ def main():
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.15,
                                 constraint_type=ALConstraintType.EqualTo)]
 
-    callbacks = [CSVLogger(file_path / "outputs"),
-                 ShapeCheckpoint(file_path / "outputs" / "checkpoints")]
+    callbacks = [CSVLogger(Path(dir_path) / "outputs"),
+                 ShapeCheckpoint(Path(dir_path) / "outputs" / "checkpoints")]
 
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
