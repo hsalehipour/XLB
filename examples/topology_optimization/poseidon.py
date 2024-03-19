@@ -1,10 +1,10 @@
 import os, sys
 from pathlib import Path
-from jax import config
+
+
 sys.path.append(os.path.abspath('../doppler'))
 sys.path.append(os.path.abspath('../XLB'))
 
-import numpy as np
 from doppler.callbacks.csv_logger import CSVLogger
 from doppler.callbacks.shape_checkpoint import ShapeCheckpoint
 from doppler.topopt import ALTopOpt, ALConstraint, ALConstraintType
@@ -14,7 +14,6 @@ from doppler.geometry.sdf import SDFGrid
 from src.utils import *
 from src.boundary_conditions import *
 from src.adjoint import LBMBaseDifferentiable
-from src.models import BGKSim
 from src.lattice import LatticeD3Q19
 
 
@@ -147,15 +146,15 @@ class Splitter(LBMBaseDifferentiable):
     def read_vel_bc_value(self, fluid_bc):
         return np.array(list(fluid_bc['fluidDef']['velocity'].values()))
 
-    def output_data(self, **kwargs):
-        # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
-        rho = np.array(kwargs["rho"])
-        u = np.array(kwargs["u"])
-        timestep = kwargs["timestep"]
-        fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2],
-                  "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2)}
-        save_fields_vtk(timestep, fields)
-        save_BCs_vtk(timestep, self.BCs, self.gridInfo)
+    # def output_data(self, **kwargs):
+    #     # 1:-1 to remove boundary voxels (not needed for visualization when using full-way bounce-back)
+    #     rho = np.array(kwargs["rho"])
+    #     u = np.array(kwargs["u"])
+    #     timestep = kwargs["timestep"]
+    #     fields = {"rho": rho[..., 0], "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2],
+    #               "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2)}
+    #     save_fields_vtk(timestep, fields)
+    #     save_BCs_vtk(timestep, self.BCs, self.gridInfo)
 
 
 # Helper function to specify a parabolic poiseuille profile
@@ -223,7 +222,7 @@ def main():
     os.system('rm -rf ' + str(file_path)+ '/*.vtk && rm -rf ' + str(file_path) + '/outputs')
 
     # Minimize the variance of the shape
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=500)]
+    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
 
     # subject to a volume constraint to avoid collapsing to a point
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.15,
@@ -234,8 +233,9 @@ def main():
 
     # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
     # because the shape variance is minimized to zero.
-    topopt = ALTopOpt(sdf_grid, keepins, keepouts, objectives=objectives, constraints=constraints, max_iter=40, max_inner_loop_iter=6,
-                      callbacks=callbacks, band_voxels=1, line_search_iter=3, line_search_method='golden')
+    topopt = ALTopOpt(sdf_grid, keepins, keepouts, objectives=objectives, constraints=constraints, max_iter=40,
+                      max_inner_loop_iter=8, callbacks=callbacks, band_voxels=1, line_search_iter=3,
+                      line_search_method='golden')
     # The final shape is in topopt.shape or saved to VTI and PLY files if the ShapeCheckpoint callback was provided
     topopt.run()
 
