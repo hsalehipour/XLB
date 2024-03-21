@@ -46,7 +46,7 @@ class Splitter(LBMBaseDifferentiable):
         self.sdf = sdf
         super().__init__(**kwargs)
 
-    def boundary(self, sdf: SDFGrid):
+    def boundary(self, sdf: SDFGrid, side='inside'):
         """
         SDFGrid.boundary_mask() returns both voxels around the zero SDF, inside and outside of the fluid domain. The
         purpose of this routine is to isolate those voxels inside the fluid domain with SDF <= 0 but ensure other
@@ -57,25 +57,37 @@ class Splitter(LBMBaseDifferentiable):
         # get the required information
         voxel_coordinates = sdf.voxel_grid_coordinates()
         sdf_array = sdf.array[..., 0]
+        other_side = 'outside' if side == 'inside' else 'inside'
+
+        def get_bmask(side):
+            if side == 'inside':
+                bmask = (sdf_array > -sdf.spacing) & (sdf_array <= 0.)
+            elif side == 'outside':
+                bmask = (sdf_array < sdf.spacing) & (sdf_array > 0.)
+            else:
+                raise ValueError(f"location = {side} not supported! Must be either \"inside\" or \"outside\"")
+            return bmask
 
         # First let's isolate the obvious fluid boundary cells with negative SDF
-        bmask_interior = (sdf_array > -sdf.spacing) & (sdf_array <= 0.)
-        bdry_cord = voxel_coordinates[bmask_interior]
-        bdry_indices_interior = sdf.index_from_coord(bdry_cord)
+        bmask1 = get_bmask(side)
+        bdry_cord = voxel_coordinates[bmask1]
+        bdry_indices_firstSide = sdf.index_from_coord(bdry_cord)
 
         # Next, find the fluid boundary voxels not included in the first set by traversing solid boundary voxels
-        bmask_exterior = (sdf_array > 0.0) & (sdf_array < sdf.spacing)
-        bdry_cord = voxel_coordinates[bmask_exterior]
+        bmask2 = get_bmask(other_side)
+        bdry_cord = voxel_coordinates[bmask2]
         c = np.array(self.lattice.c)
         bdry_indices_lst = []
         for q in range(1, self.lattice.q):
             bdry_cord_nbr = bdry_cord + c[:, q]*sdf.spacing
             idx = sdf.index_from_coord(bdry_cord_nbr)
-            mask = sdf_array[tuple(idx.T)] <= 0
+            if side == 'inside':
+                mask = sdf_array[tuple(idx.T)] <= 0
+            else:
+                mask = sdf_array[tuple(idx.T)] > 0
             bdry_indices_lst.append(idx[mask])
-        bdry_indices_exterior = np.unique(np.vstack(bdry_indices_lst), axis=0)
-        return np.unique(np.vstack([bdry_indices_interior, bdry_indices_exterior]), axis=0)
-
+        bdry_indices_otherSide = np.unique(np.vstack(bdry_indices_lst), axis=0)
+        return np.unique(np.vstack([bdry_indices_firstSide, bdry_indices_otherSide]), axis=0)
 
     def set_boundary_conditions(self):
         # Set boundary conditions
@@ -114,31 +126,37 @@ class Splitter(LBMBaseDifferentiable):
         self.BCs[-1].isSolid = False
         return
 
-    def read_bc_data(self, fluid_bc, bdry_indices):
-        import itertools
+    def read_bc_data(self, fluid_bc, bdry_indices_seed):
+        """
+        This function extracts fluid boundary voxels on a particular axis-aligned surface given by a mesh and a series
+        of mesh face indices provided in the JSON file.
+        **Note:
+            Important caveat: the current implementation only works for axis-aligned BC faces.
+        """
         boundary_id = fluid_bc['boundaryID']
         face_indices = fluid_bc['faceIndices']
         mesh = trimesh.load(dir_path + '/' + boundary_id)
-        sm = mesh.submesh([face_indices], append=True)
+        sm = mesh.submesh([face_indices], append=True).subdivide()
         mesh_indices = self.sdf.index_from_coord(sm.vertices)
-        mesh_indices = np.unique(mesh_indices, axis=0)
+        idx, count = np.unique(mesh_indices, return_counts=True)
+        voxelized_face_axis_id = idx[count.argmax()]
+        _, axis_index = np.nonzero(mesh_indices == voxelized_face_axis_id)
+        # ensure that accidentally some ids from other dimensions are not included.
+        axis_index = np.argmax(np.bincount(axis_index))
 
-        # Step 1: given the boundary indices of the seed geometry, construct full sweep of mesh face indices.
-        # It is important to clip the indices because the vertices of bc faces do not coincide with the voxel center.
-        _min, _max = mesh_indices.min(axis=0), mesh_indices.max(axis=0)
-        _min_global, _max_global = bdry_indices.min(axis=0), bdry_indices.max(axis=0)
-        _min = np.clip(_min, _min_global, _max_global)
-        _max = np.clip(_max, _min_global, _max_global)
-        xx = np.arange(_min[0], _max[0] + 1)
-        yy = np.arange(_min[1], _max[1] + 1)
-        zz = np.arange(_min[2], _max[2] + 1)
-        bc_indices_fullsweep = np.array(list(itertools.product(xx, yy, zz)))
-
+        # Step 1: custruct SDF pf the boundary port (subdivide to make sure SDF has good quality)
+        port_sdf = SDFGrid.load_from_mesh(mesh.subdivide(), self.sdf.resolution,
+                                          spacing=self.sdf.spacing,
+                                          origin=self.sdf.origin,
+                                          dtype=jnp.float32)
         # Step 2: find common indices
-        bc_indices = np.array(list(set(list(map(tuple, np.array(bdry_indices)))).
-                                   intersection(set(list(map(tuple, bc_indices_fullsweep))))))
+        bdry_indices_port = self.boundary(port_sdf, side="inside")
+        bc_indices = np.array(list(set(list(map(tuple, np.array(bdry_indices_seed)))).
+                                   intersection(set(list(map(tuple, bdry_indices_port))))))
 
-        return bc_indices
+        # Step 3: Exclude the common indices that are beyond 1 voxel away from the mesh indices
+        idx = np.nonzero(abs(bc_indices[:, axis_index] - voxelized_face_axis_id) <= 1)[0]
+        return bc_indices[idx, :]
 
     def read_bc_type(self, fluid_bc):
         return fluid_bc['fluidDef']['bcType']
@@ -204,7 +222,7 @@ def main():
     def xlb_instantiator(sdf_grid):
         precision = 'f32/f32'
         lattice = LatticeD3Q19(precision)
-        omega = 1.6
+        omega = 1.78
 
         kwargs = {
             'lattice': lattice,
