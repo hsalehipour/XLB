@@ -41,7 +41,7 @@ def read_json(dir_path):
         data = json.load(file)
     return data
 
-class Splitter(LBMBaseDifferentiable):
+class Project(LBMBaseDifferentiable):
     def __init__(self, sdf, **kwargs):
         self.sdf = sdf
         super().__init__(**kwargs)
@@ -126,37 +126,38 @@ class Splitter(LBMBaseDifferentiable):
         self.BCs[-1].isSolid = False
         return
 
-    def read_bc_data(self, fluid_bc, bdry_indices_seed):
+    def read_bc_data(self, fluid_bc, bdry_seed_indices):
         """
         This function extracts fluid boundary voxels on a particular axis-aligned surface given by a mesh and a series
         of mesh face indices provided in the JSON file.
         **Note:
             Important caveat: the current implementation only works for axis-aligned BC faces.
         """
+        # Read the mesh and create submesh
         boundary_id = fluid_bc['boundaryID']
         face_indices = fluid_bc['faceIndices']
         mesh = trimesh.load(dir_path + '/' + boundary_id)
         sm = mesh.submesh([face_indices], append=True).subdivide()
-        mesh_indices = self.sdf.index_from_coord(sm.vertices)
-        idx, count = np.unique(mesh_indices, return_counts=True)
-        voxelized_face_axis_id = idx[count.argmax()]
-        _, axis_index = np.nonzero(mesh_indices == voxelized_face_axis_id)
+
+        # Step 1: Find the cartesian index associated with the face normal axis
+        _, axis_index = np.nonzero(sm.face_normals)
         # ensure that accidentally some ids from other dimensions are not included.
         axis_index = np.argmax(np.bincount(axis_index))
 
-        # Step 1: custruct SDF pf the boundary port (subdivide to make sure SDF has good quality)
+        # Step 2: Exclude the boundary indices that are beyond 1 voxel spacing away from the mesh indices
+        bdry_seed_coord = self.sdf.coord_from_index(bdry_seed_indices)
+        mesh_face_coord = sm.vertices[0, axis_index]
+        idx = np.nonzero(abs(bdry_seed_coord[:, axis_index] - mesh_face_coord) <= self.sdf.spacing)[0]
+        bindex = bdry_seed_indices[idx, :]
+
+        # Step 3: Ensure boundary voxels are inside the port sdf not outside of it.
+        # custruct SDF pf the boundary port (subdivide to make sure SDF has good quality)
         port_sdf = SDFGrid.load_from_mesh(mesh.subdivide(), self.sdf.resolution,
                                           spacing=self.sdf.spacing,
                                           origin=self.sdf.origin,
                                           dtype=jnp.float32)
-        # Step 2: find common indices
-        bdry_indices_port = self.boundary(port_sdf, side="inside")
-        bc_indices = np.array(list(set(list(map(tuple, np.array(bdry_indices_seed)))).
-                                   intersection(set(list(map(tuple, bdry_indices_port))))))
-
-        # Step 3: Exclude the common indices that are beyond 1 voxel away from the mesh indices
-        idx = np.nonzero(abs(bc_indices[:, axis_index] - voxelized_face_axis_id) <= 1)[0]
-        return bc_indices[idx, :]
+        mask = port_sdf.array[..., 0][tuple(bindex.T)] <= 0
+        return bindex[mask]
 
     def read_bc_type(self, fluid_bc):
         return fluid_bc['fluidDef']['bcType']
@@ -189,7 +190,8 @@ def main():
     extents = orig_mesh.extents
     nx, ny, nz = tuple([int(n) for n in extents])
     shape = (nx, ny, nz)
-    pad_width = 8
+    # Note: we should ensure the pad_width is enough in case keepIn and keepOuts go beyond.
+    pad_width = max(shape)//10
     sdf_grid = SDFGrid.load_from_mesh(orig_mesh, shape, dtype=jnp.float32, pad_width=pad_width)
     nx += 2*pad_width
     ny += 2*pad_width
@@ -234,23 +236,22 @@ def main():
             'io_rate': 500,
             'print_info_rate': 500,
         }
-        return Splitter(sdf_grid, **kwargs)
+        return Project(sdf_grid, **kwargs)
 
     # clean up previous files
     os.system('rm -rf ' + dir_path + '/*.vtk && rm -rf ' + dir_path + '/outputs')
 
-    # Minimize the variance of the shape
+    # Set the objective function
     objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
 
-    # subject to a volume constraint to avoid collapsing to a point
+    # subject to a volume constraint
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.15,
                                 constraint_type=ALConstraintType.EqualTo)]
 
     callbacks = [CSVLogger(Path(dir_path) / "outputs"),
                  ShapeCheckpoint(Path(dir_path) / "outputs" / "checkpoints")]
 
-    # Careful with the max_inner_loop_iter here. Setting it to a large value can drive the shape to collapse to a point
-    # because the shape variance is minimized to zero.
+    # Create the TO object to perform level-set based TO
     topopt = ALTopOpt(sdf_grid, keepins, keepouts, objectives=objectives, constraints=constraints, max_iter=40,
                       max_inner_loop_iter=8, callbacks=callbacks, band_voxels=1, line_search_iter=3,
                       line_search_method='golden')
