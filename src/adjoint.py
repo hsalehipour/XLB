@@ -4,10 +4,11 @@ from jax import jit, vjp
 from jax.sharding import PartitionSpec
 from jax.experimental.shard_map import shard_map
 from functools import partial
-from src.base import LBMBase
+from src.models import BGKSim
 import numpy as np
 
-class LBMBaseDifferentiable(LBMBase):
+
+class LBMBaseDifferentiable(BGKSim):
     """
     Same as LBMBase class but with added adjoint capabilities either through manual computation or leveraging AD.
     """
@@ -40,23 +41,6 @@ class LBMBaseDifferentiable(LBMBase):
                 return solid_wall_indices
             else:
                 return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
-
-    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, f):
-        """
-        BGK collision step for lattice.
-
-        The collision step is where the main physics of the LBM is applied. In the BGK approximation,
-        the distribution function is relaxed towards the equilibrium distribution function.
-        """
-        f = self.precisionPolicy.cast_to_compute(f)
-        rho, u = self.update_macroscopic(f)
-        feq = self.equilibrium(rho, u, cast_output=False)
-        fneq = f - feq
-        fout = f - self.omega * fneq
-        if self.force is not None:
-            fout = self.apply_force(fout, feq, rho, u)
-        return self.precisionPolicy.cast_to_output(fout)
 
     def objective(self, sdf, fpop):
         """
@@ -105,7 +89,7 @@ class LBMBaseDifferentiable(LBMBase):
 
     def density_adj(self, fhat, feq, rho):
         """ adjoint density """
-        return jnp.sum(feq*fhat, axis=-1, keepdims=True)/rho
+        return jnp.sum(feq * fhat, axis=-1, keepdims=True) / rho
 
     @partial(jit, static_argnums=(0,))
     def equilibrium_adj_math(self, fhat, feq, rho, vel):
@@ -135,7 +119,6 @@ class LBMBaseDifferentiable(LBMBase):
         feq_adj = rho_adj + 3.0 * (cmhat - umhat)
         return feq_adj
 
-
     def apply_shapeDerivative(self, f_poststreaming, f_postcollision):
         """
         Compute df_i/dphi = df_deta * deta / dphi where eta is the weight functions of Interpolated BB and phi is the
@@ -145,7 +128,6 @@ class LBMBaseDifferentiable(LBMBase):
         for bc in self.BCs:
             df_dphi = df_dphi.at[bc.indices].set(bc.shapeDerivative(f_poststreaming, f_postcollision))
         return df_dphi
-
 
     def construct_adjoints(self, sdf, fpop):
         """
@@ -165,12 +147,12 @@ class LBMBaseDifferentiable(LBMBase):
             return fhat_poststreaming
         ================================
         """
-        _, self.step_vjp = vjp(self.step, fpop, 0., sdf, False)
-        _, self.objective_vjp = vjp(self.objective, sdf, fpop)
-        return
+        _, step_vjp = vjp(self.step, fpop, 0., sdf, False)
+        _, objective_vjp = vjp(self.objective, sdf, fpop)
+        return step_vjp, objective_vjp
 
     @partial(jit, static_argnums=(0,))
-    def step_adjoint(self, fhat):
+    def step_adjoint(self, fhat, step_vjp, objective_vjp):
         """
         This function performs a single step of the adjoint LBM simulation.
 
@@ -189,11 +171,11 @@ class LBMBaseDifferentiable(LBMBase):
         fhat: jax.numpy.ndarray
             The adjoint distribution functions after the adjoint simulation step.
         """
-        fhat = self.step_vjp((fhat, None))[0]
-        fhat = fhat + self.objective_vjp(1.0)[1]
+        fhat = step_vjp((fhat, None))[0]
+        fhat = fhat + objective_vjp(1.0)[1]
         return fhat
 
-    def run_adjoint(self, fpop, t_max):
+    def run_adjoint(self, step_vjp, objective_vjp, t_max):
         """
         This function runs the adjoint LBM simulation for a specified number of time steps.
 
@@ -220,10 +202,6 @@ class LBMBaseDifferentiable(LBMBase):
             raise NotImplemented
         fhat = self.distributed_array_init(shape, self.precisionPolicy.output_dtype, init_val=0.0)
 
-        # construct gradients of needed function for performing adjoint computations
-        sdf = self.sdf.array[..., 0]
-        self.construct_adjoints(sdf, fpop)
-
         # Loop over all time steps
         start_step = 0
         for timestep in range(start_step, t_max + 1):
@@ -231,14 +209,14 @@ class LBMBaseDifferentiable(LBMBase):
             print_iter_flag = self.printInfoRate > 0 and timestep % self.printInfoRate == 0
 
             # Perform one time-step (collision, streaming, and boundary conditions)
-            fhat = self.step_adjoint(fhat)
+            fhat = self.step_adjoint(fhat, step_vjp, objective_vjp)
 
             # Print the progress of the simulation
             if print_iter_flag:
                 print(
                     colored("Timestep ", 'blue') + colored(f"{timestep}", 'green') + colored(" of ", 'blue') + colored(
                         f"{t_max}", 'green') + colored(" completed", 'blue'))
-                
+
             # if io_flag:
             #     # Save the simulation data
             #     print(f"Saving data at timestep {timestep}/{t_max}")
@@ -246,13 +224,11 @@ class LBMBaseDifferentiable(LBMBase):
             #     c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
             #     u = jnp.dot(fhat, c)
             #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
-            #     fields = {"rho": rho_adj[..., 0], 
+            #     fields = {"rho": rho_adj[..., 0],
             #               "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2),
             #               "shape_derivative": lbm_shapeDerivative}
             #     save_fields_vtk(timestep, fields, prefix='adjfields')
 
             #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
-                
-
 
         return fhat
