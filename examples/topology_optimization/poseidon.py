@@ -1,6 +1,6 @@
 import os, sys
 from pathlib import Path
-
+import jax
 
 sys.path.append(os.path.abspath('../doppler'))
 sys.path.append(os.path.abspath('../XLB'))
@@ -40,6 +40,27 @@ def read_json(dir_path):
     with open(dir_path + '/' + 'project.json', 'r') as file:
         data = json.load(file)
     return data
+
+def pad_and_adjust_sdf_shape(sdf_grid):
+    # Note: we should ensure the pad_width is enough in case keepIn and keepOuts go beyond.
+    nx, ny, nz = sdf_grid.resolution
+    sf = 5  # scaling factor
+    min_pad = 5
+    pads = [nx // sf, ny // sf, nz // sf]
+
+    # Ensure each pad value is at least min_pad
+    pads = [max(pad, min_pad) for pad in pads]
+
+    # Assign padding values to respective variables
+    pad_x1, pad_x2, pad_y1, pad_y2, pad_z1, pad_z2 = pads * 2
+
+    nDevices = jax.device_count()
+    deficit = nDevices - (nx + pad_x1 + pad_x2) % nDevices
+    pad_x1 += deficit // 2
+    pad_x2 += deficit - deficit // 2
+
+    sdf_grid.pad((pad_x1, pad_x2), (pad_y1, pad_y2), (pad_z1, pad_z2))
+    return sdf_grid
 
 class Project(LBMBaseDifferentiable):
     def __init__(self, sdf, **kwargs):
@@ -188,14 +209,9 @@ def main():
     orig_mesh = trimesh.load(filename)
     extents = orig_mesh.extents
     nx, ny, nz = tuple([int(n) for n in extents])
-    shape = (nx, ny, nz)
-    # Note: we should ensure the pad_width is enough in case keepIn and keepOuts go beyond.
-    pad_width = max(shape)//10
-    sdf_grid = SDFGrid.load_from_mesh(orig_mesh, shape, dtype=jnp.float32, pad_width=pad_width)
-    nx += 2*pad_width
-    ny += 2*pad_width
-    nz += 2*pad_width
-    shape = (nx, ny, nz)
+    sdf_grid = SDFGrid.load_from_mesh(orig_mesh, (nx, ny, nz), dtype=jnp.float32)
+    sdf_grid = pad_and_adjust_sdf_shape(sdf_grid)
+    shape = sdf_grid.resolution
 
     # Create SDFGrid objects for keep_ins and keep_outs
     filename_keep_ins = data_json['keepIns']
@@ -226,7 +242,7 @@ def main():
         precision = 'f32/f32'
         lattice = LatticeD3Q19(precision)
         omega = 1.78
-
+        nx, ny, nz = sdf_grid.resolution
         kwargs = {
             'lattice': lattice,
             'omega': omega,
