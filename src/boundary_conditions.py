@@ -1020,12 +1020,11 @@ class ExtrapolationOutflow(BoundaryCondition):
         """        
         hasFluidNeighbour = ~boundaryMask[:, self.lattice.opp_indices]
         idx = np.array(self.indices).T
-        idx_trg = []
-        for i in range(self.lattice.q):
-            idx_trg.append(idx[hasFluidNeighbour[:, i], :] + self.lattice.c[:, i])
-        indices_nbr = np.unique(np.vstack(idx_trg), axis=0)
+        indices_nbr = np.zeros_like(idx)
+        for i in range(1, self.lattice.q):
+            if all(hasFluidNeighbour[:, i]):
+                indices_nbr = idx[hasFluidNeighbour[:, i], :] + self.lattice.c[:, i]
         self.indices_nbr = tuple(indices_nbr.T)
-
         return
 
     @partial(jit, static_argnums=(0, 3), inline=True)
