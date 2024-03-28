@@ -137,7 +137,7 @@ class Project(LBMBaseDifferentiable):
         boundary_id = fluid_bc['boundaryID']
         face_indices = fluid_bc['faceIndices']
         mesh = trimesh.load(dir_path + '/' + boundary_id)
-        sm = mesh.submesh([face_indices], append=True).subdivide()
+        sm = mesh.submesh([face_indices], append=True)
 
         # Step 1: Find the cartesian index associated with the face normal axis
         _, axis_index = np.nonzero(sm.face_normals)
@@ -151,8 +151,7 @@ class Project(LBMBaseDifferentiable):
         bindex = bdry_seed_indices[idx, :]
 
         # Step 3: Ensure boundary voxels are inside the port sdf not outside of it.
-        # custruct SDF pf the boundary port (subdivide to make sure SDF has good quality)
-        port_sdf = SDFGrid.load_from_mesh(mesh.subdivide(), self.sdf.resolution,
+        port_sdf = SDFGrid.load_from_mesh(mesh, self.sdf.resolution,
                                           spacing=self.sdf.spacing,
                                           origin=self.sdf.origin,
                                           dtype=jnp.float32)
@@ -220,6 +219,8 @@ def main():
     # Combine the keepins with the shape
     for keepin in keepins:
         sdf_grid = sdf_grid.boolean_union(keepin)
+    for keepout in keepouts:
+        sdf_grid = sdf_grid.boolean_difference(keepout)
 
     def xlb_instantiator(sdf_grid):
         precision = 'f32/f32'
@@ -253,9 +254,10 @@ def main():
 
     # Create the TO object to perform level-set based TO
     topopt = ALTopOpt(sdf_grid, keepins, keepouts, objectives=objectives, constraints=constraints, max_iter=40,
-                      max_inner_loop_iter=8, callbacks=callbacks, band_voxels=1, line_search_iter=3,
-                      line_search_method='golden')
+                      max_inner_loop_iter=8, callbacks=callbacks, band_voxels=3, line_search_iter=3,
+                      line_search_method='golden-backtracking')
     # The final shape is in topopt.shape or saved to VTI and PLY files if the ShapeCheckpoint callback was provided
+    # topopt.shape.isosurface().export(Path(dir_path) / "outputs" / "checkpoints" / "seed_boolean.ply")
     topopt.run()
 
 
