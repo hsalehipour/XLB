@@ -119,17 +119,7 @@ class LBMBaseDifferentiable(BGKSim):
         feq_adj = rho_adj + 3.0 * (cmhat - umhat)
         return feq_adj
 
-    def apply_shapeDerivative(self, f_poststreaming, f_postcollision):
-        """
-        Compute df_i/dphi = df_deta * deta / dphi where eta is the weight functions of Interpolated BB and phi is the
-        signed distance field. f_poststreaming and f_postcollision are the outputs of the forward run.
-        """
-        df_dphi = f_poststreaming * 0.0
-        for bc in self.BCs:
-            df_dphi = df_dphi.at[bc.indices].set(bc.shapeDerivative(f_poststreaming, f_postcollision))
-        return df_dphi
-
-    def construct_adjoints(self, sdf, fpop):
+    def construct_adjoints(self, sdf_array, fpop):
         """
         Construct the adjoints for the forward model.
         ================================
@@ -147,8 +137,8 @@ class LBMBaseDifferentiable(BGKSim):
             return fhat_poststreaming
         ================================
         """
-        _, step_vjp = vjp(self.step, fpop, 0., sdf, False)
-        _, objective_vjp = vjp(self.objective, sdf, fpop)
+        _, step_vjp = vjp(self.step, fpop, 0., sdf_array, False)
+        _, objective_vjp = vjp(self.objective, sdf_array, fpop)
         return step_vjp, objective_vjp
 
     @partial(jit, static_argnums=(0,))
@@ -223,7 +213,7 @@ class LBMBaseDifferentiable(BGKSim):
             #     rho_adj = jnp.sum(fhat, axis=-1, keepdims=True)
             #     c = jnp.array(self.c, dtype=self.precisionPolicy.compute_dtype).T
             #     u = jnp.dot(fhat, c)
-            #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
+            #     lbm_shapeDerivative = step_vjp((fhat, None))[2]
             #     fields = {"rho": rho_adj[..., 0],
             #               "u_x": u[..., 0], "u_y": u[..., 1], "u_z": u[..., 2], "umag": np.sqrt(u[..., 0]**2+u[..., 1]**2+u[..., 2]**2),
             #               "shape_derivative": lbm_shapeDerivative}
