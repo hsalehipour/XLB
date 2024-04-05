@@ -63,7 +63,7 @@ class KBCSim(LBMBase):
         invBeta = 1.0 / beta
         gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(deltaS, deltaH, feq) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
 
-        fout = f - beta * (2.0 * deltaS + gamma[..., None] * deltaH)
+        fout = f - beta * (2.0 * deltaS + gamma * deltaH)
 
         # add external force
         if self.force is not None:
@@ -86,7 +86,7 @@ class KBCSim(LBMBase):
         tiny = 1e-32
         beta = self.omega * 0.5
         rho, u = self.update_macroscopic(f)
-        feq = self.equilibrium(rho, u, castOutput=False)
+        feq = self.equilibrium(rho, u, cast_output=False)
 
         # Alternative KBC: only stabalizes for voxels whose entropy decreases after BGK collision.
         f_bgk = f - self.omega * (f - feq)
@@ -103,7 +103,7 @@ class KBCSim(LBMBase):
         invBeta = 1.0 / beta
         gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(deltaS, deltaH, feq) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
 
-        f_kbc = f - beta * (2.0 * deltaS + gamma[..., None] * deltaH)
+        f_kbc = f - beta * (2.0 * deltaS + gamma * deltaH)
         fout = jnp.where(H_fout > H_fin, f_kbc, f_bgk)
 
         # add external force
@@ -121,7 +121,7 @@ class KBCSim(LBMBase):
         jax.numpy.array
             Entropic scalar product of x, y, and feq.
         """
-        return jnp.sum(x * y / feq, axis=-1)
+        return jnp.sum(x * y / feq, axis=-1, keepdims=True)
 
     @partial(jit, static_argnums=(0,), inline=True)
     def fdecompose_shear_d2q9(self, fneq):
