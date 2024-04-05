@@ -4,18 +4,40 @@ from jax import jit, vjp
 from jax.sharding import PartitionSpec
 from jax.experimental.shard_map import shard_map
 from functools import partial
-from src.models import BGKSim
+from src.base import LBMBase
+from src.models import BGKSim, KBCSim
+from src.utils import save_fields_vtk
 import numpy as np
 
 
-class LBMBaseDifferentiable(BGKSim):
+class LBMBaseDifferentiable(KBCSim):
     """
     Same as LBMBase class but with added adjoint capabilities either through manual computation or leveraging AD.
+    # Currently we have 2 methods of introducing level-set field into the TO pipeleine:
+    #   v1: through collision operator using tanh function
+    #   v2: through a differentiable iinterpolation bc 
+    %TODO: need to fix this: BGK with D3Q19 cannot be handled because LBMBaseDifferentiable inherits from KBCSim
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, sdf, **kwargs):
+        # set the SDFGrid objetc
+        self.sdf = sdf
+
+        # get the TO method
+        self.TO_method = kwargs.setdefault('TO_method', 'v1')
+
+        # call the parent class
         super().__init__(**kwargs)
 
+        # create keepin mask
+        keepin_mask = jnp.full(shape=(self.nx, self.ny, self.nz), dtype = jnp.bool_, fill_value=False)
+        for keepin in kwargs.get('keepins'):
+            keepin_mask = keepin_mask.at[keepin.array[..., 0] <= 0.0].set(True)
+        self.keepin_mask = keepin_mask
+        
+        # get the collision method:
+        self.collision_model = kwargs.setdefault('collision_model', 'kbc')
+    
         if self.dim == 2:
             inout_specs = PartitionSpec("x", None, None)
         elif self.dim == 3:
@@ -24,6 +46,12 @@ class LBMBaseDifferentiable(BGKSim):
         self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
                                            in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
 
+    @partial(jit, static_argnums=(0,))
+    def add_design_variable_effect(self, u, sdf_array):
+        eta = 0.5 - 0.5*jnp.tanh(sdf_array/ (0.5*self.sdf.spacing))
+        eta = eta.at[self.keepin_mask].set(1.0)
+        return u*eta[..., None]    
+        
     def get_solid_voxels(self):
         # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
         # stream into a boundary voxel.
@@ -219,6 +247,74 @@ class LBMBaseDifferentiable(BGKSim):
             #               "shape_derivative": lbm_shapeDerivative}
             #     save_fields_vtk(timestep, fields, prefix='adjfields')
 
-            #     lbm_shapeDerivative = self.step_vjp((fhat, None))[2]
-
         return fhat
+    
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collision(self, f, sdf_array):
+        if self.collision_model == 'bgk':
+            return self.collision_bgk(f, sdf_array)
+        else:
+            return self.collision_kbc(f, sdf_array)
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collision_bgk(self, f, sdf_array):
+        """
+        BGK collision step for lattice.
+
+        The collision step is where the main physics of the LBM is applied. In the BGK approximation, 
+        the distribution function is relaxed towards the equilibrium distribution function.
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        rho, u = self.update_macroscopic(f)
+        if self.TO_method == 'v1':
+            u = self.add_design_variable_effect(u, sdf_array)
+        feq = self.equilibrium(rho, u, cast_output=False)
+        fneq = f - feq
+        fout = f - self.omega * fneq
+        if self.force is not None:
+            fout = self.apply_force(fout, feq, rho, u)
+        return self.precisionPolicy.cast_to_output(fout)
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collision_kbc(self, f, sdf_array):
+        """
+        Alternative KBC collision step for lattice.
+        Note: 
+        At low Reynolds number the orignal KBC collision above produces inaccurate results because
+        it does not check for the entropy increase/decrease. The KBC stabalizations should only be 
+        applied in principle to cells whose entropy decrease after a regular BGK collision. This is 
+        the case in most cells at higher Reynolds numbers and hence a check may not be needed. 
+        Overall the following alternative collision is more reliable and may replace the original 
+        implementation. The issue at the moment is that it is about 60-80% slower than the above method.
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        tiny = 1e-32
+        beta = self.omega * 0.5
+        rho, u = self.update_macroscopic(f)
+        if self.TO_method == 'v1':
+            u = self.add_design_variable_effect(u, sdf_array)
+        feq = self.equilibrium(rho, u, cast_output=False)
+
+        # Alternative KBC: only stabalizes for voxels whose entropy decreases after BGK collision.
+        f_bgk = f - self.omega * (f - feq)
+        H_fin = jnp.sum(f * jnp.log(f / self.w), axis=-1, keepdims=True)
+        H_fout = jnp.sum(f_bgk * jnp.log(f_bgk / self.w), axis=-1, keepdims=True)
+
+        # the rest is identical to collision_deprecated
+        fneq = f - feq
+        if self.dim == 2:
+            deltaS = self.fdecompose_shear_d2q9(fneq) * rho / 4.0
+        else:
+            deltaS = self.fdecompose_shear_d3q27(fneq) * rho
+        deltaH = fneq - deltaS
+        invBeta = 1.0 / beta
+        gamma = invBeta - (2.0 - invBeta) * self.entropic_scalar_product(deltaS, deltaH, feq) / (tiny + self.entropic_scalar_product(deltaH, deltaH, feq))
+
+        f_kbc = f - beta * (2.0 * deltaS + gamma * deltaH)
+        fout = jnp.where(H_fout > H_fin, f_kbc, f_bgk)
+
+        # add external force
+        if self.force is not None:
+            fout = self.apply_force(fout, feq, rho, u)
+        return self.precisionPolicy.cast_to_output(fout)

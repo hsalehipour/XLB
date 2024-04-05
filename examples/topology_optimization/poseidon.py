@@ -14,8 +14,8 @@ from doppler.geometry.sdf import SDFGrid
 from src.utils import *
 from src.boundary_conditions import *
 from src.adjoint import LBMBaseDifferentiable
-from src.lattice import LatticeD3Q19
-
+from src.lattice import LatticeD3Q19, LatticeD3Q27
+from jax import config
 
 # class SimulationParameters:
 #     lattice: LatticeD3Q27('f32/f32')
@@ -29,10 +29,15 @@ from src.lattice import LatticeD3Q19
 #
 # config = SimulationParameters()
 
-# config.update('jax_enable_x64', True)
+config.update('jax_enable_x64', True)
 
-project_name = 'splitter'
+project_name = 'valve'
 dir_path = os.path.dirname(os.path.realpath(__file__)) + '/' + project_name
+
+# Currently we have 2 methods of introducing level-set field into the TO pipeleine:
+#   v1: through collision operator using tanh function
+#   v2: through a differentiable iinterpolation bc 
+TO_method = 'v1'
 
 def read_json(dir_path):
     # Read the JSON file
@@ -63,9 +68,8 @@ def pad_and_adjust_sdf_shape(sdf_grid):
     return sdf_grid
 
 class Project(LBMBaseDifferentiable):
-    def __init__(self, sdf, **kwargs):
-        self.sdf = sdf
-        super().__init__(**kwargs)
+    def __init__(self, sdf: SDFGrid, **kwargs):
+        super().__init__(sdf, **kwargs)
 
     def boundary(self, sdf: SDFGrid, side='inside'):
         """
@@ -129,20 +133,24 @@ class Project(LBMBaseDifferentiable):
                 if bc_type == "velocity":
                     vel_vec = np.zeros(bc_indices.shape, dtype=self.precisionPolicy.compute_dtype)
                     vel_vec += self.read_vel_bc_value(fluid_bc)
-                    self.BCs.append(ZouHe(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
+                    self.BCs.append(Regularized(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
                                           'velocity', vel_vec))
                 elif bc_type == "pressure":
                     rho_outlet = np.ones((bc_indices.shape[0], 1), dtype=self.precisionPolicy.compute_dtype)
-                    self.BCs.append(ZouHe(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
+                    self.BCs.append(Regularized(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy,
                                           'pressure', rho_outlet))
+                    # self.BCs.append(ExtrapolationOutflow(tuple(bc_indices.T), self.gridInfo, self.precisionPolicy))
 
         # Find no-slip boundaries as the remaining boundary voxels
         port_indices = np.vstack(port_indices)
         noslip = np.array(list(set(list(map(tuple, bdry_indices))) - set(list(map(tuple, port_indices)))))
 
         # No-slip BC for all no-slip boundaries that are part of optimization
-        self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(noslip.T),
-                                                             self.gridInfo, self.precisionPolicy))
+        if self.TO_method == 'v1':
+            self.BCs.append(BounceBackHalfway(tuple(noslip.T), self.gridInfo, self.precisionPolicy))
+        else:
+            self.BCs.append(InterpolatedBounceBackDifferentiable(tuple(noslip.T),
+                                                                self.gridInfo, self.precisionPolicy))
         self.BCs[-1].needsExtraConfiguration = False
         self.BCs[-1].isSolid = False
         return
@@ -208,7 +216,7 @@ def main():
     filename = dir_path + '/' + data_json['seedGeom']
     orig_mesh = trimesh.load(filename)
     extents = orig_mesh.extents
-    nx, ny, nz = tuple([int(n) for n in extents])
+    nx, ny, nz = tuple([int(0.25*n) for n in extents])
     sdf_grid = SDFGrid.load_from_mesh(orig_mesh, (nx, ny, nz), dtype=jnp.float32)
     sdf_grid = pad_and_adjust_sdf_shape(sdf_grid)
     shape = sdf_grid.resolution
@@ -239,9 +247,9 @@ def main():
         sdf_grid = sdf_grid.boolean_difference(keepout)
 
     def xlb_instantiator(sdf_grid):
-        precision = 'f32/f32'
-        lattice = LatticeD3Q19(precision)
-        omega = 1.78
+        precision = 'f64/f32'
+        lattice = LatticeD3Q27(precision)
+        omega = 1.95
         nx, ny, nz = sdf_grid.resolution
         kwargs = {
             'lattice': lattice,
@@ -251,7 +259,10 @@ def main():
             'nz': nz,
             'precision': precision,
             'io_rate': 500,
-            'print_info_rate': 500,
+            'print_info_rate': 1000,
+            'keepins': keepins,
+            'TO_method': TO_method,
+            'collision_model': 'kbc',
         }
         return Project(sdf_grid, **kwargs)
 
@@ -259,10 +270,10 @@ def main():
     os.system('rm -rf ' + dir_path + '/*.vtk && rm -rf ' + dir_path + '/outputs')
 
     # Set the objective function
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=1000)]
+    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=2000)]
 
     # subject to a volume constraint
-    constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.15,
+    constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.45,
                                 constraint_type=ALConstraintType.EqualTo)]
 
     callbacks = [CSVLogger(Path(dir_path) / "outputs"),
