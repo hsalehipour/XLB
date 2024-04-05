@@ -867,7 +867,7 @@ class LBMBase(object):
         else:
             return f_poststreaming, None
 
-    def run(self, t_max, sdf=None):
+    def run(self, t_max, sdf=None, f=None):
         """
         This function runs the LBM simulation for a specified number of time steps.
 
@@ -888,7 +888,7 @@ class LBMBase(object):
         f: jax.numpy.ndarray
             The distribution functions after the simulation.
         """
-        f = self.assign_fields_sharded()
+        f = self.assign_fields_sharded(f)
         start_step = 0
         if self.restore_checkpoint:
             latest_step = self.mngr.latest_step()
