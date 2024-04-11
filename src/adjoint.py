@@ -19,25 +19,16 @@ class LBMBaseDifferentiable(KBCSim):
     %TODO: need to fix this: BGK with D3Q19 cannot be handled because LBMBaseDifferentiable inherits from KBCSim
     """
 
-    def __init__(self, sdf, **kwargs):
-        # set the SDFGrid objetc
-        self.sdf = sdf
-
+    def __init__(self, **kwargs):
         # get the TO method
         self.TO_method = kwargs.setdefault('TO_method', 'v1')
 
         # call the parent class
         super().__init__(**kwargs)
 
-        # create keepin mask
-        keepin_mask = jnp.full(shape=(self.nx, self.ny, self.nz), dtype = jnp.bool_, fill_value=False)
-        for keepin in kwargs.get('keepins'):
-            keepin_mask = keepin_mask.at[keepin.array[..., 0] <= 0.0].set(True)
-        self.keepin_mask = keepin_mask
-        
         # get the collision method:
         self.collision_model = kwargs.setdefault('collision_model', 'kbc')
-    
+
         if self.dim == 2:
             inout_specs = PartitionSpec("x", None, None)
         elif self.dim == 3:
@@ -45,30 +36,6 @@ class LBMBaseDifferentiable(KBCSim):
 
         self.streaming_adj = jit(shard_map(self.streaming_adj_m, mesh=self.mesh,
                                            in_specs=inout_specs, out_specs=inout_specs, check_rep=False))
-
-    @partial(jit, static_argnums=(0,))
-    def add_design_variable_effect(self, u, sdf_array):
-        eta = 0.5 - 0.5*jnp.tanh(sdf_array/ (0.5*self.sdf.spacing))
-        eta = eta.at[self.keepin_mask].set(1.0)
-        return u*eta[..., None]    
-        
-    def get_solid_voxels(self):
-        # Accumulate the indices of all BCs to create the grid mask with FALSE along directions that
-        # stream into a boundary voxel.
-        solid_list = [np.array(bc.indices).T for bc in self.BCs if bc.isSolid]
-        solid_voxels = np.unique(np.vstack(solid_list), axis=0) if solid_list else None
-
-        # add external solid walls to the wall indices
-        # Note: the SDF data structure is that of SDFGrid class in doppler
-        if hasattr(self, "sdf"):
-            voxel_coordinates = self.sdf.voxel_grid_coordinates()
-            solid_wall = self.sdf.array > 0.0
-            solid_wall_cord = voxel_coordinates[solid_wall[..., 0], :]
-            solid_wall_indices = self.sdf.index_from_coord(solid_wall_cord)
-            if solid_voxels is None:
-                return solid_wall_indices
-            else:
-                return np.unique(np.vstack([solid_voxels, solid_wall_indices]), axis=0)
 
     def objective(self, sdf, fpop):
         """
