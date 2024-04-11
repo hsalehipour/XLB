@@ -17,7 +17,7 @@ class BGKSim(LBMBase):
         super().__init__(**kwargs)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, f):
+    def collision(self, f, sdf=None):
         """
         BGK collision step for lattice.
 
@@ -45,7 +45,7 @@ class KBCSim(LBMBase):
         super().__init__(**kwargs)
 
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
-    def collision(self, f):
+    def collision(self, f, sdf=None):
         """
         KBC collision step for lattice.
         """

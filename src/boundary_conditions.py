@@ -1065,6 +1065,7 @@ class ExtrapolationOutflow(BoundaryCondition):
 
         # Use the iknown directions of f_postcollision that leave the domain during streaming to store the BC data
         fpc_bdr = fpc_bdr.at[bindex, self.iknown].set(fpop_extrapolated)
+        # fpc_bdr = fpc_bdr.at[bindex, 0].set(f_postcollision[self.indices][bindex, 0])
         f_postcollision = f_postcollision.at[self.indices].set(fpc_bdr)
         return f_postcollision
 
