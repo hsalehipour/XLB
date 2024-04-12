@@ -176,7 +176,7 @@ class UnitTest(LBMBaseDifferentiable):
         bindex = np.arange(nbd)[:, None]
 
         # set the fluid fraction weights
-        weights = bc.set_proximity_ratio(sdf)
+        weights = bc.set_proximity_ratio(sdf)[bindex, bc.iknown]
 
         if implementationStep == 'PostCollision':
             # compute dBC/df
