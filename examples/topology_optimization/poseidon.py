@@ -8,7 +8,7 @@ sys.path.append(os.path.abspath('../XLB'))
 from doppler.callbacks.csv_logger import CSVLogger
 from doppler.callbacks.shape_checkpoint import ShapeCheckpoint
 from doppler.topopt import ALTopOpt, ALConstraint, ALConstraintType
-from doppler.objectives import PressureDrop, VolumeFraction
+from doppler.objectives import *
 from doppler.geometry.sdf import SDFGrid
 
 from src.utils import *
@@ -37,7 +37,7 @@ dir_path = os.path.dirname(os.path.realpath(__file__)) + '/' + project_name
 # Currently we have 2 methods of introducing level-set field into the TO pipeleine:
 #   v1: through collision operator using tanh function
 #   v2: through a differentiable interpolation bc
-TO_method = 'v1'
+TO_method = 'v2'
 
 def read_json(dir_path):
     # Read the JSON file
@@ -304,7 +304,7 @@ def main():
     os.system('rm -rf ' + dir_path + '/*.vtk && rm -rf ' + dir_path + '/outputs')
 
     # Set the objective function
-    objectives = [PressureDrop(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=2000)]
+    objectives = [ViscousDissipation(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=200)]
 
     # subject to a volume constraint
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.45,

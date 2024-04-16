@@ -1108,6 +1108,56 @@ class LBMBase(object):
         feq_force = self.equilibrium(rho, u + delta_u, cast_output=False)
         f_postcollision = f_postcollision + feq_force - feq
         return f_postcollision
-    
 
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def tensor_inner_product(self, A, B):
+        """
+        computes the inner product of two tensors A and B, sum_i sum_j A_{ij}B_{ij}
+        The shapes of "A" and "B" are similar with their axis=0 having a shape of [dim*(dim+1)/2]
+        """
+        # Set the diagonal and off-diagonal components of a symmetric rank 2 tensor as per definition in "momentum_flux"
+        if self.dim == 3:
+            diagonal    = (0, 3, 5)
+            offdiagonal = (1, 2, 4)
+        else:
+            # dim ==2:
+            diagonal    = (0, 2)
+            offdiagonal = (1,)
+
+        AB = jnp.sum(A[..., diagonal]*B[..., diagonal], axis=-1) + \
+             jnp.sum(2.0 * A[..., offdiagonal]*B[..., offdiagonal], axis=-1)
+        return AB
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def strain_rate(self, fneq, tau, rho):
+        """
+        compute the strain rate tensor (considering symmetry of the tensor)
+        :param f_neq: (q,ncell), non-equilibrium distribution function
+        :param tau: (ncell) total eddy viscosity (equal to molecular viscosity tau0 if LES Smagorinsky is not invoked)
+        :return: strain rate tensor (symmetric tensor, 3 elements in 2D and 6 elements in 3D)
+        strain_rate_tensor = 0.5 [ \nabla \vec{vel} + (\nabla \vec{vel}).T ]
+                           =-(1/(2*c_s^2*\rho*\tau))* \Pi^{1}
+                           ~-(1/(2*c_s^2*\rho*\tau))* \Pi^{Neq}
+        """
+        PiNeq = self.momentum_flux(fneq)
+        Sij = -1.5*PiNeq/rho/tau
+        return Sij
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def viscous_dissipation(self, fneq, rho):
+        """
+        Calculating "viscous dissipation" based on its microscopic definition:
+        epsilon = 2* \nu * |strain_rate_tensor|^2
+        strain_rate_tensor = 0.5 [ \nabla \vec{vel} + (\nabla \vec{vel}).T ]
+                           =-(1/(2*c_s^2*\rho*\tau))* \Pi^{1}
+                           ~-(1/(2*c_s^2*\rho*\tau))* \Pi^{Neq}
+        which gives:
+        epsilon = 0.5* \nu * /(c_s^4*\rho^2*\tau^2) * |\Pi^{Neq}|^2
+        """
+        tau = 1./self.omega
+        viscosity = (tau - 0.5)/3.
+        Sij = self.strain_rate(fneq, tau, rho)
+        visc_dissip = 2. * viscosity * self.tensor_inner_product(Sij, Sij)
+        return visc_dissip
     
