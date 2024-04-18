@@ -283,7 +283,7 @@ def main():
     def xlb_instantiator(sdf_grid):
         precision = 'f64/f32'
         lattice = LatticeD3Q27(precision)
-        omega = 1.95
+        omega = 1.99
         nx, ny, nz = sdf_grid.resolution
         kwargs = {
             'lattice': lattice,
@@ -296,7 +296,7 @@ def main():
             'print_info_rate': 1000,
             'keepins': keepins,
             'TO_method': TO_method,
-            'collision_model': 'kbc',
+            'collision_model': 'bgk',
         }
         return Project(sdf_grid, **kwargs)
 
@@ -304,7 +304,7 @@ def main():
     os.system('rm -rf ' + dir_path + '/*.vtk && rm -rf ' + dir_path + '/outputs')
 
     # Set the objective function
-    objectives = [ViscousDissipation(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=200)]
+    objectives = [ViscousDissipation(xlb_instantiator=xlb_instantiator, init_shape=sdf_grid, max_iter=2000)]
 
     # subject to a volume constraint
     constraints = [ALConstraint(VolumeFraction(init_shape=sdf_grid), target=0.45,

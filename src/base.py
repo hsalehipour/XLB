@@ -141,6 +141,9 @@ class LBMBase(object):
         self._create_boundary_data()
         self.force = self.get_force()
 
+        # Set Smagorinsky constant
+        self.smagorinskyConstant = 0.1**2
+
     @property
     def lattice(self):
         return self._lattice
@@ -1117,6 +1120,10 @@ class LBMBase(object):
         The shapes of "A" and "B" are similar with their axis=0 having a shape of [dim*(dim+1)/2]
         """
         # Set the diagonal and off-diagonal components of a symmetric rank 2 tensor as per definition in "momentum_flux"
+        # if A.shape[-1] == 3:
+        #     dim = 2
+        # else:
+        #     dim = 3
         if self.dim == 3:
             diagonal    = (0, 3, 5)
             offdiagonal = (1, 2, 4)
@@ -1128,6 +1135,11 @@ class LBMBase(object):
         AB = jnp.sum(A[..., diagonal]*B[..., diagonal], axis=-1) + \
              jnp.sum(2.0 * A[..., offdiagonal]*B[..., offdiagonal], axis=-1)
         return AB
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def tensor_modulus(self, T):
+        """returning |T| = sqrt (2TijTij)"""
+        return jnp.sqrt(2.*self.tensor_inner_product(T, T))
 
     @partial(jit, static_argnums=(0,), inline=True)
     def strain_rate(self, fneq, tau, rho):
@@ -1160,4 +1172,23 @@ class LBMBase(object):
         Sij = self.strain_rate(fneq, tau, rho)
         visc_dissip = 2. * viscosity * self.tensor_inner_product(Sij, Sij)
         return visc_dissip
-    
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def turbulent_relaxation(self, fneq, visc0):
+        """
+        :param fneq: (q,ncell), non-equilibrium distribution function
+        :param visc0: visc0 is the molecular viscosity (single scalar)
+        :return: Turbulent relaxation time, \tau_t = 3*eddy_viscosity
+        """
+
+        # compute the momentum flux tensor
+        PiNeq = self.momentum_flux(fneq)
+
+        # Compute the modulus of the momentum flux |Pi_Neq Pi_Neq|
+        momentum_flux_modulus = self.tensor_modulus(PiNeq)
+
+        # Turbulent relaxation time, \tau_t (Eq 14b [2])
+        tau_t = 0.5*(jnp.sqrt(visc0**2 + 18.*self.smagorinskyConstant*momentum_flux_modulus) - visc0)
+
+        return tau_t
+

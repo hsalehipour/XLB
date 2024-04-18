@@ -220,7 +220,7 @@ class LBMBaseDifferentiable(KBCSim):
     @partial(jit, static_argnums=(0,), donate_argnums=(1,))
     def collision(self, f, sdf_array):
         if self.collision_model == 'bgk':
-            return self.collision_bgk(f, sdf_array)
+            return self.collide_smag(f, sdf_array)
         else:
             return self.collision_kbc(f, sdf_array)
 
@@ -285,3 +285,37 @@ class LBMBaseDifferentiable(KBCSim):
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
         return self.precisionPolicy.cast_to_output(fout)
+
+    @partial(jit, static_argnums=(0,), donate_argnums=(1,))
+    def collide_smag(self, f, sdf_array):
+        """
+        Purpose: BGK collision rule of LBM. tau_tot = 1/omega is calculated based on Smagorinsky model
+        LES Simulation of a high Reynolds number turbulent flow based on the Smagorinsky closure model.
+        Reference:
+        [1] S. Hou, J. Sterling, S. Chen, G.D. Doolen, A lattice Boltzmann subgrid model for high Reynolds number flows,
+            in Pattern Formation and Lattice Gas Automata, in: A.T. Lawniczak, R. Kapral (Eds.), Fields Inst. Comm., vol. 6,
+            AMS, Providence, 1996, pp. 151–166.
+        [2] H. Yu, S. S. Girimaji, L.-S. Luo, DNS and LES of decaying isotropic turbulence with and without frame rotation
+            using lattice boltzmann method, J. Comput. Phys. 209 (2) (2005) 599–616.
+            http://dx.doi.org/10.1016/j.jcp.2005.03.022. URL http://linkinghub.elsevier.com/retrieve/pii/S0021999105001907.
+
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        rho, u = self.update_macroscopic(f)
+        if self.TO_method == 'v1':
+            u = self.add_design_variable_effect(u, sdf_array)
+        feq = self.equilibrium(rho, u, cast_output=False)
+
+        # molecular relaxation time: tau0 is the relaxation time due to molecular viscosity tau0 = (3.*visclb+0.5)
+        tau0 = 1./self.omega
+        visc0 = (tau0 - 0.5) / 3.
+
+        fneq = f - feq
+        tau_turb = self.turbulent_relaxation(fneq, visc0)
+        tau_tot = tau0 + tau_turb[..., None]
+        fout = f - fneq/tau_tot
+
+        if self.force is not None:
+            fout = self.apply_force(fout, feq, rho, u)
+        return self.precisionPolicy.cast_to_output(fout)
+    
