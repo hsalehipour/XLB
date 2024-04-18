@@ -5,12 +5,11 @@ from jax.sharding import PartitionSpec
 from jax.experimental.shard_map import shard_map
 from functools import partial
 from src.base import LBMBase
-from src.models import BGKSim, KBCSim
 from src.utils import save_fields_vtk
 import numpy as np
 
 
-class LBMBaseDifferentiable(KBCSim):
+class LBMBaseDifferentiable(LBMBase):
     """
     Same as LBMBase class but with added adjoint capabilities either through manual computation or leveraging AD.
     # Currently we have 2 methods of introducing level-set field into the TO pipeleine:
@@ -28,6 +27,8 @@ class LBMBaseDifferentiable(KBCSim):
 
         # get the collision method:
         self.collision_model = kwargs.setdefault('collision_model', 'kbc')
+        if self.collision_model == 'kbc' and kwargs.get('lattice').name != 'D3Q27' and kwargs.get('nz') > 0:
+            raise ValueError("KBC collision operator in 3D must only be used with D3Q27 lattice.")
 
         if self.dim == 2:
             inout_specs = PartitionSpec("x", None, None)

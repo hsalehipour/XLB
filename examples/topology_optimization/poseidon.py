@@ -29,7 +29,7 @@ from jax import config
 #
 # config = SimulationParameters()
 
-config.update('jax_enable_x64', True)
+# config.update('jax_enable_x64', True)
 
 project_name = 'valve'
 dir_path = os.path.dirname(os.path.realpath(__file__)) + '/' + project_name
@@ -281,8 +281,8 @@ def main():
         sdf_grid = sdf_grid.boolean_difference(keepout)
 
     def xlb_instantiator(sdf_grid):
-        precision = 'f64/f32'
-        lattice = LatticeD3Q27(precision)
+        precision = 'f32/f32'
+        lattice = LatticeD3Q19(precision)
         omega = 1.99
         nx, ny, nz = sdf_grid.resolution
         kwargs = {
