@@ -309,10 +309,8 @@ class LBMBaseDifferentiable(LBMBase):
 
         # molecular relaxation time: tau0 is the relaxation time due to molecular viscosity tau0 = (3.*visclb+0.5)
         tau0 = 1./self.omega
-        visc0 = (tau0 - 0.5) / 3.
-
         fneq = f - feq
-        tau_turb = self.turbulent_relaxation(fneq, visc0)
+        tau_turb = self.turbulent_relaxation(fneq, tau0)
         tau_tot = tau0 + tau_turb[..., None]
         fout = f - fneq/tau_tot
 

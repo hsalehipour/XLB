@@ -1145,9 +1145,9 @@ class LBMBase(object):
     def strain_rate(self, fneq, tau, rho):
         """
         compute the strain rate tensor (considering symmetry of the tensor)
-        :param f_neq: (q,ncell), non-equilibrium distribution function
-        :param tau: (ncell) total eddy viscosity (equal to molecular viscosity tau0 if LES Smagorinsky is not invoked)
-        :return: strain rate tensor (symmetric tensor, 3 elements in 2D and 6 elements in 3D)
+        f_neq: non-equilibrium distribution function
+        tau:  total eddy viscosity (equal to molecular viscosity tau0 if LES Smagorinsky is not invoked)
+        return: strain rate tensor (symmetric tensor, 3 elements in 2D and 6 elements in 3D)
         strain_rate_tensor = 0.5 [ \nabla \vec{vel} + (\nabla \vec{vel}).T ]
                            =-(1/(2*c_s^2*\rho*\tau))* \Pi^{1}
                            ~-(1/(2*c_s^2*\rho*\tau))* \Pi^{Neq}
@@ -1174,11 +1174,16 @@ class LBMBase(object):
         return visc_dissip
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def turbulent_relaxation(self, fneq, visc0):
+    def turbulent_relaxation(self, fneq, tau0):
         """
-        :param fneq: (q,ncell), non-equilibrium distribution function
-        :param visc0: visc0 is the molecular viscosity (single scalar)
-        :return: Turbulent relaxation time, \tau_t = 3*eddy_viscosity
+        fneq: non-equilibrium distribution function
+        tau0: the relaxation time associated with the molecular viscosity (single scalar)
+        return: Turbulent relaxation time, \tau_t = 3*eddy_viscosity
+
+        Ref:
+        [1] Stiebler, M., Krafczyk, M., Freudiger, S. and Geier, M., 2011. Lattice Boltzmann large eddy simulation
+            of subcritical flows around a sphere on non-uniform grids. Computers & Mathematics with Applications,
+            61(12), pp.3475-3484.
         """
 
         # compute the momentum flux tensor
@@ -1188,7 +1193,7 @@ class LBMBase(object):
         momentum_flux_modulus = self.tensor_modulus(PiNeq)
 
         # Turbulent relaxation time, \tau_t (Eq 14b [2])
-        tau_t = 0.5*(jnp.sqrt(visc0**2 + 18.*self.smagorinskyConstant*momentum_flux_modulus) - visc0)
+        tau_t = 0.5*(jnp.sqrt(tau0**2 + 18.*self.smagorinskyConstant*momentum_flux_modulus) - tau0)
 
         return tau_t
 
