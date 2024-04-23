@@ -99,9 +99,7 @@ class UnitTest(LBMBaseDifferentiable):
         # molecular relaxation time: tau0 is the relaxation time due to molecular viscosity tau0 = (3.*visclb+0.5)
         tau0 = 1./self.omega
         fneq = f - feq
-        Pi = self.momentum_flux(feq)
-        tau_turb = self.tensor_inner_product(Pi, Pi)
-        # tau_turb = self.turbulent_relaxation(fneq, tau0)
+        tau_turb = self.turbulent_relaxation(fneq, tau0)
         tau_tot = tau0 + tau_turb
         fout = f - fneq / tau_tot
 
@@ -116,9 +114,7 @@ class UnitTest(LBMBaseDifferentiable):
 
         # Turbulent relaxation time, \tau_t
         tau0 = 1./self.omega
-        Pi = self.momentum_flux(feq)
-        tau_turb = self.tensor_inner_product(Pi, Pi)
-        # tau_turb = self.turbulent_relaxation(fneq, tau0)
+        tau_turb = self.turbulent_relaxation(fneq, tau0)
         tau_tot = tau0 + tau_turb
 
         # adj collision
@@ -127,11 +123,10 @@ class UnitTest(LBMBaseDifferentiable):
         fneq_adj = fhat - feq_adj
 
         # Compute the modulus of the momentum flux |Pi_Neq Pi_Neq|
-        PiNeq = self.momentum_flux(feq)
-        # PiNeq = self.momentum_flux(f-feq)
+        PiNeq = self.momentum_flux(fneq)
         momentum_flux_modulus = self.tensor_modulus(PiNeq)
         sc = self.smagorinskyConstant
-        A = 1. #9. * sc /momentum_flux_modulus/jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
+        A = 4.5 * sc /momentum_flux_modulus/jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
         fhat_sum = jnp.sum(fhat * fneq, axis=-1, keepdims=True)
 
         # Add the additional terms due to dtau_tot/df to the adj collision
@@ -159,8 +154,7 @@ class UnitTest(LBMBaseDifferentiable):
             udot_cmv = jnp.sum(vel * cmv, axis=-1, keepdims=True)
             Mterms = 3. * w_exp * (cdot_cmv*(1.0 + 3.*cu) - udot_cmv)
             M = self.momentum_flux(Mterms)
-            # PiAdj = A * (cc_exp[iq] - PiEq - M)
-            PiAdj = A * (PiEq + M)
+            PiAdj = A * (cc_exp[iq] - PiEq - M)
             set_value = omega**2 * (2. * self.tensor_inner_product(PiNeq, PiAdj)) * fhat_sum
             fhat = fhat.at[..., iq].add(set_value[..., 0])
         return fhat
