@@ -1132,8 +1132,8 @@ class LBMBase(object):
             diagonal    = (0, 2)
             offdiagonal = (1,)
 
-        AB = jnp.sum(A[..., diagonal]*B[..., diagonal], axis=-1) + \
-             jnp.sum(2.0 * A[..., offdiagonal]*B[..., offdiagonal], axis=-1)
+        AB = jnp.sum(A[..., diagonal]*B[..., diagonal], axis=-1, keepdims=True) + \
+             jnp.sum(2.0 * A[..., offdiagonal]*B[..., offdiagonal], axis=-1, keepdims=True)
         return AB
 
     @partial(jit, static_argnums=(0,), inline=True)

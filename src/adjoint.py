@@ -311,7 +311,7 @@ class LBMBaseDifferentiable(LBMBase):
         tau0 = 1./self.omega
         fneq = f - feq
         tau_turb = self.turbulent_relaxation(fneq, tau0)
-        tau_tot = tau0 + tau_turb[..., None]
+        tau_tot = tau0 + tau_turb
         fout = f - fneq/tau_tot
 
         if self.force is not None:

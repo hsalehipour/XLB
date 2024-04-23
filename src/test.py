@@ -101,9 +101,9 @@ class UnitTest(LBMBaseDifferentiable):
         fneq = f - feq
         Pi = self.momentum_flux(f)
         tau_turb = self.tensor_inner_product(Pi, Pi)
-        # tau_turb = self.turbulent_relaxation(f, tau0)
-        tau_tot = tau0 + tau_turb[..., None]
-        fout = f - 1.0/tau_tot
+        # tau_turb = self.turbulent_relaxation(fneq, tau0)
+        tau_tot = tau0 + tau_turb
+        fout = f - fneq / tau_tot
 
         if self.force is not None:
             fout = self.apply_force(fout, feq, rho, u)
@@ -118,32 +118,51 @@ class UnitTest(LBMBaseDifferentiable):
         tau0 = 1./self.omega
         Pi = self.momentum_flux(f)
         tau_turb = self.tensor_inner_product(Pi, Pi)
-        # tau_turb = self.turbulent_relaxation(f, tau0)
-        tau_tot = tau0 + tau_turb[..., None]
+        # tau_turb = self.turbulent_relaxation(fneq, tau0)
+        tau_tot = tau0 + tau_turb
 
         # adj collision
         omega = 1./tau_tot
         feq_adj = self.equilibrium_adj_math(fhat, feq, rho, vel)
         fneq_adj = fhat - feq_adj
 
-
         # Compute the modulus of the momentum flux |Pi_Neq Pi_Neq|
-        # PiNeq = self.momentum_flux(f)
-        # momentum_flux_modulus = self.tensor_modulus(PiNeq)[..., None]
-        # sc = self.smagorinskyConstant
-        # A = 1.0 #9. * sc / 2./jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
-        # PiNeq_adj = self.momentum_flux(fhat)
-        # B = 2.0*omega**2*A/momentum_flux_modulus * self.tensor_inner_product(PiNeq, PiNeq_adj)[..., None]
-        # B = 2.0*omega**2 * self.tensor_inner_product(PiNeq, PiNeq_adj)[..., None]
+        PiNeq = self.momentum_flux(f)
+        # PiNeq = self.momentum_flux(f-feq)
+        momentum_flux_modulus = self.tensor_modulus(PiNeq)
+        sc = self.smagorinskyConstant
+        A = 1. #9. * sc /momentum_flux_modulus/jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
+        fhat_sum = jnp.sum(fhat * fneq, axis=-1, keepdims=True)
 
-        # add the additional terms due to dtau_eff/df to the adj collision
-        fhat_sum = jnp.sum(fhat, axis=-1)
-        for iq in range(self.lattice.q):
-            set_value = fhat[..., iq] + \
-                        omega[..., iq]**2 * \
-                        (2. * self.tensor_inner_product(Pi, self.lattice.cc[iq, None, None, :])) * fhat_sum
-            fhat = fhat.at[..., iq].set(set_value)
+        # Add the additional terms due to dtau_tot/df to the adj collision
+        PiEq = self.momentum_flux(feq)/rho
+        fhat = fhat - omega * fneq_adj
+        cc = self.lattice.cc    # (q, nt)
+        c = self.c      # (dim, q)
+        w = self.w      # (q,)
+        cu = jnp.dot(vel, c)       # (nx, ny, q)
 
+        if self.dim == 2:
+            # c_exp : nx, ny, dim, q
+            c_exp = c[None, None, :, :]
+            w_exp = w[None, None, :]
+            cc_exp = cc[:, None, None, :]
+        else:
+            # c_exp : nx, ny, nz, dim, q
+            c_exp = c[None, None, None, :, :]
+            w_exp = w[None, None, None, :]
+            cc_exp = cc[:, None, None, None, :]
+
+        for iq in range(self.q):
+            # cmv = c_exp[..., iq] - vel
+            # cdot_cmv = jnp.dot(cmv, c)
+            # udot_cmv = jnp.sum(vel * cmv, axis=-1, keepdims=True)
+            # Mterms = 3. * w_exp * (cdot_cmv*(1.0 + 3.*cu) - udot_cmv)
+            # M = self.momentum_flux(Mterms)
+            # PiAdj = A * (cc_exp[iq] - PiEq + M)
+            PiAdj = A * cc_exp[iq]
+            set_value = omega**2 * (2. * self.tensor_inner_product(PiNeq, PiAdj)) * fhat_sum
+            fhat = fhat.at[..., iq].add(set_value[..., 0])
         return fhat
 
     def test_adjoint(self, fhat, dfunc_ref, func_name, func, *args):
