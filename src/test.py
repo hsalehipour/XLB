@@ -87,6 +87,65 @@ class UnitTest(LBMBaseDifferentiable):
         fhat = fhat - omega * fneq_adj
         return fhat
 
+    @partial(jit, static_argnums=(0,))
+    def collision_smagorinsky(self, f, sdf=None):
+        """
+        BGK collision step with the Smagorinsky turbulence model.
+        """
+        f = self.precisionPolicy.cast_to_compute(f)
+        rho, u = self.update_macroscopic(f)
+        feq = self.equilibrium(rho, u, cast_output=False)
+
+        # molecular relaxation time: tau0 is the relaxation time due to molecular viscosity tau0 = (3.*visclb+0.5)
+        tau0 = 1./self.omega
+        fneq = f - feq
+        Pi = self.momentum_flux(f)
+        tau_turb = self.tensor_inner_product(Pi, Pi)
+        # tau_turb = self.turbulent_relaxation(f, tau0)
+        tau_tot = tau0 + tau_turb[..., None]
+        fout = f - 1.0/tau_tot
+
+        if self.force is not None:
+            fout = self.apply_force(fout, feq, rho, u)
+        return self.precisionPolicy.cast_to_output(fout)
+
+    def collision_smagorinsky_adj(self, f, fhat):
+        rho, vel = self.update_macroscopic(f)
+        feq = self.equilibrium(rho, vel)
+        fneq = f - feq
+
+        # Turbulent relaxation time, \tau_t
+        tau0 = 1./self.omega
+        Pi = self.momentum_flux(f)
+        tau_turb = self.tensor_inner_product(Pi, Pi)
+        # tau_turb = self.turbulent_relaxation(f, tau0)
+        tau_tot = tau0 + tau_turb[..., None]
+
+        # adj collision
+        omega = 1./tau_tot
+        feq_adj = self.equilibrium_adj_math(fhat, feq, rho, vel)
+        fneq_adj = fhat - feq_adj
+
+
+        # Compute the modulus of the momentum flux |Pi_Neq Pi_Neq|
+        # PiNeq = self.momentum_flux(f)
+        # momentum_flux_modulus = self.tensor_modulus(PiNeq)[..., None]
+        # sc = self.smagorinskyConstant
+        # A = 1.0 #9. * sc / 2./jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
+        # PiNeq_adj = self.momentum_flux(fhat)
+        # B = 2.0*omega**2*A/momentum_flux_modulus * self.tensor_inner_product(PiNeq, PiNeq_adj)[..., None]
+        # B = 2.0*omega**2 * self.tensor_inner_product(PiNeq, PiNeq_adj)[..., None]
+
+        # add the additional terms due to dtau_eff/df to the adj collision
+        fhat_sum = jnp.sum(fhat, axis=-1)
+        for iq in range(self.lattice.q):
+            set_value = fhat[..., iq] + \
+                        omega[..., iq]**2 * \
+                        (2. * self.tensor_inner_product(Pi, self.lattice.cc[iq, None, None, :])) * fhat_sum
+            fhat = fhat.at[..., iq].set(set_value)
+
+        return fhat
+
     def test_adjoint(self, fhat, dfunc_ref, func_name, func, *args):
         # Construct the adjoints for the forward model.
         _, dfunc_AD = vjp(func, *args)
@@ -469,6 +528,16 @@ def unit_test12(**kwargs):
 
     return
 
+def unit_test13(**kwargs):
+    # TEST 13: Smagorinsky Collision model
+    test, f, fhat, sdf = init_unit_test(**kwargs)
+    start_time = time.time()
+    fhat_postcollision = test.collision_smagorinsky_adj(f, fhat)
+    print(f'Ref time is: {time.time() - start_time}')
+    test_result = test.test_adjoint(fhat, fhat_postcollision, '"Smagorinsky Collision"',
+                                    test.collision_smagorinsky, f, sdf)
+    return test_result
+
 
 if __name__ == "__main__":
     precision = "f64/f64"
@@ -483,7 +552,7 @@ if __name__ == "__main__":
     kwargs = {
         'optimize': True,
         'lattice': lattice,
-        'omega': 1.5,
+        'omega': 1.65,
         'nx': nx,
         'ny': ny,
         'nz': nz,
@@ -505,6 +574,7 @@ if __name__ == "__main__":
         'C + S + IBB': unit_test10,
         'Individual vjp calls': unit_test11,
         'pressure drop obj func': unit_test12,
+        'Smagorinsky collision': unit_test13,
     }
 
     for test_name, func_name in unit_test_list.items():
