@@ -111,18 +111,6 @@ class KBCSim(LBMBase):
             fout = self.apply_force(fout, feq, rho, u)
         return self.precisionPolicy.cast_to_output(fout)
 
-    @partial(jit, static_argnums=(0,), inline=True)
-    def entropic_scalar_product(self, x, y, feq):
-        """
-        Compute the entropic scalar product of x and y to approximate gamma in KBC.
-
-        Returns
-        -------
-        jax.numpy.array
-            Entropic scalar product of x, y, and feq.
-        """
-        return jnp.sum(x * y / feq, axis=-1, keepdims=True)
-
 
 class AdvectionDiffusionBGK(LBMBase):
     """

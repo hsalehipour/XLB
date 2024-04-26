@@ -1307,3 +1307,15 @@ class LBMBase(object):
         s = s.at[..., 7].set(-Pi[..., 4] / 4.0)
         s = s.at[..., 5].set(-Pi[..., 4] / 4.0)
         return s
+    
+    @partial(jit, static_argnums=(0,), inline=True)
+    def entropic_scalar_product(self, x, y, feq):
+        """
+        Compute the entropic scalar product of x and y to approximate gamma in KBC.
+
+        Returns
+        -------
+        jax.numpy.array
+            Entropic scalar product of x, y, and feq.
+        """
+        return jnp.sum(x * y / feq, axis=-1, keepdims=True)
