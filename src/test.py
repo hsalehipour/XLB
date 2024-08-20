@@ -126,7 +126,7 @@ class UnitTest(LBMBaseDifferentiable):
         PiNeq = self.momentum_flux(fneq)
         momentum_flux_modulus = self.tensor_modulus(PiNeq)
         sc = self.smagorinskyConstant
-        A = 4.5 * sc /momentum_flux_modulus/jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
+        A = 9.0 * sc /momentum_flux_modulus/jnp.sqrt(tau0**2 + 18. * sc * momentum_flux_modulus)
         fhat_sum = jnp.sum(fhat * fneq, axis=-1, keepdims=True)
 
         # Add the additional terms due to dtau_tot/df to the adj collision
@@ -155,7 +155,7 @@ class UnitTest(LBMBaseDifferentiable):
             Mterms = 3. * w_exp * (cdot_cmv*(1.0 + 3.*cu) - udot_cmv)
             M = self.momentum_flux(Mterms)
             PiAdj = A * (cc_exp[iq] - PiEq - M)
-            set_value = omega**2 * (2. * self.tensor_inner_product(PiNeq, PiAdj)) * fhat_sum
+            set_value = omega**2 * self.tensor_inner_product(PiNeq, PiAdj) * fhat_sum
             fhat = fhat.at[..., iq].add(set_value[..., 0])
         return fhat
 
