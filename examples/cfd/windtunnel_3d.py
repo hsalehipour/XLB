@@ -85,34 +85,34 @@ class WindTunnel3D:
         walls = [box["bottom"][i] + box["top"][i] + box["front"][i] + box["back"][i] for i in range(self.velocity_set.d)]
         walls = np.unique(np.array(walls), axis=-1).tolist()
 
-        # Load the mesh (replace with your own mesh)
-        stl_filename = "examples/cfd/stl-files/DrivAer-Notchback.stl"
-        mesh = trimesh.load_mesh(stl_filename, process=False)
-        mesh_vertices = mesh.vertices
+        # # Load the mesh (replace with your own mesh)
+        # stl_filename = "examples/cfd/stl-files/DrivAer-Notchback.stl"
+        # mesh = trimesh.load_mesh(stl_filename, process=False)
+        # mesh_vertices = mesh.vertices
 
-        # Transform the mesh points to be located in the right position in the wind tunnel
-        mesh_vertices -= mesh_vertices.min(axis=0)
-        mesh_extents = mesh_vertices.max(axis=0)
-        length_phys_unit = mesh_extents.max()
-        length_lbm_unit = self.grid_shape[0] / 4
-        dx = length_phys_unit / length_lbm_unit
-        shift = np.array([self.grid_shape[0] * dx / 4, (self.grid_shape[1] * dx - mesh_extents[1]) / 2, 0.0])
-        car = mesh_vertices + shift
-        self.grid_spacing = dx
-        self.car_cross_section = np.prod(mesh_extents[1:]) / dx**2
+        # # Transform the mesh points to be located in the right position in the wind tunnel
+        # mesh_vertices -= mesh_vertices.min(axis=0)
+        # mesh_extents = mesh_vertices.max(axis=0)
+        # length_phys_unit = mesh_extents.max()
+        # length_lbm_unit = self.grid_shape[0] / 4
+        # dx = length_phys_unit / length_lbm_unit
+        # shift = np.array([self.grid_shape[0] * dx / 4, (self.grid_shape[1] * dx - mesh_extents[1]) / 2, 0.0])
+        # car = mesh_vertices + shift
+        # self.grid_spacing = dx
+        # self.car_cross_section = np.prod(mesh_extents[1:]) / dx**2
 
-        return inlet, outlet, walls, car
+        return inlet, outlet, walls
 
     def setup_boundary_conditions(self):
-        inlet, outlet, walls, car = self.define_boundary_indices()
+        inlet, outlet, walls = self.define_boundary_indices()
         bc_left = EquilibriumBC(rho=1.0, u=(self.wind_speed, 0.0, 0.0), indices=inlet)
         # bc_left = RegularizedBC('velocity', (self.wind_speed, 0.0, 0.0), indices=inlet)
         bc_walls = FullwayBounceBackBC(indices=walls)
         bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
         # bc_car = HalfwayBounceBackBC(mesh_vertices=car)
-        bc_car = GradsApproximationBC(mesh_vertices=car)
+        # bc_car = GradsApproximationBC(mesh_vertices=car)
         # bc_car = FullwayBounceBackBC(mesh_vertices=car)
-        self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
+        self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing]
 
     def setup_boundary_masker(self):
         # check boundary condition list for duplicate indices before creating bc mask
@@ -128,18 +128,18 @@ class WindTunnel3D:
         #     precision_policy=self.precision_policy,
         #     compute_backend=self.backend,
         # )
-        mesh_distance_boundary_masker = MeshDistanceBoundaryMasker(
-            velocity_set=self.velocity_set,
-            precision_policy=self.precision_policy,
-            compute_backend=self.backend,
-        )
+        # mesh_distance_boundary_masker = MeshDistanceBoundaryMasker(
+        #     velocity_set=self.velocity_set,
+        #     precision_policy=self.precision_policy,
+        #     compute_backend=self.backend,
+        # )
         bclist_other = self.boundary_conditions[:-1]
-        bc_mesh = self.boundary_conditions[-1]
-        dx = self.grid_spacing
-        origin, spacing = (0, 0, 0), (dx, dx, dx)
+        # bc_mesh = self.boundary_conditions[-1]
+        # dx = self.grid_spacing
+        # origin, spacing = (0, 0, 0), (dx, dx, dx)
         self.bc_mask, self.missing_mask = indices_boundary_masker(bclist_other, self.bc_mask, self.missing_mask)
         # self.bc_mask, self.missing_mask = mesh_boundary_masker(bc_mesh, origin, spacing, self.bc_mask, self.missing_mask)
-        self.bc_mask, self.missing_mask, self.f_1 = mesh_distance_boundary_masker(bc_mesh, origin, spacing, self.bc_mask, self.missing_mask, self.f_1)
+        # self.bc_mask, self.missing_mask, self.f_1 = mesh_distance_boundary_masker(bc_mesh, origin, spacing, self.bc_mask, self.missing_mask, self.f_1)
 
     def initialize_fields(self):
         self.f_0 = initialize_eq(self.f_0, self.grid, self.velocity_set, self.precision_policy, self.backend)
