@@ -26,6 +26,17 @@ import matplotlib.pyplot as plt
 
 class WindTunnel3D:
     def __init__(self, omega, wind_speed, grid_shape, velocity_set, backend, precision_policy):
+        # ==================
+        # Important note:
+        # ==================
+        # The default max_unroll value in Warp is 16 which means for-loops over the lattice directions
+        # for D3Q27 and D3Q27 lattices are not unrolled statically by default during the code generation of Warp.
+        # Depending on the problem and the collision operator, one might get substantially better performance
+        # by changing the default max_unroll values to > Q=27 (e.g. 32 below). The user is advised to either
+        # increase max_unroll or not after some experimentation for a given problem.
+        # In the current example, increasing max_unroll leads to about 8 times speed ups (on an A6000 GPU).
+        wp.config.max_unroll = 32
+
         # initialize backend
         xlb.init(
             velocity_set=velocity_set,
@@ -75,7 +86,7 @@ class WindTunnel3D:
         walls = np.unique(np.array(walls), axis=-1).tolist()
 
         # Load the mesh (replace with your own mesh)
-        stl_filename = "../stl-files/DrivAer-Notchback.stl"
+        stl_filename = "examples/cfd/stl-files/DrivAer-Notchback.stl"
         mesh = trimesh.load_mesh(stl_filename, process=False)
         mesh_vertices = mesh.vertices
 
@@ -137,22 +148,19 @@ class WindTunnel3D:
     def setup_stepper(self):
         self.stepper = IncompressibleNavierStokesStepper(self.omega, boundary_conditions=self.boundary_conditions, collision_type="KBC")
 
-    def run(self, num_steps, print_interval, post_process_interval=100):
+    def run(self, num_steps, post_process_interval=100):
         # Setup the operator for computing surface forces at the interface of the specified BC
-        bc_car = self.boundary_conditions[-1]
-        self.momentum_transfer = MomentumTransfer(bc_car)
+        # bc_car = self.boundary_conditions[-1]
+        # self.momentum_transfer = MomentumTransfer(bc_car)
 
+        wp.synchronize()
         start_time = time.time()
         for i in range(num_steps):
             self.f_0, self.f_1 = self.stepper(self.f_0, self.f_1, self.bc_mask, self.missing_mask, i)
             self.f_0, self.f_1 = self.f_1, self.f_0
-
-            if (i + 1) % print_interval == 0:
-                elapsed_time = time.time() - start_time
-                print(f"Iteration: {i + 1}/{num_steps} | Time elapsed: {elapsed_time:.2f}s")
-
-            if i % post_process_interval == 0 or i == num_steps - 1:
-                self.post_process(i)
+        wp.synchronize()
+        elapsed_time = time.time() - start_time
+        return elapsed_time
 
     def post_process(self, i):
         # Write the results. We'll use JAX backend for the post-processing
@@ -222,8 +230,15 @@ class WindTunnel3D:
         plt.close()
 
 
+def calculate_mlups(total_voxels, num_steps, elapsed_time):
+    total_lattice_updates = total_voxels * num_steps
+    mlups = (total_lattice_updates / elapsed_time) / 1e6
+    return mlups
+
+
 if __name__ == "__main__":
     # Grid parameters
+    # wp.clear_kernel_cache()
     grid_size_x, grid_size_y, grid_size_z = 512, 128, 128
     grid_shape = (grid_size_x, grid_size_y, grid_size_z)
 
@@ -232,7 +247,7 @@ if __name__ == "__main__":
     precision_policy = PrecisionPolicy.FP32FP32
     velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, backend=backend)
     wind_speed = 0.02
-    num_steps = 100000
+    num_steps = 2000
     print_interval = 1000
 
     # Set up Reynolds number and deduce relaxation time (omega)
@@ -255,4 +270,10 @@ if __name__ == "__main__":
     print("\n" + "=" * 50 + "\n")
 
     simulation = WindTunnel3D(omega, wind_speed, grid_shape, velocity_set, backend, precision_policy)
-    simulation.run(num_steps, print_interval, post_process_interval=1000)
+    # wp.force_load(device=wp.get_device())
+    # wp.load_module('xlb.operator.stepper.nse_stepper', device=wp.get_device())
+    simulation.run(1000)
+    elapsed_time = simulation.run(num_steps)
+    mlups = calculate_mlups(grid_size_x * grid_size_y * grid_size_z, num_steps, elapsed_time)
+    print(f"Simulation completed in {elapsed_time:.2f} seconds")
+    print(f"MLUPs: {mlups:.2f}")
