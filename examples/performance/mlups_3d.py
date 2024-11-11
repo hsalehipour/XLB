@@ -8,6 +8,7 @@ from xlb.helper import create_nse_fields, initialize_eq
 from xlb.operator.stepper import IncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import FullwayBounceBackBC, EquilibriumBC
 from xlb.distribute import distribute
+from xlb.operator.boundary_condition.boundary_condition_registry import boundary_condition_registry
 
 
 def parse_arguments():
@@ -31,8 +32,9 @@ def setup_simulation(args):
     if precision_policy is None:
         raise ValueError("Invalid precision")
 
+    wp.config.max_unroll = 32
     xlb.init(
-        velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, backend=backend),
+        velocity_set=xlb.velocity_set.D3Q27(precision_policy=precision_policy, backend=backend),
         default_backend=backend,
         default_precision_policy=precision_policy,
     )
@@ -64,13 +66,13 @@ def setup_boundary_conditions(grid):
 
 def run(f_0, f_1, backend, precision_policy, grid, bc_mask, missing_mask, num_steps):
     omega = 1.0
-    stepper = IncompressibleNavierStokesStepper(omega, boundary_conditions=setup_boundary_conditions(grid))
+    stepper = IncompressibleNavierStokesStepper(omega, boundary_conditions=setup_boundary_conditions(grid), collision_type='KBC')
 
     if backend == ComputeBackend.JAX:
         stepper = distribute(
             stepper,
             grid,
-            xlb.velocity_set.D3Q19(precision_policy=precision_policy, backend=backend),
+            xlb.velocity_set.D3Q27(precision_policy=precision_policy, backend=backend),
         )
 
     start_time = time.time()
@@ -93,10 +95,15 @@ def calculate_mlups(cube_edge, num_steps, elapsed_time):
 def main():
     args = parse_arguments()
     backend, precision_policy = setup_simulation(args)
-    velocity_set = xlb.velocity_set.D3Q19(precision_policy=precision_policy, backend=backend)
+    velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, backend=backend)
     grid, f_0, f_1, missing_mask, bc_mask = create_grid_and_fields(args.cube_edge)
     f_0 = initialize_eq(f_0, grid, velocity_set, precision_policy, backend)
 
+    # Run for 1 iteration so that compilation time does not appear next when the gen code is cached.
+    # elapsed_time = run(f_0, f_1, backend, precision_policy, grid, bc_mask, missing_mask, 1)
+    # boundary_condition_registry.reset()
+
+    # Run with given number of steps and record MLUPs
     elapsed_time = run(f_0, f_1, backend, precision_policy, grid, bc_mask, missing_mask, args.num_steps)
     mlups = calculate_mlups(args.cube_edge, args.num_steps, elapsed_time)
 
