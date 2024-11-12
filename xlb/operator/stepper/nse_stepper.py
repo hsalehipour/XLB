@@ -195,10 +195,10 @@ class IncompressibleNavierStokesStepper(Stepper):
             # Store the result in f_1
             for l in range(self.velocity_set.q):
                 # TODO: Improve this later
-                if wp.static("GradsApproximationBC" in active_bcs):
-                    if _boundary_id == wp.static(boundary_condition_registry.bc_to_id["GradsApproximationBC"]):
-                        if _missing_mask[l] == wp.uint8(1):
-                            f_0[_opp_indices[l], index[0], index[1], index[2]] = self.store_dtype(_f1_thread[_opp_indices[l]])
+                # if wp.static("GradsApproximationBC" in active_bcs):
+                #     if _boundary_id == wp.static(boundary_condition_registry.bc_to_id["GradsApproximationBC"]):
+                #         if _missing_mask[l] == wp.uint8(1):
+                #             f_0[_opp_indices[l], index[0], index[1], index[2]] = self.store_dtype(_f1_thread[_opp_indices[l]])
                 f_1[l, index[0], index[1], index[2]] = self.store_dtype(_f_post_collision[l])
 
         return None, kernel

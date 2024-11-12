@@ -111,34 +111,6 @@ class GradsApproximationBC(BoundaryCondition):
         # diagonal = wp.vec3i(0, 3, 5) if _d == 3 else wp.vec2i(0, 2)
 
         @wp.func
-        def regularize_fpop(
-            missing_mask: Any,
-            rho: Any,
-            u: Any,
-            fpop: Any,
-        ):
-            """
-            Regularizes the distribution functions by adding non-equilibrium contributions based on second moments of fpop.
-            """
-            # Compute momentum flux of off-equilibrium populations for regularization: Pi^1 = Pi^{neq}
-            feq = self.equilibrium.warp_functional(rho, u)
-            f_neq = fpop - feq
-            PiNeq = self.momentum_flux.warp_functional(f_neq)
-
-            # Compute double dot product Qi:Pi1 (where Pi1 = PiNeq)
-            nt = _d * (_d + 1) // 2
-            for l in range(_q):
-                QiPi1 = self.compute_dtype(0.0)
-                for t in range(nt):
-                    QiPi1 += _qi[l, t] * PiNeq[t]
-
-                # assign all populations based on eq 45 of Latt et al (2008)
-                # fneq ~ f^1
-                fpop1 = self.compute_dtype(4.5) * _w[l] * QiPi1
-                fpop[l] = feq[l] + fpop1
-            return fpop
-
-        @wp.func
         def grads_approximate_fpop(
             missing_mask: Any,
             rho: Any,
@@ -218,11 +190,39 @@ class GradsApproximationBC(BoundaryCondition):
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
+            # RUN 1:
+            f_result = self.equilibrium.warp_functional(rho, u)
+            # RUN 2:
+            # f_result = closure(rho, u)
+            # RUN 2:
+            # f_result = closure_with_extra_parameters(missing_mask, rho, u, f_post)
+            return f_result
 
-            # Compute Grad's appriximation using full equation as in Eq (10) of Dorschner et al.
-            f_post = regularize_fpop(missing_mask, rho, u, f_post)
-            # f_post = grads_approximate_fpop(missing_mask, rho, u, f_post)
-            return f_post
+        @wp.func
+        def closure(
+            rho: Any,
+            u: Any,
+        ):
+            """
+            Regularizes the distribution functions by adding non-equilibrium contributions based on second moments of fpop.
+            """
+            # Compute momentum flux of off-equilibrium populations for regularization: Pi^1 = Pi^{neq}
+            feq = self.equilibrium.warp_functional(rho, u)
+            return feq
+
+        @wp.func
+        def closure_with_extra_parameters(
+            missing_mask: Any,
+            rho: Any,
+            u: Any,
+            fpop: Any,
+        ):
+            """
+            Regularizes the distribution functions by adding non-equilibrium contributions based on second moments of fpop.
+            """
+            # Compute momentum flux of off-equilibrium populations for regularization: Pi^1 = Pi^{neq}
+            feq = self.equilibrium.warp_functional(rho, u)
+            return feq
 
         # Construct the functionals for this BC
         @wp.func
