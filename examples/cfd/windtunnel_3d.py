@@ -10,6 +10,7 @@ from xlb.operator.boundary_condition import (
     FullwayBounceBackBC,
     RegularizedBC,
     ExtrapolationOutflowBC,
+    HybridBC,
 )
 from xlb.operator.force.momentum_transfer import MomentumTransfer
 from xlb.operator.macroscopic import Macroscopic
@@ -54,14 +55,6 @@ class WindTunnel3D:
         # Initialize fields using the stepper
         self.f_0, self.f_1, self.bc_mask, self.missing_mask = self.stepper.prepare_fields()
 
-    def voxelize_stl(self, stl_filename, length_lbm_unit):
-        mesh = trimesh.load_mesh(stl_filename, process=False)
-        length_phys_unit = mesh.extents.max()
-        pitch = length_phys_unit / length_lbm_unit
-        mesh_voxelized = mesh.voxelized(pitch=pitch)
-        mesh_matrix = mesh_voxelized.matrix
-        return mesh_matrix, pitch
-
     def define_boundary_indices(self):
         box = self.grid.bounding_box_indices()
         box_no_edge = self.grid.bounding_box_indices(remove_edges=True)
@@ -93,7 +86,8 @@ class WindTunnel3D:
         bc_left = RegularizedBC("velocity", prescribed_value=(self.wind_speed, 0.0, 0.0), indices=inlet)
         bc_walls = FullwayBounceBackBC(indices=walls)
         bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
-        bc_car = HalfwayBounceBackBC(mesh_vertices=car)
+        bc_car = HybridBC(bc_method="dorschner_localized", mesh_vertices=car)
+        # bc_car = HybridBC(bc_method='bounceback_regularized', mesh_vertices=car)
         self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
     def setup_stepper(self):
@@ -180,7 +174,7 @@ class WindTunnel3D:
         if len(self.time_steps) > 100000:
             plt.plot(self.time_steps[99999:], self.drag_coefficients_ma_100000, label="MA 100,000")
 
-        plt.ylim(-1.0, 1.0)
+        # plt.ylim(-1.0, 1.0)
         plt.legend()
         plt.xlabel("Time step")
         plt.ylabel("Drag coefficient")
@@ -203,7 +197,7 @@ if __name__ == "__main__":
     print_interval = 1000
 
     # Set up Reynolds number and deduce relaxation time (omega)
-    Re = 50000.0
+    Re = 500000000.0
     clength = grid_size_x - 1
     visc = wind_speed * clength / Re
     omega = 1.0 / (3.0 * visc + 0.5)
