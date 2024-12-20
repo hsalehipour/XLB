@@ -84,14 +84,15 @@ class IncompressibleNavierStokesStepper(Stepper):
             wp.copy(f_1, f_0)
 
         # Process boundary conditions and update masks
-        bc_mask, missing_mask = self._process_boundary_conditions(self.boundary_conditions, bc_mask, missing_mask)
+        f_0, f_1, bc_mask, missing_mask = self._process_boundary_conditions(self.boundary_conditions, f_0, f_1, bc_mask, missing_mask)
+
         # Initialize auxiliary data if needed
         f_0, f_1 = self._initialize_auxiliary_data(self.boundary_conditions, f_0, f_1, bc_mask, missing_mask)
 
         return f_0, f_1, bc_mask, missing_mask
 
     @classmethod
-    def _process_boundary_conditions(cls, boundary_conditions, bc_mask, missing_mask):
+    def _process_boundary_conditions(cls, boundary_conditions, f_0, f_1, bc_mask, missing_mask):
         """Process boundary conditions and update boundary masks."""
         # Check for boundary condition overlaps
         check_bc_overlaps(boundary_conditions, DefaultConfig.velocity_set.d, DefaultConfig.default_backend)
@@ -115,9 +116,9 @@ class IncompressibleNavierStokesStepper(Stepper):
                 compute_backend=DefaultConfig.default_backend,
             )
             for bc in bc_with_vertices:
-                bc_mask, missing_mask = mesh_masker(bc, bc_mask, missing_mask)
+                f_0, f_1, bc_mask, missing_mask = mesh_masker(bc, f_0, f_1, bc_mask, missing_mask)
 
-        return bc_mask, missing_mask
+        return f_0, f_1, bc_mask, missing_mask
 
     @staticmethod
     def _initialize_auxiliary_data(boundary_conditions, f_0, f_1, bc_mask, missing_mask):
@@ -183,15 +184,12 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         # Read the list of bc_to_id created upon instantiation
         bc_to_id = boundary_condition_registry.bc_to_id
-        id_to_bc = boundary_condition_registry.id_to_bc
 
         # Gather IDs of ExtrapolationOutflowBC boundary conditions
         extrapolation_outflow_bc_ids = []
         for bc_name, bc_id in bc_to_id.items():
             if bc_name.startswith("ExtrapolationOutflowBC"):
                 extrapolation_outflow_bc_ids.append(bc_id)
-        # Group active boundary conditions
-        active_bcs = set(boundary_condition_registry.id_to_bc[bc.id] for bc in self.boundary_conditions)
 
         _opp_indices = self.velocity_set.opp_indices
 

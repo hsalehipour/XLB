@@ -73,8 +73,12 @@ class HybridBC(BoundaryCondition):
         self.equilibrium = QuadraticEquilibrium()
         self.momentum_flux = MomentumFlux()
 
-        # This BC needs implicit distance to the mesh
-        self.needs_mesh_distance = False
+        if self.bc_method == "dorschner_localized":
+            # This BC needs implicit distance to the mesh
+            self.needs_mesh_distance = True
+
+            # This BC needs auxilary data recovery after streaming
+            self.needs_aux_recovery = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions
         # when imposed on a geometry that is in the domain interior
@@ -207,9 +211,10 @@ class HybridBC(BoundaryCondition):
             #    NOTE: this is very similar to the regularization procedure.
 
             _f_nbr = _f_vec()
-            u_target = _u_vec(0.0, 0.0, 0.0)
-            num_missing = self.compute_dtype(0.0)
+            zero = self.compute_dtype(0.0)
             one = self.compute_dtype(1.0)
+            u_target = _u_vec(zero, zero, zero)
+            num_missing = self.compute_dtype(0.0)
             for l in range(_q):
                 # If the mask is missing then take the opposite index
                 if missing_mask[l] == wp.uint8(1):
@@ -228,7 +233,6 @@ class HybridBC(BoundaryCondition):
 
                     # The implicit distance to the boundary or "weights" have been stored in known directions of f_1
                     weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
-                    # weight = self.compute_dtype(0.5)
 
                     # Given "weights", "u_w" (input to the BC) and "u_f" (computed from f_aux), compute "u_target" as per Eq (14)
                     for d in range(_d):
