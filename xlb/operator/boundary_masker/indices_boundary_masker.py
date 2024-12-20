@@ -35,8 +35,9 @@ class IndicesBoundaryMasker(Operator):
         :param shape: Tuple representing the shape of the domain (nx, ny) for 2D or (nx, ny, nz) for 3D.
         :return: Array of boolean flags where each flag indicates whether the corresponding index is inside the bounds.
         """
+        d = self.velocity_set.d
         shape_array = np.array(shape)
-        return np.all((indices > 0) & (indices < shape_array[:, np.newaxis] - 1), axis=0)
+        return np.all((indices[:d] > 0) & (indices[:d] < shape_array[:d, np.newaxis] - 1), axis=0)
 
     @Operator.register_backend(ComputeBackend.JAX)
     # TODO HS: figure out why uncommenting the line below fails unlike other operators!
@@ -51,12 +52,12 @@ class IndicesBoundaryMasker(Operator):
         # For now, we compute the bmap on GPU zero.
         if dim == 2:
             bmap = jnp.zeros((pad_x * 2 + bc_mask[0].shape[0], pad_y * 2 + bc_mask[0].shape[1]), dtype=jnp.uint8)
-            bmap = bmap.at[pad_x : -pad_x, pad_y : -pad_y].set(bc_mask[0])
+            bmap = bmap.at[pad_x:-pad_x, pad_y:-pad_y].set(bc_mask[0])
             grid_mask = jnp.pad(missing_mask, ((0, 0), (pad_x, pad_x), (pad_y, pad_y)), constant_values=True)
             # bmap = jnp.pad(bc_mask[0], ((pad_x, pad_x), (pad_y, pad_y)), constant_values=0)
         if dim == 3:
             bmap = jnp.zeros((pad_x * 2 + bc_mask[0].shape[0], pad_y * 2 + bc_mask[0].shape[1], pad_z * 2 + bc_mask[0].shape[2]), dtype=jnp.uint8)
-            bmap = bmap.at[pad_x : -pad_x, pad_y : -pad_y, pad_z : -pad_z].set(bc_mask[0])
+            bmap = bmap.at[pad_x:-pad_x, pad_y:-pad_y, pad_z:-pad_z].set(bc_mask[0])
             grid_mask = jnp.pad(missing_mask, ((0, 0), (pad_x, pad_x), (pad_y, pad_y), (pad_z, pad_z)), constant_values=True)
             # bmap = jnp.pad(bc_mask[0], ((pad_x, pad_x), (pad_y, pad_y), (pad_z, pad_z)), constant_values=0)
 
