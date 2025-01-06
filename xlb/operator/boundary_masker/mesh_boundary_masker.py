@@ -142,13 +142,13 @@ class MeshBoundaryMasker(Operator):
                             # We reduce the distance to give some wall thickness
                             dist = wp.length(pos_mesh - pos_bc_cell) - 0.5 * max_length
                             weight = self.store_dtype(dist / max_length)
-                            f_1[_opp_indices[l], index[0], index[1], index[2]] = weight
+                            f_1[l, index[0], index[1], index[2]] = weight
                             # if weight <= 0.0 or weight > 1.0:
                             #     wp.printf("Got bad weight %f at %d,%d,%d\n", weight, index[0], index[1], index[2])
                         else:
                             # We didn't have an intersection in the given direction but we know we should so we assume the solid is slightly thicker
                             # and our other voxel is right at the other edge of the solid and hence we set weight to 0.0
-                            f_1[_opp_indices[l], index[0], index[1], index[2]] = self.store_dtype(0.0)
+                            f_1[l, index[0], index[1], index[2]] = self.store_dtype(0.0)
 
         return None, (kernel, kernel_wtih_distance)
 
