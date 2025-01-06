@@ -56,9 +56,6 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             mesh_vertices,
         )
 
-        # Set the flag for auxilary data recovery
-        self.needs_aux_recovery = True
-
         # find and store the normal vector using indices
         self._get_normal_vec(indices)
 
