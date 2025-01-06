@@ -77,7 +77,7 @@ class HybridBC(BoundaryCondition):
             # This BC needs implicit distance to the mesh
             self.needs_mesh_distance = True
 
-            # This BC needs auxilary data recovery after streaming
+            # This BC needs auxiliary data recovery after streaming
             self.needs_aux_recovery = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions

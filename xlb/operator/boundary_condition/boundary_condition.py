@@ -59,16 +59,16 @@ class BoundaryCondition(Operator):
         # A flag for BCs that need implicit boundary distance between the grid and a mesh (to be set to True if applicable inside each BC)
         self.needs_mesh_distance = False
 
-        # A flag for BCs that need auxilary data initialization before stepper
+        # A flag for BCs that need auxiliary data initialization before stepper
         self.needs_aux_init = False
 
-        # A flag to track if the BC is initialized with auxilary data
+        # A flag to track if the BC is initialized with auxiliary data
         self.is_initialized_with_aux_data = False
 
-        # Number of auxilary data needed for the BC (for prescribed values)
+        # Number of auxiliary data needed for the BC (for prescribed values)
         self.num_of_aux_data = 0
 
-        # A flag for BCs that need auxilary data recovery after streaming
+        # A flag for BCs that need auxiliary data recovery after streaming
         self.needs_aux_recovery = False
 
         if self.compute_backend == ComputeBackend.WARP:
@@ -77,7 +77,7 @@ class BoundaryCondition(Operator):
             _missing_mask_vec = wp.vec(self.velocity_set.q, dtype=wp.uint8)  # TODO fix vec bool
 
         @wp.func
-        def update_bc_auxilary_data(
+        def assemble_dynamic_data(
             index: Any,
             timestep: Any,
             missing_mask: Any,
@@ -116,12 +116,12 @@ class BoundaryCondition(Operator):
         # Construct some helper warp functions for getting tid data
         if self.compute_backend == ComputeBackend.WARP:
             self._get_thread_data = _get_thread_data
-            self.update_bc_auxilary_data = update_bc_auxilary_data
+            self.assemble_dynamic_data = assemble_dynamic_data
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def update_bc_auxilary_data(self, f_pre, f_post, bc_mask, missing_mask):
+    def assemble_dynamic_data(self, f_pre, f_post, bc_mask, missing_mask):
         """
-        A placeholder function for prepare the auxilary distribution functions for the boundary condition.
+        A placeholder function for prepare the auxiliary distribution functions for the boundary condition.
         currently being called after collision only.
         """
         return f_post
@@ -163,7 +163,7 @@ class BoundaryCondition(Operator):
 
     def _construct_aux_data_init_kernel(self, functional):
         """
-        Constructs the warp kernel for the auxilary data recovery.
+        Constructs the warp kernel for the auxiliary data recovery.
         """
         _id = wp.uint8(self.id)
         _opp_indices = self.velocity_set.opp_indices
