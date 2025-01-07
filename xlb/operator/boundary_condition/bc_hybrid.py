@@ -73,12 +73,12 @@ class HybridBC(BoundaryCondition):
         self.equilibrium = QuadraticEquilibrium()
         self.momentum_flux = MomentumFlux()
 
-        if self.bc_method == "dorschner_localized":
-            # This BC needs implicit distance to the mesh
-            self.needs_mesh_distance = True
+        # if self.bc_method == "dorschner_localized":
+        #     # This BC needs implicit distance to the mesh
+        #     self.needs_mesh_distance = True
 
-            # This BC needs auxiliary data recovery after streaming
-            self.needs_aux_recovery = True
+        #     # This BC needs auxiliary data recovery after streaming
+        #     self.needs_aux_recovery = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions
         # when imposed on a geometry that is in the domain interior

@@ -82,7 +82,7 @@ class MeshBoundaryMasker(Operator):
                 # Make solid voxel
                 bc_mask[0, index[0], index[1], index[2]] = wp.uint8(255)
             else:
-                # Find the fractional distance to the mesh in each direction
+                # Find the boundary voxels and their missing directions
                 for l in range(1, _q):
                     _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))
 
@@ -120,7 +120,7 @@ class MeshBoundaryMasker(Operator):
                 # Make solid voxel
                 bc_mask[0, index[0], index[1], index[2]] = wp.uint8(255)
             else:
-                # Find the fractional distance to the mesh in each direction
+                # Find the boundary voxels and their missing directions
                 for l in range(1, _q):
                     _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))
 
@@ -133,6 +133,7 @@ class MeshBoundaryMasker(Operator):
                         bc_mask[0, index[0], index[1], index[2]] = wp.uint8(id_number)
                         missing_mask[_opp_indices[l], index[0], index[1], index[2]] = True
 
+                        # Find the fractional distance to the mesh in each direction
                         # We increase max_length to find intersections in neighboring cells
                         max_length = wp.length(_dir)
                         query = wp.mesh_query_ray(mesh_id, pos_bc_cell, _dir / max_length, max_length)
