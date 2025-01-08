@@ -164,11 +164,13 @@ def moving_wall_fpop_correction(
 
 @wp.func
 def interpolated_bounceback(
+    index: Any,
     missing_mask: Any,
     f_0: Any,
     f_1: Any,
     f_pre: Any,
     f_post: Any,
+    needs_mesh_distance: bool,
 ):
     # A local single-node version of the interpolated bounce-back boundary condition due to Bouzidi for a lattice
     # Boltzmann method simulation.
@@ -181,9 +183,11 @@ def interpolated_bounceback(
         # If the mask is missing then take the opposite index
         if missing_mask[l] == wp.uint8(1):
             # The implicit distance to the boundary or "weights" have been stored in known directions of f_1
-            # weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
-            # TODO: use weights associated with curved boundaries that are properly stored in f_1. There needs to be an input flag for this!
-            weight = compute_dtype(0.5)
+            if needs_mesh_distance:
+                # use weights associated with curved boundaries that are properly stored in f_1.
+                weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+            else:
+                weight = compute_dtype(0.5)
 
             # Use differentiable interpolated BB to find f_missing:
             f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)

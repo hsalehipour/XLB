@@ -46,6 +46,7 @@ class HybridBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        use_mesh_distance=False,
     ):
         assert bc_method in [
             "bounceback_regularized",
@@ -73,17 +74,23 @@ class HybridBC(BoundaryCondition):
         self.equilibrium = QuadraticEquilibrium()
         self.momentum_flux = MomentumFlux()
 
-        # if self.bc_method == "dorschner_localized":
-        #     # This BC needs implicit distance to the mesh
-        #     self.needs_mesh_distance = True
-
-        #     # This BC needs auxiliary data recovery after streaming
-        #     self.needs_aux_recovery = True
+        self.needs_mesh_distance = use_mesh_distance
+        if self.bc_method == "dorschner_localized":
+            # Note: "dorschner_localized" BC could also benefit from mesh_distance information but because this BC relies on
+            # neighbours populations it reads from f_0 while "apply_aux_recovery_bc" routine also writes to f_0 and hence
+            # there is race conditioning. We cannot store weights in f_0 similar to how it is assembled for ExtrapolationOutflow
+            # because during post-streaming where BC is imposed we need not only the post-collision values but also the mesh distance
+            assert self.needs_mesh_distance is False, NotImplementedError(f"Mesh distance is not implemented for this BC yet! ")
+        # This BC needs implicit distance to the mesh
+        elif self.needs_mesh_distance:
+            # This BC needs auxiliary data recovery after streaming
+            self.needs_aux_recovery = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions
         # when imposed on a geometry that is in the domain interior
         if self.mesh_vertices is None:
             assert self.indices is not None
+            assert self.needs_mesh_distance is False, f'To use mesh distance, please provide the mesh vertices using keyword "mesh_vertices"!'
             self.needs_padding = True
 
         # Raise error if used for 2d examples:
@@ -141,7 +148,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = interpolated_bounceback(missing_mask, f_0, f_1, f_pre, f_post)
+            f_post = interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -169,7 +176,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = interpolated_bounceback(missing_mask, f_0, f_1, f_pre, f_post)
+            f_post = interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -232,7 +239,8 @@ class HybridBC(BoundaryCondition):
                     _, u_f = self.macroscopic.warp_functional(_f_nbr)
 
                     # The implicit distance to the boundary or "weights" have been stored in known directions of f_1
-                    weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                    # weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                    weight = self.compute_dtype(0.1)
 
                     # Given "weights", "u_w" (input to the BC) and "u_f" (computed from f_aux), compute "u_target" as per Eq (14)
                     for d in range(_d):
