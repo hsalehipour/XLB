@@ -182,7 +182,7 @@ def interpolated_bounceback(
     for l in range(_q):
         # If the mask is missing then take the opposite index
         if missing_mask[l] == wp.uint8(1):
-            # The implicit distance to the boundary or "weights" have been stored in known directions of f_1
+            # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
             if needs_mesh_distance:
                 # use weights associated with curved boundaries that are properly stored in f_1.
                 weight = f_1[_opp_indices[l], index[0], index[1], index[2]]

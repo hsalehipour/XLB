@@ -197,8 +197,9 @@ class IncompressibleNavierStokesStepper(Stepper):
         def apply_bc(
             index: Any,
             timestep: Any,
+            bc_mask: Any,
             _boundary_id: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -212,15 +213,22 @@ class IncompressibleNavierStokesStepper(Stepper):
                 if is_post_streaming:
                     if wp.static(self.boundary_conditions[i].implementation_step == ImplementationStep.STREAMING):
                         if _boundary_id == wp.static(self.boundary_conditions[i].id):
-                            f_result = wp.static(self.boundary_conditions[i].warp_functional)(index, timestep, missing_mask, f_0, f_1, f_pre, f_post)
+                            if wp.static(self.boundary_conditions[i].needs_bc_mask):
+                                f_result = wp.static(self.boundary_conditions[i].warp_functional)(
+                                    index, timestep, bc_mask, _missing_mask, f_0, f_1, f_pre, f_post
+                                )
+                            else:
+                                f_result = wp.static(self.boundary_conditions[i].warp_functional)(
+                                    index, timestep, _missing_mask, f_0, f_1, f_pre, f_post
+                                )
                 else:
                     if wp.static(self.boundary_conditions[i].implementation_step == ImplementationStep.COLLISION):
                         if _boundary_id == wp.static(self.boundary_conditions[i].id):
-                            f_result = wp.static(self.boundary_conditions[i].warp_functional)(index, timestep, missing_mask, f_0, f_1, f_pre, f_post)
+                            f_result = wp.static(self.boundary_conditions[i].warp_functional)(index, timestep, _missing_mask, f_0, f_1, f_pre, f_post)
                     if wp.static(self.boundary_conditions[i].id in extrapolation_outflow_bc_ids):
                         if _boundary_id == wp.static(self.boundary_conditions[i].id):
                             f_result = wp.static(self.boundary_conditions[i].assemble_dynamic_data)(
-                                index, timestep, missing_mask, f_0, f_1, f_pre, f_post
+                                index, timestep, _missing_mask, f_0, f_1, f_pre, f_post
                             )
             return f_result
 
@@ -294,14 +302,14 @@ class IncompressibleNavierStokesStepper(Stepper):
             _f_post_collision = _f0_thread
 
             # Apply post-streaming boundary conditions
-            _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0, f_1, _f_post_collision, _f_post_stream, True)
+            _f_post_stream = apply_bc(index, timestep, bc_mask, _boundary_id, _missing_mask, f_0, f_1, _f_post_collision, _f_post_stream, True)
 
             _rho, _u = self.macroscopic.warp_functional(_f_post_stream)
             _feq = self.equilibrium.warp_functional(_rho, _u)
             _f_post_collision = self.collision.warp_functional(_f_post_stream, _feq, _rho, _u)
 
             # Apply post-collision boundary conditions
-            _f_post_collision = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0, f_1, _f_post_stream, _f_post_collision, False)
+            _f_post_collision = apply_bc(index, timestep, bc_mask, _boundary_id, _missing_mask, f_0, f_1, _f_post_stream, _f_post_collision, False)
 
             # Apply auxiliary recovery for boundary conditions (swapping)
             apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0, _f1_thread)

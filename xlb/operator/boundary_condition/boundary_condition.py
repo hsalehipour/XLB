@@ -56,7 +56,7 @@ class BoundaryCondition(Operator):
         # when inside/outside of the geoemtry is not known
         self.needs_padding = False
 
-        # A flag for BCs that need implicit boundary distance between the grid and a mesh (to be set to True if applicable inside each BC)
+        # A flag for BCs that need normalized distance between the grid and a mesh (to be set to True if applicable inside each BC)
         self.needs_mesh_distance = False
 
         # A flag for BCs that need auxiliary data initialization before stepper
@@ -70,6 +70,9 @@ class BoundaryCondition(Operator):
 
         # A flag for BCs that need auxiliary data recovery after streaming
         self.needs_aux_recovery = False
+
+        # A flag for BCs that also need access to the bc_mask field
+        self.needs_bc_mask = False
 
         if self.compute_backend == ComputeBackend.WARP:
             # Set local constants TODO: This is a hack and should be fixed with warp update

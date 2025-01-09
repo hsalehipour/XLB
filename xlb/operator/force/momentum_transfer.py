@@ -144,7 +144,14 @@ class MomentumTransfer(Operator):
                 # Apply streaming (pull method)
                 timestep = 0
                 f_post_stream = self.stream.warp_functional(f_0, index)
-                f_post_stream = self.no_slip_bc_instance.warp_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
+                if wp.static(self.no_slip_bc_instance.needs_bc_mask):
+                    f_post_stream = self.no_slip_bc_instance.warp_functional(
+                        index, timestep, bc_mask, _missing_mask, f_0, f_1, f_post_collision, f_post_stream
+                    )
+                else:
+                    f_post_stream = self.no_slip_bc_instance.warp_functional(
+                        index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream
+                    )
 
                 # Compute the momentum transfer
                 for d in range(self.velocity_set.d):

@@ -76,13 +76,14 @@ class HybridBC(BoundaryCondition):
 
         self.needs_mesh_distance = use_mesh_distance
         if self.bc_method == "dorschner_localized":
-            # Note: "dorschner_localized" BC could also benefit from mesh_distance information but because this BC relies on
-            # neighbours populations it reads from f_0 while "apply_aux_recovery_bc" routine also writes to f_0 and hence
-            # there is race conditioning. We cannot store weights in f_0 similar to how it is assembled for ExtrapolationOutflow
-            # because during post-streaming where BC is imposed we need not only the post-collision values but also the mesh distance
-            assert self.needs_mesh_distance is False, NotImplementedError(f"Mesh distance is not implemented for this BC yet! ")
-        # This BC needs implicit distance to the mesh
-        elif self.needs_mesh_distance:
+            # Note: "dorschner_localized" BC relies on neighbours populations it also needs bc_mask to ensure that the neighbouring cell
+            # is indeed a fluid cell and not another boundary cell that could lead to unwanted race conditioning.
+            self.needs_bc_mask = True
+            if not self.needs_mesh_distance:
+                print("\n WARNING! The ''dorschner_localized'' BC needs mesh distance! Continuing with use_mesh_distance=True!\n")
+
+        # This BC needs normalized distance to the mesh
+        if self.needs_mesh_distance:
             # This BC needs auxiliary data recovery after streaming
             self.needs_aux_recovery = True
 
@@ -190,7 +191,8 @@ class HybridBC(BoundaryCondition):
         def dorschner_localized(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            bc_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -199,23 +201,8 @@ class HybridBC(BoundaryCondition):
             # A localized reformulation of [1] derived by H. Salehipour.
             # [1] Dorschner, B., Chikatamarla, S. S., Bösch, F., & Karlin, I. V. (2015). Grad's approximation for moving and
             #     stationary walls in entropic lattice Boltzmann simulations. Journal of Computational Physics, 295, 340-354.
-            # NOTE: this BC has been reformulated to become entirely local and so has differences compared to the original paper.
-            #       Here we use the current time-step populations (f_pre = f_post_collision and f_post = f_post_streaming).
-            #
-            # here I need to compute all terms in Eq (10)
-            # Strategy:
-            # 1) "weights" should have been stored somewhere to be used here.
-            # 2) Given "weights", "u_w" (input to the BC) and "u_f" (computed from f_aux), compute "u_target" as per Eq (14)
-            #    NOTE: in the original paper "u_target" is associated with the previous time step not current time.
-            # 3) Given "weights" use differentiable interpolated BB to find f_missing as I had before:
-            # fmissing = ((1. - weights) * f_poststreaming_iknown + weights * (f_postcollision_imissing + f_postcollision_iknown)) / (1.0 + weights)
-            # 4) Add contribution due to u_w to f_missing as is usual in regular Bouzidi BC (ie. -6.0 * self.lattice.w * jnp.dot(self.vel, c)
-            # 5) Compute rho_target = \sum(f_ibb) based on these values
-            # 6) Compute feq using feq = self.equilibrium(rho_target, u_target)
-            # 7) Compute Pi_neq and Pi_eq using all f_post-streaming values as per:
-            #       Pi_neq = self.momentum_flux(fneq) and Pi_eq = self.momentum_flux(feq)
-            # 8) Compute Grad's appriximation using full equation as in Eq (10)
-            #    NOTE: this is very similar to the regularization procedure.
+            # NOTE: this BC has been reformulated to become less dependent on non-local information and so has differences
+            # compared to the original paper.
 
             _f_nbr = _f_vec()
             zero = self.compute_dtype(0.0)
@@ -224,23 +211,29 @@ class HybridBC(BoundaryCondition):
             num_missing = self.compute_dtype(0.0)
             for l in range(_q):
                 # If the mask is missing then take the opposite index
-                if missing_mask[l] == wp.uint8(1):
+                if _missing_mask[l] == wp.uint8(1):
                     # Get index associated with the fluid neighbours
                     fluid_nbr_index = type(index)()
                     for d in range(_d):
                         fluid_nbr_index[d] = index[d] + _c[d, l]
+
                     # Find the neighbour and its velocity value
-                    for ll in range(_q):
-                        # f_0 is the post-collision values of the current time-step
-                        # The following is the post-collision values of the fluid neighbor cell
-                        _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
+                    if bc_mask[0, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]] == wp.uint8(0):
+                        # The neighbour is fluid
+                        for ll in range(_q):
+                            # f_0 is the post-collision values of the current time-step
+                            # The following is the post-collision values of the fluid neighbor cell
+                            _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
 
-                    # Compute the velocity vector at the fluid neighbouring cells
-                    _, u_f = self.macroscopic.warp_functional(_f_nbr)
+                        # Compute the velocity vector at the fluid neighbouring cells
+                        _, u_f = self.macroscopic.warp_functional(_f_nbr)
+                    else:
+                        # Neighbour is a another boundary cell of the same type
+                        u_f = _u_wall
 
-                    # The implicit distance to the boundary or "weights" have been stored in known directions of f_1
-                    # weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
-                    weight = self.compute_dtype(0.1)
+                    # The mesh distance to the boundary or "weights" have been stored in known directions of f_1
+                    weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                    # weight = self.compute_dtype(0.1)
 
                     # Given "weights", "u_w" (input to the BC) and "u_f" (computed from f_aux), compute "u_target" as per Eq (14)
                     for d in range(_d):
