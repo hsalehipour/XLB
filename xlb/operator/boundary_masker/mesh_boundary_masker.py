@@ -188,9 +188,7 @@ class MeshBoundaryMasker(Operator):
             pos_bc_cell = index_to_position(index)
             half = wp.vec3(0.5, 0.5, 0.5)
 
-            vox_query = wp.mesh_query_aabb(mesh_id, pos_bc_cell - half, pos_bc_cell + half)
-            face = wp.int32(0)
-            if wp.mesh_query_aabb_next(vox_query, face):
+            if mesh_voxel_intersect(mesh_id=mesh_id, low=pos_bc_cell - half):
                 # Make solid voxel
                 bc_mask[0, index[0], index[1], index[2]] = wp.uint8(255)
             else:
@@ -198,10 +196,8 @@ class MeshBoundaryMasker(Operator):
                 for l in range(1, _q):
                     _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))
 
-                    # Check to see if this neighbor is solid
-                    vox_query_dir = wp.mesh_query_aabb(mesh_id, pos_bc_cell + _dir - half, pos_bc_cell + _dir + half)
-                    face = wp.int32(0)
-                    if wp.mesh_query_aabb_next(vox_query_dir, face):
+                    # Check to see if this neighbor is solid - this is super inefficient TODO: make it way better
+                    if mesh_voxel_intersect(mesh_id=mesh_id, low=pos_bc_cell + _dir - half):
                         # We know we have a solid neighbor
                         # Set the boundary id and missing_mask
                         bc_mask[0, index[0], index[1], index[2]] = wp.uint8(id_number)
