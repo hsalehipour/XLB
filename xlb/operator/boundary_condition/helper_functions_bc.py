@@ -170,7 +170,8 @@ class HelperFunctionsBC(object):
             lattice_direction: Any,
             f_post: Any,
         ):
-            # Add forcing term necessary to account for the local density changes caused by the mass displacement as the object moves with velocity u_w.
+            # Add forcing term necessary to account for the local density changes caused by the mass displacement
+            # as the object moves with velocity u_w.
             # [1] L.-S. Luo, Unified theory of lattice Boltzmann models for nonideal gases, Phys. Rev. Lett. 81 (1998) 1618-1621.
             # [2] L.-S. Luo, Theory of the lattice Boltzmann method: Lattice Boltzmann models for nonideal gases, Phys. Rev. E 62 (2000) 4982-4996.
             #
@@ -217,7 +218,8 @@ class HelperFunctionsBC(object):
                     # Use differentiable interpolated BB to find f_missing:
                     f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
 
-                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0. There needs to be an input flag for this!
+                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0.
+                    # There needs to be an input flag for this!
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
                     # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
             return f_post

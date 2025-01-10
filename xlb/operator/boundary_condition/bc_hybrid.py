@@ -61,7 +61,6 @@ class HybridBC(BoundaryCondition):
         self.macroscopic = Macroscopic()
         self.zero_moment = ZeroMoment()
         self.equilibrium = QuadraticEquilibrium()
-        self.momentum_flux = MomentumFlux()
 
         self.needs_mesh_distance = use_mesh_distance
         if self.bc_method == "dorschner_localized":
@@ -80,7 +79,7 @@ class HybridBC(BoundaryCondition):
         # when imposed on a geometry that is in the domain interior
         if self.mesh_vertices is None:
             assert self.indices is not None
-            assert self.needs_mesh_distance is False, f'To use mesh distance, please provide the mesh vertices using keyword "mesh_vertices"!'
+            assert self.needs_mesh_distance is False, 'To use mesh distance, please provide the mesh vertices using keyword "mesh_vertices"!'
             self.needs_padding = True
 
         # Raise error if used for 2d examples:
