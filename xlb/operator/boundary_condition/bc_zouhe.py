@@ -18,8 +18,8 @@ from xlb.operator.boundary_condition.boundary_condition import (
     ImplementationStep,
     BoundaryCondition,
 )
+from xlb.operator.boundary_condition import HelperFunctionsBC
 from xlb.operator.equilibrium import QuadraticEquilibrium
-import jax
 
 
 class ZouHeBC(BoundaryCondition):
@@ -270,8 +270,7 @@ class ZouHeBC(BoundaryCondition):
 
     def _construct_warp(self):
         # load helper functions
-        from xlb.helper.bc_warp_functions import get_normal_vectors, get_bc_fsum, bounceback_nonequilibrium
-
+        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=self.compute_backend)
         # Set local constants
         _d = self.velocity_set.d
         _q = self.velocity_set.q
@@ -291,10 +290,10 @@ class ZouHeBC(BoundaryCondition):
             _f = _f_post
 
             # Find normal vector
-            normals = get_normal_vectors(_missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # calculate rho
-            fsum = get_bc_fsum(_f, _missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = self.compute_dtype(0.0)
 
             # Find the value of u from the missing directions
@@ -310,7 +309,7 @@ class ZouHeBC(BoundaryCondition):
 
             # impose non-equilibrium bounceback
             _feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bounceback_nonequilibrium(_f, _feq, _missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, _feq, _missing_mask)
             return _f
 
         @wp.func
@@ -327,20 +326,20 @@ class ZouHeBC(BoundaryCondition):
             _f = _f_post
 
             # Find normal vector
-            normals = get_normal_vectors(_missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
             _rho = f_1[0, index[0], index[1], index[2]]
 
             # calculate velocity
-            fsum = get_bc_fsum(_f, _missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = -self.compute_dtype(1.0) + fsum / _rho
             _u = unormal * normals
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bounceback_nonequilibrium(_f, feq, _missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
             return _f
 
         if self.bc_type == "velocity":

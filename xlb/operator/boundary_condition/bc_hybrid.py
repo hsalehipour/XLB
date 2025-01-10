@@ -1,30 +1,19 @@
-"""
-Base class for boundary conditions in a LBM simulation.
-"""
-
-import jax.numpy as jnp
 from jax import jit
-import jax.lax as lax
 from functools import partial
 import warp as wp
 from typing import Any
-from collections import Counter
-import numpy as np
 
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
-from xlb.operator.macroscopic import Macroscopic
-from xlb.operator.macroscopic.zero_moment import ZeroMoment
-from xlb.operator.macroscopic.second_moment import SecondMoment as MomentumFlux
+from xlb.operator.macroscopic import Macroscopic, ZeroMoment
+from xlb.operator.macroscopic import SecondMoment as MomentumFlux
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator.boundary_condition.boundary_condition import (
     ImplementationStep,
     BoundaryCondition,
-)
-from xlb.operator.boundary_condition.boundary_condition_registry import (
-    boundary_condition_registry,
+    HelperFunctionsBC,
 )
 
 
@@ -118,7 +107,7 @@ class HybridBC(BoundaryCondition):
 
     def _construct_warp(self):
         # load helper functions
-        from xlb.helper.bc_warp_functions import regularize_fpop, grads_approximate_fpop, interpolated_bounceback, moving_wall_fpop_correction
+        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=self.compute_backend)
 
         # Set local variables and constants
         _c = self.velocity_set.c
@@ -149,14 +138,14 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
 
             # Regularize the resulting populations
             feq = self.equilibrium.warp_functional(rho, u)
-            f_post = regularize_fpop(f_post, feq)
+            f_post = bc_helper.regularize_fpop(f_post, feq)
             return f_post
 
         @wp.func
@@ -177,13 +166,13 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
 
             # Compute Grad's appriximation using full equation as in Eq (10) of Dorschner et al.
-            f_post = grads_approximate_fpop(rho, u, f_post)
+            f_post = bc_helper.grads_approximate_fpop(rho, u, f_post)
             return f_post
 
         # Construct the functionals for this BC
@@ -254,7 +243,7 @@ class HybridBC(BoundaryCondition):
                 u_target[d] /= num_missing
 
             # Compute Grad's appriximation using full equation as in Eq (10)
-            f_post = grads_approximate_fpop(rho_target, u_target, f_post)
+            f_post = bc_helper.grads_approximate_fpop(rho_target, u_target, f_post)
             return f_post
 
         if self.bc_method == "bounceback_regularized":

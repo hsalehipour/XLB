@@ -87,7 +87,7 @@ class WindTunnel3D:
         bc_walls = FullwayBounceBackBC(indices=walls)
         bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
         # bc_car = HybridBC(bc_method="dorschner_localized", mesh_vertices=car)
-        bc_car = HybridBC(bc_method='bounceback_regularized', mesh_vertices=car, use_mesh_distance=True)
+        bc_car = HybridBC(bc_method="bounceback_regularized", mesh_vertices=car, use_mesh_distance=True)
         self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
     def setup_stepper(self):

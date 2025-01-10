@@ -86,7 +86,7 @@ class MomentumTransfer(Operator):
         phi = f_post_collision[opp] + f_post_stream
         phi = jnp.where(jnp.logical_and(missing_mask, is_edge), phi, 0.0)
         force = jnp.tensordot(self.velocity_set.c[:, opp], phi, axes=(-1, 0))
-        force_net = jnp.sum(force, axis=(i+1 for i in range(self.velocity_set.d)))
+        force_net = jnp.sum(force, axis=(i + 1 for i in range(self.velocity_set.d)))
         return force_net
 
     def _construct_warp(self):

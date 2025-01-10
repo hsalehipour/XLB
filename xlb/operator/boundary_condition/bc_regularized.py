@@ -14,8 +14,8 @@ from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
-from xlb.operator.boundary_condition.bc_zouhe import ZouHeBC
-from xlb.operator.macroscopic.second_moment import SecondMoment as MomentumFlux
+from xlb.operator.boundary_condition import ZouHeBC, HelperFunctionsBC
+from xlb.operator.macroscopic import SecondMoment as MomentumFlux
 
 
 class RegularizedBC(ZouHeBC):
@@ -125,8 +125,7 @@ class RegularizedBC(ZouHeBC):
 
     def _construct_warp(self):
         # load helper functions
-        from xlb.helper.bc_warp_functions import get_normal_vectors, get_bc_fsum, bounceback_nonequilibrium, regularize_fpop
-
+        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=self.compute_backend)
         # Set local constants
         _d = self.velocity_set.d
         _q = self.velocity_set.q
@@ -146,7 +145,7 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(missing_mask)
 
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
@@ -155,7 +154,7 @@ class RegularizedBC(ZouHeBC):
             _u = -prescribed_value * normals
 
             # calculate rho
-            fsum = get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
             unormal = self.compute_dtype(0.0)
             for d in range(_d):
                 unormal += _u[d] * normals[d]
@@ -163,10 +162,10 @@ class RegularizedBC(ZouHeBC):
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
 
             # Regularize the boundary fpop
-            _f = regularize_fpop(_f, feq)
+            _f = bc_helper.regularize_fpop(_f, feq)
             return _f
 
         @wp.func
@@ -183,23 +182,23 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(missing_mask)
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
             _rho = f_1[0, index[0], index[1], index[2]]
 
             # calculate velocity
-            fsum = get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
             unormal = -self.compute_dtype(1.0) + fsum / _rho
             _u = unormal * normals
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
 
             # Regularize the boundary fpop
-            _f = regularize_fpop(_f, feq)
+            _f = bc_helper.regularize_fpop(_f, feq)
             return _f
 
         if self.bc_type == "velocity":
