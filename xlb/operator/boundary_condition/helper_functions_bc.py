@@ -121,8 +121,112 @@ class HelperFunctionsBC(object):
                 fpop[l] = feq[l] + fpop1
             return fpop
 
+        @wp.func
+        def grads_approximate_fpop(
+            rho: Any,
+            u: Any,
+            f_post: Any,
+        ):
+            # Purpose: Using Grad's approximation to represent fpop based on macroscopic inputs used for outflow [1] and
+            # Dirichlet BCs [2]
+            # [1] S. Chikatax`marla, S. Ansumali, and I. Karlin, "Grad's approximation for missing data in lattice Boltzmann
+            #   simulations", Europhys. Lett. 74, 215 (2006).
+            # [2] Dorschner, B., Chikatamarla, S. S., Bösch, F., & Karlin, I. V. (2015). Grad's approximation for moving and
+            #    stationary walls in entropic lattice Boltzmann simulations. Journal of Computational Physics, 295, 340-354.
+
+            # Note: See also self.regularize_fpop function which is somewhat similar.
+
+            # Compute pressure tensor Pi using all f_post-streaming values
+            Pi = momentum_flux.warp_functional(f_post)
+
+            # Compute double dot product Qi:Pi1 (where Pi1 = PiNeq)
+            nt = _d * (_d + 1) // 2
+            for l in range(_q):
+                # compute dot product of qi and Pi
+                QiPi = compute_dtype(0.0)
+                for t in range(nt):
+                    if t == 0 or t == 3 or t == 5:
+                        QiPi += _qi[l, t] * (Pi[t] - rho / compute_dtype(3.0))
+                    else:
+                        QiPi += _qi[l, t] * Pi[t]
+
+                # Compute c.u
+                cu = compute_dtype(0.0)
+                for d in range(_d):
+                    if _c[d, l] == 1:
+                        cu += u[d]
+                    elif _c[d, l] == -1:
+                        cu -= u[d]
+                cu *= compute_dtype(3.0)
+
+                # change f_post using the Grad's approximation
+                f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi
+
+            return f_post
+
+        @wp.func
+        def moving_wall_fpop_correction(
+            u_w: Any,
+            lattice_direction: Any,
+            f_post: Any,
+        ):
+            # Add forcing term necessary to account for the local density changes caused by the mass displacement as the object moves with velocity u_w.
+            # [1] L.-S. Luo, Unified theory of lattice Boltzmann models for nonideal gases, Phys. Rev. Lett. 81 (1998) 1618-1621.
+            # [2] L.-S. Luo, Theory of the lattice Boltzmann method: Lattice Boltzmann models for nonideal gases, Phys. Rev. E 62 (2000) 4982-4996.
+            #
+            # Note: this function must be called within a for-loop over all lattice directions and the populations to be modified must
+            # be only those in the missing direction (the check for missing direction must be outside of this function).
+            cu = compute_dtype(0.0)
+            l = lattice_direction
+            for d in range(_d):
+                if _c[d, l] == 1:
+                    cu += u_w[d]
+                elif _c[d, l] == -1:
+                    cu -= u_w[d]
+            cu *= compute_dtype(-6.0) * _w[l]
+            f_post[l] += cu
+            return f_post
+
+        @wp.func
+        def interpolated_bounceback(
+            index: Any,
+            missing_mask: Any,
+            f_0: Any,
+            f_1: Any,
+            f_pre: Any,
+            f_post: Any,
+            needs_mesh_distance: bool,
+        ):
+            # A local single-node version of the interpolated bounce-back boundary condition due to Bouzidi for a lattice
+            # Boltzmann method simulation.
+            # Ref:
+            # [1] Yu, D., Mei, R., Shyy, W., 2003. A uniﬁed boundary treatment in lattice boltzmann method,
+            # in: 41st aerospace sciences meeting and exhibit, p. 953.
+
+            one = compute_dtype(1.0)
+            for l in range(_q):
+                # If the mask is missing then take the opposite index
+                if missing_mask[l] == wp.uint8(1):
+                    # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
+                    if needs_mesh_distance:
+                        # use weights associated with curved boundaries that are properly stored in f_1.
+                        weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                    else:
+                        weight = compute_dtype(0.5)
+
+                    # Use differentiable interpolated BB to find f_missing:
+                    f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+
+                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0. There needs to be an input flag for this!
+                    # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
+                    # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
+            return f_post
+
         self.get_thread_data = get_thread_data
         self.get_bc_fsum = get_bc_fsum
         self.get_normal_vectors = get_normal_vectors
         self.bounceback_nonequilibrium = bounceback_nonequilibrium
         self.regularize_fpop = regularize_fpop
+        self.grads_approximate_fpop = grads_approximate_fpop
+        self.moving_wall_fpop_correction = moving_wall_fpop_correction
+        self.interpolated_bounceback = interpolated_bounceback
