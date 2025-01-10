@@ -166,12 +166,12 @@ class HelperFunctionsBC(object):
 
         @wp.func
         def moving_wall_fpop_correction(
-            u_w: Any,
+            u_wall: Any,
             lattice_direction: Any,
             f_post: Any,
         ):
             # Add forcing term necessary to account for the local density changes caused by the mass displacement
-            # as the object moves with velocity u_w.
+            # as the object moves with velocity u_wall.
             # [1] L.-S. Luo, Unified theory of lattice Boltzmann models for nonideal gases, Phys. Rev. Lett. 81 (1998) 1618-1621.
             # [2] L.-S. Luo, Theory of the lattice Boltzmann method: Lattice Boltzmann models for nonideal gases, Phys. Rev. E 62 (2000) 4982-4996.
             #
@@ -181,9 +181,9 @@ class HelperFunctionsBC(object):
             l = lattice_direction
             for d in range(_d):
                 if _c[d, l] == 1:
-                    cu += u_w[d]
+                    cu += u_wall[d]
                 elif _c[d, l] == -1:
-                    cu -= u_w[d]
+                    cu -= u_wall[d]
             cu *= compute_dtype(-6.0) * _w[l]
             f_post[l] += cu
             return f_post
@@ -196,6 +196,7 @@ class HelperFunctionsBC(object):
             f_1: Any,
             f_pre: Any,
             f_post: Any,
+            u_wall: Any,
             needs_mesh_distance: bool,
         ):
             # A local single-node version of the interpolated bounce-back boundary condition due to Bouzidi for a lattice
@@ -218,10 +219,9 @@ class HelperFunctionsBC(object):
                     # Use differentiable interpolated BB to find f_missing:
                     f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
 
-                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0.
-                    # There needs to be an input flag for this!
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
-                    # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
+                    # TODO: There needs to be an input flag for this!
+                    f_post = moving_wall_fpop_correction(u_wall, l, f_post)
             return f_post
 
         self.get_thread_data = get_thread_data
