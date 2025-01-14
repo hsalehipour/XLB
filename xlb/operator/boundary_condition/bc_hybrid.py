@@ -118,6 +118,24 @@ class HybridBC(BoundaryCondition):
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         _u_wall = _u_vec(self.u[0], self.u[1], self.u[2]) if _d == 3 else _u_vec(self.u[0], self.u[1])
 
+        @wp.func
+        def get_neighbour_velocity(fluid_nbr_index: Any, bc_mask: Any, f_0: Any):
+            # Find the neighbour and its velocity value
+            _f_nbr = _f_vec()
+            if bc_mask[0, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]] == wp.uint8(0):
+                # The neighbour is fluid
+                for ll in range(_q):
+                    # f_0 is the post-collision values of the current time-step
+                    # The following is the post-collision values of the fluid neighbor cell
+                    _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
+
+                # Compute the velocity vector at the fluid neighbouring cells
+                _, u_f = self.macroscopic.warp_functional(_f_nbr)
+            else:
+                # Neighbour is a another boundary cell of the same type
+                u_f = _u_wall
+            return u_f
+
         # Construct the functionals for this BC
         @wp.func
         def hybrid_bounceback_regularized(
@@ -191,8 +209,6 @@ class HybridBC(BoundaryCondition):
             #     stationary walls in entropic lattice Boltzmann simulations. Journal of Computational Physics, 295, 340-354.
             # NOTE: this BC has been reformulated to become less dependent on non-local information and so has differences
             # compared to the original paper.
-
-            _f_nbr = _f_vec()
             zero = self.compute_dtype(0.0)
             one = self.compute_dtype(1.0)
             u_target = _u_vec(zero, zero, zero)
@@ -205,19 +221,8 @@ class HybridBC(BoundaryCondition):
                     for d in range(_d):
                         fluid_nbr_index[d] = index[d] + _c[d, l]
 
-                    # Find the neighbour and its velocity value
-                    if bc_mask[0, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]] == wp.uint8(0):
-                        # The neighbour is fluid
-                        for ll in range(_q):
-                            # f_0 is the post-collision values of the current time-step
-                            # The following is the post-collision values of the fluid neighbor cell
-                            _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
-
-                        # Compute the velocity vector at the fluid neighbouring cells
-                        _, u_f = self.macroscopic.warp_functional(_f_nbr)
-                    else:
-                        # Neighbour is a another boundary cell of the same type
-                        u_f = _u_wall
+                    # get neighbour's velocity
+                    u_f = get_neighbour_velocity(fluid_nbr_index, bc_mask, f_0)
 
                     # The mesh distance to the boundary or "weights" have been stored in known directions of f_1
                     weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
