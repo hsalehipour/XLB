@@ -69,6 +69,7 @@ class HybridBC(BoundaryCondition):
             self.needs_bc_mask = True
             if not self.needs_mesh_distance:
                 print("\n WARNING! The ''dorschner_localized'' BC needs mesh distance! Continuing with use_mesh_distance=True!\n")
+                self.needs_mesh_distance = True
 
         # This BC needs normalized distance to the mesh
         if self.needs_mesh_distance:
