@@ -38,7 +38,7 @@ class HelperFunctionsBC(object):
             f_pre: wp.array4d(dtype=Any),
             f_post: wp.array4d(dtype=Any),
             bc_mask: wp.array4d(dtype=wp.uint8),
-            missing_mask: wp.array4d(dtype=wp.bool),
+            _missing_mask: wp.array4d(dtype=wp.bool),
             index: wp.vec3i,
         ):
             # Get the boundary id and missing mask
@@ -52,7 +52,7 @@ class HelperFunctionsBC(object):
                 _f_post[l] = compute_dtype(f_post[l, index[0], index[1], index[2]])
 
                 # TODO fix vec bool
-                if missing_mask[l, index[0], index[1], index[2]]:
+                if _missing_mask[l, index[0], index[1], index[2]]:
                     _missing_mask[l] = wp.uint8(1)
                 else:
                     _missing_mask[l] = wp.uint8(0)
@@ -61,38 +61,38 @@ class HelperFunctionsBC(object):
         @wp.func
         def get_bc_fsum(
             fpop: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
         ):
             fsum_known = compute_dtype(0.0)
             fsum_middle = compute_dtype(0.0)
             for l in range(_q):
-                if missing_mask[_opp_indices[l]] == wp.uint8(1):
+                if _missing_mask[_opp_indices[l]] == wp.uint8(1):
                     fsum_known += compute_dtype(2.0) * fpop[l]
-                elif missing_mask[l] != wp.uint8(1):
+                elif _missing_mask[l] != wp.uint8(1):
                     fsum_middle += fpop[l]
             return fsum_known + fsum_middle
 
         @wp.func
         def get_normal_vectors(
-            missing_mask: Any,
+            _missing_mask: Any,
         ):
             if wp.static(_d == 3):
                 for l in range(_q):
-                    if missing_mask[l] == wp.uint8(1) and wp.abs(_c[0, l]) + wp.abs(_c[1, l]) + wp.abs(_c[2, l]) == 1:
+                    if _missing_mask[l] == wp.uint8(1) and wp.abs(_c[0, l]) + wp.abs(_c[1, l]) + wp.abs(_c[2, l]) == 1:
                         return -_u_vec(_c_float[0, l], _c_float[1, l], _c_float[2, l])
             else:
                 for l in range(_q):
-                    if missing_mask[l] == wp.uint8(1) and wp.abs(_c[0, l]) + wp.abs(_c[1, l]) == 1:
+                    if _missing_mask[l] == wp.uint8(1) and wp.abs(_c[0, l]) + wp.abs(_c[1, l]) == 1:
                         return -_u_vec(_c_float[0, l], _c_float[1, l])
 
         @wp.func
         def bounceback_nonequilibrium(
             fpop: Any,
             feq: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
         ):
             for l in range(_q):
-                if missing_mask[l] == wp.uint8(1):
+                if _missing_mask[l] == wp.uint8(1):
                     fpop[l] = fpop[_opp_indices[l]] + feq[l] - feq[_opp_indices[l]]
             return fpop
 
@@ -123,6 +123,7 @@ class HelperFunctionsBC(object):
 
         @wp.func
         def grads_approximate_fpop(
+            _missing_mask: Any,
             rho: Any,
             u: Any,
             f_post: Any,
@@ -142,25 +143,26 @@ class HelperFunctionsBC(object):
             # Compute double dot product Qi:Pi1 (where Pi1 = PiNeq)
             nt = _d * (_d + 1) // 2
             for l in range(_q):
-                # compute dot product of qi and Pi
-                QiPi = compute_dtype(0.0)
-                for t in range(nt):
-                    if t == 0 or t == 3 or t == 5:
-                        QiPi += _qi[l, t] * (Pi[t] - rho / compute_dtype(3.0))
-                    else:
-                        QiPi += _qi[l, t] * Pi[t]
+                if _missing_mask[l] == wp.uint8(1):
+                    # compute dot product of qi and Pi
+                    QiPi = compute_dtype(0.0)
+                    for t in range(nt):
+                        if t == 0 or t == 3 or t == 5:
+                            QiPi += _qi[l, t] * (Pi[t] - rho / compute_dtype(3.0))
+                        else:
+                            QiPi += _qi[l, t] * Pi[t]
 
-                # Compute c.u
-                cu = compute_dtype(0.0)
-                for d in range(_d):
-                    if _c[d, l] == 1:
-                        cu += u[d]
-                    elif _c[d, l] == -1:
-                        cu -= u[d]
-                cu *= compute_dtype(3.0)
+                    # Compute c.u
+                    cu = compute_dtype(0.0)
+                    for d in range(_d):
+                        if _c[d, l] == 1:
+                            cu += u[d]
+                        elif _c[d, l] == -1:
+                            cu -= u[d]
+                    cu *= compute_dtype(3.0)
 
-                # change f_post using the Grad's approximation
-                f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi
+                    # change f_post using the Grad's approximation
+                    f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi
 
             return f_post
 
@@ -191,7 +193,7 @@ class HelperFunctionsBC(object):
         @wp.func
         def interpolated_bounceback(
             index: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -207,7 +209,7 @@ class HelperFunctionsBC(object):
             one = compute_dtype(1.0)
             for l in range(_q):
                 # If the mask is missing then take the opposite index
-                if missing_mask[l] == wp.uint8(1):
+                if _missing_mask[l] == wp.uint8(1):
                     # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
                     if needs_mesh_distance:
                         # use weights associated with curved boundaries that are properly stored in f_1.

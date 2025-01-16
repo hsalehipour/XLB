@@ -142,7 +142,7 @@ class HybridBC(BoundaryCondition):
         def hybrid_bounceback_regularized(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -156,7 +156,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -170,7 +170,7 @@ class HybridBC(BoundaryCondition):
         def hybrid_bounceback_grads(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -184,13 +184,13 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
 
             # Compute Grad's appriximation using full equation as in Eq (10) of Dorschner et al.
-            f_post = bc_helper.grads_approximate_fpop(rho, u, f_post)
+            f_post = bc_helper.grads_approximate_fpop(_missing_mask, rho, u, f_post)
             return f_post
 
         # Construct the functionals for this BC
@@ -248,7 +248,7 @@ class HybridBC(BoundaryCondition):
                 u_target[d] /= num_missing
 
             # Compute Grad's appriximation using full equation as in Eq (10)
-            f_post = bc_helper.grads_approximate_fpop(rho_target, u_target, f_post)
+            f_post = bc_helper.grads_approximate_fpop(_missing_mask, rho_target, u_target, f_post)
             return f_post
 
         if self.bc_method == "bounceback_regularized":
@@ -263,11 +263,11 @@ class HybridBC(BoundaryCondition):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+    def warp_implementation(self, f_pre, f_post, bc_mask, _missing_mask):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
-            inputs=[f_pre, f_post, bc_mask, missing_mask],
+            inputs=[f_pre, f_post, bc_mask, _missing_mask],
             dim=f_pre.shape[1:],
         )
         return f_post
