@@ -206,7 +206,7 @@ class MeshBoundaryMasker(Operator):
                         # Find the fractional distance to the mesh in each direction
                         # We increase max_length to find intersections in neighboring cells
                         max_length = wp.length(_dir)
-                        query = wp.mesh_query_ray(mesh_id, pos_bc_cell, _dir / max_length, max_length)
+                        query = wp.mesh_query_ray(mesh_id, pos_bc_cell, _dir / max_length, 1.5 * max_length)
                         if query.result:
                             # get position of the mesh triangle that intersects with the ray
                             pos_mesh = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
@@ -218,8 +218,8 @@ class MeshBoundaryMasker(Operator):
                             #     wp.printf("Got bad weight %f at %d,%d,%d\n", weight, index[0], index[1], index[2])
                         else:
                             # We didn't have an intersection in the given direction but we know we should so we assume the solid is slightly thicker
-                            # and our other voxel is right at the other edge of the solid and hence we set weight to 0.0
-                            f_1[l, index[0], index[1], index[2]] = self.store_dtype(0.0)
+                            # and one lattice direction away from the BC voxel
+                            f_1[l, index[0], index[1], index[2]] = self.store_dtype(1.0)
             # Find the fractional distance to the mesh in each direction
             # for l in range(1, _q):
             #     _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))

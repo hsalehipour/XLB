@@ -38,7 +38,7 @@ class HelperFunctionsBC(object):
             f_pre: wp.array4d(dtype=Any),
             f_post: wp.array4d(dtype=Any),
             bc_mask: wp.array4d(dtype=wp.uint8),
-            _missing_mask: wp.array4d(dtype=wp.bool),
+            missing_mask: wp.array4d(dtype=wp.bool),
             index: wp.vec3i,
         ):
             # Get the boundary id and missing mask
@@ -52,7 +52,7 @@ class HelperFunctionsBC(object):
                 _f_post[l] = compute_dtype(f_post[l, index[0], index[1], index[2]])
 
                 # TODO fix vec bool
-                if _missing_mask[l, index[0], index[1], index[2]]:
+                if missing_mask[l, index[0], index[1], index[2]]:
                     _missing_mask[l] = wp.uint8(1)
                 else:
                     _missing_mask[l] = wp.uint8(0)
