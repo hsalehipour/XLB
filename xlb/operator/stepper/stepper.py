@@ -77,6 +77,12 @@ class Stepper(Operator):
                 elif not hasattr(self, attr_name):
                     setattr(self, attr_name, bc_fallback)
 
+        self.fullway_bounce_back_bc = FullwayBounceBackBC(
+                indices = [],
+                velocity_set=velocity_set,
+                precision_policy=precision_policy,
+                compute_backend=compute_backend,
+            )
 
         ############################################
 

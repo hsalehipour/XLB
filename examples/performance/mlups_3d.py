@@ -6,7 +6,7 @@ from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import PrecisionPolicy
 from xlb.helper import create_nse_fields, initialize_eq
 from xlb.operator.stepper import IncompressibleNavierStokesStepper
-from xlb.operator.boundary_condition import FullwayBounceBackBC, EquilibriumBC
+from xlb.operator.boundary_condition import EquilibriumBC, HalfwayBounceBackBC, DoNothingBC, FullwayBounceBackBC
 from xlb.distribute import distribute
 
 def parse_arguments():
@@ -54,9 +54,23 @@ def define_boundary_indices(grid):
     
 def setup_boundary_conditions(grid):
     lid, walls = define_boundary_indices(grid)
-    bc_top = EquilibriumBC(rho=1.0, u=(0.02, 0.0, 0.0), indices=lid)
-    bc_walls = FullwayBounceBackBC(indices=walls)
-    return [bc_top, bc_walls]
+    # Note: The MLUPs number as based on single A6000 GPU after running this file twice (first clearing cache manually each time)
+
+    # MLUPs: 4443.81
+    # return [EquilibriumBC(rho=1.0, u=(0.02, 0.0, 0.0), indices=lid), FullwayBounceBackBC(indices=walls)]
+
+    # MLUPs: 3332.13
+    # return [EquilibriumBC(rho=1.0, u=(0.02, 0.0, 0.0), indices=lid), HalfwayBounceBackBC(indices=walls)]
+
+    # MLUPs: 4449.56
+    # return [DoNothingBC(indices=walls)]
+    
+    # MLUPs: 3205.85
+    # return [HalfwayBounceBackBC(indices=walls)]
+
+    # MLUPs: 4450.15
+    return [EquilibriumBC(rho=1.0, u=(0.02, 0.0, 0.0), indices=lid), FullwayBounceBackBC(indices=walls), DoNothingBC(indices=lid)]
+
 
 def run(f_0, f_1, backend, grid, boundary_mask, missing_mask, num_steps):
     omega = 1.0
