@@ -12,12 +12,15 @@ class WarpGrid(Grid):
         # TODO: Implement parallelization of the operator
         raise NotImplementedError("Parallelization of the operator is not implemented yet for the WarpGrid")
 
-    def create_field(self, cardinality: int, precision: Precision, callback=None):
+    def create_field(self, cardinality: int, precision: Precision = None, callback=None, fill_value=None,):
         # Get shape of the field
         shape = (cardinality,) + (self.shape)
 
         # Create the field
-        f = wp.zeros(shape, dtype=precision.wp_dtype)
+        if fill_value is None:
+            f = wp.zeros(shape, dtype=precision.wp_dtype)
+        else:
+            f = wp.full(shape, fill_value, dtype=precision.wp_dtype)
 
         # Raise error on callback
         if callback is not None:
