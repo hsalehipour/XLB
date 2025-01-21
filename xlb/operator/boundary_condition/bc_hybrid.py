@@ -233,8 +233,9 @@ class HybridBC(BoundaryCondition):
                     for d in range(_d):
                         u_target[d] += (weight * u_f[d] + _u_wall[d]) / (one + weight)
 
-                    # Use differentiable interpolated BB to find f_missing:
-                    f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    # Use regular halfway BB or differentiable interpolated BB to find f_missing:
+                    # f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    f_post[l] = f_pre[_opp_indices[l]]
 
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
                     # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
