@@ -103,6 +103,7 @@ class HybridBC(BoundaryCondition):
             self.needs_bc_mask = True
             if not self.needs_mesh_distance:
                 print("WARNING! The ''dorschner_localized'' BC needs mesh distance! Continuing with use_mesh_distance=True!")
+                self.needs_mesh_distance = True
 
         # This BC needs normalized distance to the mesh
         if self.needs_mesh_distance:
@@ -150,13 +151,32 @@ class HybridBC(BoundaryCondition):
         _opp_indices = self.velocity_set.opp_indices
         _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+        _u_wall = _u_vec(self.u[0], self.u[1], self.u[2]) if _d == 3 else _u_vec(self.u[0], self.u[1])
+
+        @wp.func
+        def get_neighbour_velocity(fluid_nbr_index: Any, bc_mask: Any, f_0: Any):
+            # Find the neighbour and its velocity value
+            _f_nbr = _f_vec()
+            if bc_mask[0, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]] == wp.uint8(0):
+                # The neighbour is fluid
+                for ll in range(_q):
+                    # f_0 is the post-collision values of the current time-step
+                    # The following is the post-collision values of the fluid neighbor cell
+                    _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
+
+                # Compute the velocity vector at the fluid neighbouring cells
+                _, u_f = self.macroscopic.warp_functional(_f_nbr)
+            else:
+                # Neighbour is a another boundary cell of the same type
+                u_f = _u_wall
+            return u_f
 
         # Construct the functionals for this BC
         @wp.func
         def hybrid_bounceback_regularized(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -171,7 +191,7 @@ class HybridBC(BoundaryCondition):
 
             # Apply interpolated bounceback first to find missing populations at the boundary
             u_wall = self.profile(index)
-            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -185,7 +205,7 @@ class HybridBC(BoundaryCondition):
         def hybrid_bounceback_grads(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -200,13 +220,13 @@ class HybridBC(BoundaryCondition):
 
             # Apply interpolated bounceback first to find missing populations at the boundary
             u_wall = self.profile(index)
-            f_post = bc_helper.interpolated_bounceback(index, missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
 
             # Compute Grad's appriximation using full equation as in Eq (10) of Dorschner et al.
-            f_post = bc_helper.grads_approximate_fpop(rho, u, f_post)
+            f_post = bc_helper.grads_approximate_fpop(_missing_mask, rho, u, f_post)
             return f_post
 
         # Construct the functionals for this BC
@@ -226,8 +246,6 @@ class HybridBC(BoundaryCondition):
             #     stationary walls in entropic lattice Boltzmann simulations. Journal of Computational Physics, 295, 340-354.
             # NOTE: this BC has been reformulated to become less dependent on non-local information and so has differences
             # compared to the original paper.
-
-            _f_nbr = _f_vec()
             zero = self.compute_dtype(0.0)
             one = self.compute_dtype(1.0)
             u_target = _u_vec(zero, zero, zero)
@@ -241,19 +259,8 @@ class HybridBC(BoundaryCondition):
                     for d in range(_d):
                         fluid_nbr_index[d] = index[d] + _c[d, l]
 
-                    # Find the neighbour and its velocity value
-                    if bc_mask[0, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]] == wp.uint8(0):
-                        # The neighbour is fluid
-                        for ll in range(_q):
-                            # f_0 is the post-collision values of the current time-step
-                            # The following is the post-collision values of the fluid neighbor cell
-                            _f_nbr[ll] = self.compute_dtype(f_0[ll, fluid_nbr_index[0], fluid_nbr_index[1], fluid_nbr_index[2]])
-
-                        # Compute the velocity vector at the fluid neighbouring cells
-                        _, u_f = self.macroscopic.warp_functional(_f_nbr)
-                    else:
-                        # Neighbour is a another boundary cell of the same type
-                        u_f = u_wall
+                    # get neighbour's velocity
+                    u_f = get_neighbour_velocity(fluid_nbr_index, bc_mask, f_0)
 
                     # The mesh distance to the boundary or "weights" have been stored in known directions of f_1
                     weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
@@ -263,8 +270,9 @@ class HybridBC(BoundaryCondition):
                     for d in range(_d):
                         u_target[d] += (weight * u_f[d] + u_wall[d]) / (one + weight)
 
-                    # Use differentiable interpolated BB to find f_missing:
-                    f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    # Use regular halfway BB or differentiable interpolated BB to find f_missing:
+                    # f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    f_post[l] = f_pre[_opp_indices[l]]
 
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
                     f_post = bc_helper.moving_wall_fpop_correction(u_wall, l, f_post)
@@ -278,7 +286,7 @@ class HybridBC(BoundaryCondition):
                 u_target[d] /= num_missing
 
             # Compute Grad's appriximation using full equation as in Eq (10)
-            f_post = bc_helper.grads_approximate_fpop(rho_target, u_target, f_post)
+            f_post = bc_helper.grads_approximate_fpop(_missing_mask, rho_target, u_target, f_post)
             return f_post
 
         if self.bc_method == "bounceback_regularized":
@@ -293,11 +301,11 @@ class HybridBC(BoundaryCondition):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+    def warp_implementation(self, f_pre, f_post, bc_mask, _missing_mask):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
-            inputs=[f_pre, f_post, bc_mask, missing_mask],
+            inputs=[f_pre, f_post, bc_mask, _missing_mask],
             dim=f_pre.shape[1:],
         )
         return f_post

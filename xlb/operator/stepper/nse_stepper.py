@@ -71,7 +71,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         # Initialize distribution functions if initializer is provided
         if initializer is not None:
-            f_0 = initializer(self.grid, self.velocity_set, self.precision_policy, self.compute_backend)
+            f_0 = initializer(f_0)
         else:
             from xlb.helper.initializers import initialize_eq
 
