@@ -157,7 +157,7 @@ class WindTunnel3D:
         inlet, outlet, walls, sphere = self.define_boundary_indices()
         bc_left = RegularizedBC("velocity", prescribed_value=(self.wind_speed, 0.0, 0.0), indices=inlet)
         bc_do_nothing = DoNothingBC(indices=outlet)
-        bc_sphere = HybridBC(bc_method="dorschner_localized", mesh_vertices=sphere)
+        bc_sphere = HybridBC(bc_method="dorschner_localized", mesh_vertices=sphere, voxelization_method="winding")
         # bc_sphere = HybridBC(bc_method="bounceback_grads", mesh_vertices=sphere, use_mesh_distance=True)
         # bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere)
         # Not assining BC for walls makes them periodic.

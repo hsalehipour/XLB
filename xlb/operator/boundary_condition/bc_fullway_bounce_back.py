@@ -31,6 +31,7 @@ class FullwayBounceBackBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
     ):
         super().__init__(
             ImplementationStep.COLLISION,
@@ -39,6 +40,7 @@ class FullwayBounceBackBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
     @Operator.register_backend(ComputeBackend.JAX)

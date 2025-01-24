@@ -38,6 +38,7 @@ class BoundaryCondition(Operator):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
     ):
         self.id = boundary_condition_registry.register_boundary_condition(self.__class__.__name__ + "_" + str(hash(self)))
         velocity_set = velocity_set or DefaultConfig.velocity_set
@@ -74,6 +75,16 @@ class BoundaryCondition(Operator):
 
         # A flag for BCs that also need access to the bc_mask field
         self.needs_bc_mask = False
+
+        # Voxelization method. For BC's specified on a mesh, the user can specify the voxelization scheme.
+        # Currently we support three methods based on (a) aabb method (b) ray casting and (c) winding number.
+        self.voxelization_method = voxelization_method
+        if self.mesh_vertices is not None:
+            assert self.voxelization_method in [
+                "ray",
+                "aabb",
+                "winding",
+            ], 'Please sepcify the voxelization scheme for the given mesh! The existing methods include: "ray", "aabb" and "winding"!'
 
         if self.compute_backend == ComputeBackend.WARP:
             # Set local constants TODO: This is a hack and should be fixed with warp update

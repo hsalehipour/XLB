@@ -35,6 +35,7 @@ class HybridBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
         use_mesh_distance=False,
     ):
         assert bc_method in [
@@ -55,6 +56,7 @@ class HybridBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
         # Instantiate the operator for computing macroscopic values

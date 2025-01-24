@@ -42,6 +42,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
     ):
         # Call the parent constructor
         super().__init__(
@@ -51,6 +52,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
         # find and store the normal vector using indices

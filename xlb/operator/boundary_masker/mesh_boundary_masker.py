@@ -397,7 +397,12 @@ class MeshBoundaryMasker(Operator):
                     # if weight < 0.0 or weight > 1.0:
                     #     wp.printf("Got bad weight %f at %d,%d,%d\n", weight, index[0], index[1], index[2])
 
-        return None, (kernel_winding, kernel_winding_with_distance)
+        kernel_dict = {
+            "ray": [kernel_ray, kernel_ray_with_distance],
+            "aabb": [kernel_aabb, kernel_aabb_with_distance],
+            "winding": [kernel_winding, kernel_winding_with_distance],
+        }
+        return None, kernel_dict
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(
@@ -437,10 +442,11 @@ class MeshBoundaryMasker(Operator):
         mesh_id = wp.uint64(mesh.id)
 
         # Launch the appropriate warp kernel
-        kernel, kernel_with_distance = self.warp_kernel
+        kernel_dict = self.warp_kernel
+        kernel_list = kernel_dict.get(bc.voxelization_method)
         if bc.needs_mesh_distance:
             wp.launch(
-                kernel_with_distance,
+                kernel_list[1],
                 inputs=[
                     mesh_id,
                     id_number,
@@ -453,7 +459,7 @@ class MeshBoundaryMasker(Operator):
             )
         else:
             wp.launch(
-                kernel,
+                kernel_list[0],
                 inputs=[
                     mesh_id,
                     id_number,
