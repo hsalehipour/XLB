@@ -73,6 +73,7 @@ class MeshBoundaryMasker(Operator):
             dist_edge = wp.mat33f(0.0)
 
             for axis0 in range(0, 3):
+                axis1 = (axis0 + 1) % 3
                 axis2 = (axis0 + 2) % 3
 
                 sgn = 1.0
@@ -80,13 +81,13 @@ class MeshBoundaryMasker(Operator):
                     sgn = -1.0
 
                 for i in range(0, 3):
-                    normal_edge0[i][axis0] = -1.0 * sgn * edges[i][axis0]
-                    normal_edge1[i][axis0] = sgn * edges[i][axis0]
+                    normal_edge0[i,axis0] = -1.0 * sgn * edges[i,axis1]
+                    normal_edge1[i,axis0] = sgn * edges[i,axis0]
 
-                    dist_edge[i][axis0] = (
-                        -1.0 * (normal_edge0[i][axis0] * verts[i][axis0] + normal_edge1[i][axis0] * verts[i][axis0])
-                        + wp.max(0.0, normal_edge0[i][axis0])
-                        + wp.max(0.0, normal_edge1[i][axis0])
+                    dist_edge[i,axis0] = (
+                        -1.0 * (normal_edge0[i,axis0] * verts[i,axis0] + normal_edge1[i,axis0] * verts[i,axis1])
+                        + wp.max(0.0, normal_edge0[i,axis0])
+                        + wp.max(0.0, normal_edge1[i,axis0])
                     )
 
             return dist1, dist2, normal_edge0, normal_edge1, dist_edge
@@ -108,7 +109,7 @@ class MeshBoundaryMasker(Operator):
                 for ax0 in range(0, 3):
                     ax1 = (ax0 + 1) % 3
                     for i in range(0, 3):
-                        intersect = intersect and (normal_edge0[i][ax0] * low[ax0] + normal_edge1[i][ax0] * low[ax1] + dist_edge[i][ax0] >= 0.0)
+                        intersect = intersect and (normal_edge0[i,ax0] * low[ax0] + normal_edge1[i,ax0] * low[ax1] + dist_edge[i,ax0] >= 0.0)
 
                 return intersect
             else:
