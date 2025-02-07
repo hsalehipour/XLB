@@ -1,5 +1,7 @@
 from xlb import DefaultConfig, ComputeBackend
-from xlb.operator.macroscopic.second_moment import SecondMoment as MomentumFlux
+from xlb.operator.macroscopic import SecondMoment as MomentumFlux
+from xlb.operator.macroscopic import Macroscopic
+from xlb.operator.equilibrium import QuadraticEquilibrium
 import warp as wp
 from typing import Any
 
@@ -29,6 +31,12 @@ class HelperFunctionsBC(object):
         _u_vec = wp.vec(_d, dtype=compute_dtype)
         _f_vec = wp.vec(_q, dtype=compute_dtype)
         _missing_mask_vec = wp.vec(_q, dtype=wp.uint8)  # TODO fix vec bool
+
+        # Define the operator needed for computing equilibrium
+        equilibrium = QuadraticEquilibrium(velocity_set, precision_policy, compute_backend)
+
+        # Define the operator needed for computing macroscopic variables
+        macroscopic = Macroscopic(velocity_set, precision_policy, compute_backend)
 
         # Define the operator needed for computing the momentum flux
         momentum_flux = MomentumFlux(velocity_set, precision_policy, compute_backend)
@@ -226,6 +234,40 @@ class HelperFunctionsBC(object):
                     # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
             return f_post
 
+        @wp.func
+        def interpolated_nonequilibrium_bounceback(
+            index: Any,
+            _missing_mask: Any,
+            f_0: Any,
+            f_1: Any,
+            f_pre: Any,
+            f_post: Any,
+            needs_mesh_distance: bool,
+        ):
+            # Compute density, velocity using all f_post-collision values
+            rho, u = macroscopic.warp_functional(f_pre)
+            feq = equilibrium.warp_functional(rho, u)
+
+            # Apply method in Tao et al (2018) [1] to find missing populations at the boundary
+            one = compute_dtype(1.0)
+            for l in range(_q):
+                # If the mask is missing then take the opposite index
+                if _missing_mask[l] == wp.uint8(1):
+                    # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
+                    if needs_mesh_distance:
+                        # use weights associated with curved boundaries that are properly stored in f_1.
+                        weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                    else:
+                        weight = compute_dtype(0.5)
+
+                    # Use non-equilibrium bounceback to find f_missing:
+                    fneq = f_pre[_opp_indices[l]] - feq[_opp_indices[l]]
+                    feq_wall = _w[l] * rho  # TODO: needs to be updated with u_wall
+                    f_wall = feq_wall + fneq
+                    f_post[l] = (f_wall + weight * f_pre[l]) / (one + weight)
+
+            return f_post
+
         self.get_thread_data = get_thread_data
         self.get_bc_fsum = get_bc_fsum
         self.get_normal_vectors = get_normal_vectors
@@ -234,3 +276,4 @@ class HelperFunctionsBC(object):
         self.grads_approximate_fpop = grads_approximate_fpop
         self.moving_wall_fpop_correction = moving_wall_fpop_correction
         self.interpolated_bounceback = interpolated_bounceback
+        self.interpolated_nonequilibrium_bounceback = interpolated_nonequilibrium_bounceback

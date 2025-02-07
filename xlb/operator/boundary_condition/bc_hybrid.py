@@ -42,8 +42,10 @@ class HybridBC(BoundaryCondition):
             "bounceback_regularized",
             "bounceback_grads",
             "dorschner_localized",
-            "nonequilibrium",
-        ], f"type = {bc_method} not supported! Use 'bounceback_regularized', 'bounceback_grads', 'dorschner_localized' or 'nonequilibrium'."
+            "nonequilibrium_regularized",
+        ], (
+            f"type = {bc_method} not supported! Use 'bounceback_regularized', 'bounceback_grads', 'dorschner_localized' or 'nonequilibrium_regularized'."
+        )
         self.bc_method = bc_method
 
         # TODO: the input velocity must be suitably stored elesewhere when mesh is moving.
@@ -197,7 +199,7 @@ class HybridBC(BoundaryCondition):
             return f_post
 
         @wp.func
-        def hybrid_nonequilibrium(
+        def hybrid_nonequilibrium_regularized(
             index: Any,
             timestep: Any,
             _missing_mask: Any,
@@ -206,36 +208,24 @@ class HybridBC(BoundaryCondition):
             f_pre: Any,
             f_post: Any,
         ):
-            # This boundary condition uses the method of Tao et al (2018) [1] to get unknown populations on curved boundaries.
+            # This boundary condition uses the method of Tao et al (2018) [1] to get unknown populations on curved boundaries (denoted here by
+            # interpolated_nonequilibrium_bounceback method). To further stabalize this BC, we add regularization technique of [2].
             # [1] Tao, Shi, et al. "One-point second-order curved boundary condition for lattice Boltzmann simulation of suspended particles."
             #     Computers & Mathematics with Applications 76.7 (2018): 1593-1607.
+            # [2] Latt, J., Chopard, B., Malaspinas, O., Deville, M., Michler, A., 2008. Straight velocity
+            #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
-            # Compute density, velocity using all f_post-collision values
-            rho, u = self.macroscopic.warp_functional(f_pre)
+            # Apply interpolated bounceback first to find missing populations at the boundary
+            f_post = bc_helper.interpolated_nonequilibrium_bounceback(
+                index, _missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance)
+            )
+
+            # Compute density, velocity using all f_post-streaming values
+            rho, u = self.macroscopic.warp_functional(f_post)
+
+            # Regularize the resulting populations
             feq = self.equilibrium.warp_functional(rho, u)
-
-            # Apply method in Tao et al (2018) [1] to find missing populations at the boundary
-            one = self.compute_dtype(1.0)
-            for l in range(_q):
-                # If the mask is missing then take the opposite index
-                if _missing_mask[l] == wp.uint8(1):
-                    # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
-                    if wp.static(self.needs_mesh_distance):
-                        # use weights associated with curved boundaries that are properly stored in f_1.
-                        weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
-                    else:
-                        weight = self.compute_dtype(0.5)
-
-                    # Use non-equilibrium bounceback to find f_missing:
-                    fneq = f_pre[_opp_indices[l]] - feq[_opp_indices[l]]
-                    feq_wall = _w[l] * rho  # TODO: needs to be updated with u_wall
-                    f_wall = feq_wall + fneq
-                    f_post[l] = (f_wall + weight * f_pre[l]) / (one + weight)
-
-                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0.
-                    # There needs to be an input flag for this!
-                    # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
-                    # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
+            f_post = bc_helper.regularize_fpop(f_post, feq)
             return f_post
 
         # Construct the functionals for this BC
@@ -303,8 +293,8 @@ class HybridBC(BoundaryCondition):
             functional = hybrid_bounceback_grads
         elif self.bc_method == "dorschner_localized":
             functional = dorschner_localized
-        elif self.bc_method == "nonequilibrium":
-            functional = hybrid_nonequilibrium
+        elif self.bc_method == "nonequilibrium_regularized":
+            functional = hybrid_nonequilibrium_regularized
 
         kernel = self._construct_kernel(functional)
 
