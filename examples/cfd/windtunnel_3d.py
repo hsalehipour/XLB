@@ -86,7 +86,10 @@ class WindTunnel3D:
         bc_left = RegularizedBC("velocity", prescribed_value=(self.wind_speed, 0.0, 0.0), indices=inlet)
         bc_walls = FullwayBounceBackBC(indices=walls)
         bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
-        bc_car = HybridBC(bc_method="dorschner_localized", mesh_vertices=car, voxelization_method="winding")
+        # bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, voxelization_method="aabb")
+        # bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, use_mesh_distance=True, voxelization_method='aabb')
+        bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, voxelization_method="aabb_close")
+        # bc_car = HybridBC(bc_method="dorschner_localized", mesh_vertices=car, voxelization_method="winding")
         # bc_car = HybridBC(bc_method="bounceback_regularized", mesh_vertices=car, use_mesh_distance=True)
         self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
@@ -139,6 +142,11 @@ class WindTunnel3D:
         save_fields_vtk(fields, timestep=i)
         save_image(fields["u_magnitude"][:, self.grid_shape[1] // 2, :], timestep=i)
 
+        if i==0:
+            bc_fields = {"bc_mask": self.bc_mask.numpy().squeeze()}
+            save_fields_vtk(bc_fields, timestep=0, prefix='bc_mask')
+
+
         # Compute lift and drag
         boundary_force = self.momentum_transfer(self.f_0, self.f_1, self.bc_mask, self.missing_mask)
         drag = np.sqrt(boundary_force[0] ** 2 + boundary_force[1] ** 2)  # xy-plane
@@ -183,6 +191,7 @@ class WindTunnel3D:
 
 
 if __name__ == "__main__":
+    wp.clear_kernel_cache()
     # Grid parameters
     grid_size_x, grid_size_y, grid_size_z = 512, 128, 128
     grid_shape = (grid_size_x, grid_size_y, grid_size_z)
