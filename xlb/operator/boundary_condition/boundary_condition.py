@@ -83,8 +83,9 @@ class BoundaryCondition(Operator):
             assert self.voxelization_method in [
                 "ray",
                 "aabb",
+                "aabb_fill_in",
                 "winding",
-            ], 'Please sepcify the voxelization scheme for the given mesh! The existing methods include: "ray", "aabb" and "winding"!'
+            ], 'Please sepcify the voxelization scheme for the given mesh! The existing methods include: "ray", "aabb", "aabb_close" and "winding"!'
 
         if self.compute_backend == ComputeBackend.WARP:
             # Set local constants TODO: This is a hack and should be fixed with warp update
