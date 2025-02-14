@@ -201,7 +201,7 @@ class MeshBoundaryMasker(Operator):
 
         # Assign the bc_mask based on the solid_mask we already computed
         @wp.kernel
-        def kernel_aabb_close(
+        def kernel_aabb_fill_in(
             mesh_id: wp.uint64,
             id_number: wp.int32,
             bc_mask: wp.array4d(dtype=wp.uint8),
@@ -236,7 +236,7 @@ class MeshBoundaryMasker(Operator):
         
         # Assign the bc_mask and distances based on the solid_mask we already computed
         @wp.kernel
-        def kernel_aabb_distance_close(
+        def kernel_aabb_distance_fill_in(
             mesh_id: wp.uint64,
             id_number: wp.int32,
             f_0: wp.array4d(dtype=Any),
@@ -560,7 +560,7 @@ class MeshBoundaryMasker(Operator):
         kernel_dict = {
             "ray": [kernel_ray, kernel_ray_with_distance],
             "aabb": [kernel_aabb, kernel_aabb_with_distance],
-            "aabb_close": [kernel_aabb_close, kernel_aabb_distance_close],
+            "aabb_fill_in": [kernel_aabb_fill_in, kernel_aabb_distance_fill_in],
             "winding": [kernel_winding, kernel_winding_with_distance],
             "aabb_solid": kernel_aabb_solid,
             "erode_tile": erode_tile,
@@ -622,7 +622,7 @@ class MeshBoundaryMasker(Operator):
         # Launch the appropriate warp kernel
         kernel_dict = self.warp_kernel
         kernel_list = kernel_dict.get(bc.voxelization_method)
-        if bc.voxelization_method == "aabb_close":
+        if bc.voxelization_method == "aabb_fill_in":
             wp.launch(
                 kernel=kernel_dict["aabb_solid"],
                 inputs=[

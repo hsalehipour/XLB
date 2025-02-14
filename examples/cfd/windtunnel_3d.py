@@ -88,7 +88,7 @@ class WindTunnel3D:
         bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
         # bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, voxelization_method="aabb")
         # bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, use_mesh_distance=True, voxelization_method='aabb')
-        bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, voxelization_method="aabb_close")
+        bc_car = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=car, voxelization_method="aabb_fill_in")
         # bc_car = HybridBC(bc_method="dorschner_localized", mesh_vertices=car, voxelization_method="winding")
         # bc_car = HybridBC(bc_method="bounceback_regularized", mesh_vertices=car, use_mesh_distance=True)
         self.boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
