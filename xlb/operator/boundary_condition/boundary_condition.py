@@ -83,7 +83,7 @@ class BoundaryCondition(Operator):
             assert self.voxelization_method in [
                 "ray",
                 "aabb",
-                "aabb_close",
+                "aabb_fill_in",
                 "winding",
             ], 'Please sepcify the voxelization scheme for the given mesh! The existing methods include: "ray", "aabb", "aabb_close" and "winding"!'
 
