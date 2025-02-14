@@ -159,15 +159,15 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             missing_mask: Any,
             f_0: Any,
             f_1: Any,
-            f_pre: Any,
-            f_post: Any,
+            _f_pre: Any,
+            _f_post: Any,
         ):
             # Post-streaming values are only modified at missing direction
-            _f = f_post
+            _f = _f_post
             for l in range(self.velocity_set.q):
                 # If the mask is missing then take the opposite index
                 if missing_mask[l] == wp.uint8(1):
-                    _f[l] = f_pre[_opp_indices[l]]
+                    _f[l] = _f_pre[_opp_indices[l]]
             return _f
 
         @wp.func
@@ -177,13 +177,13 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             missing_mask: Any,
             f_0: Any,
             f_1: Any,
-            f_pre: Any,
-            f_post: Any,
+            _f_pre: Any,
+            _f_post: Any,
         ):
             # Prepare time-dependent dynamic data for imposing the boundary condition in the next iteration after streaming.
             # We use directions that leave the domain for storing this prepared data.
             # Since this function is called post-collisiotn: f_pre = f_post_stream and f_post = f_post_collision
-            _f = f_post
+            _f = _f_post
             nv = get_normal_vectors(missing_mask)
             for l in range(self.velocity_set.q):
                 if missing_mask[l] == wp.uint8(1):
@@ -194,7 +194,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
                         pull_index[d] = index[d] - (_c[d, l] + nv[d])
                     # The following is the post-streaming values of the neighbor cell
                     f_aux = self.compute_dtype(f_0[l, pull_index[0], pull_index[1], pull_index[2]])
-                    _f[_opp_indices[l]] = (self.compute_dtype(1.0) - sound_speed) * f_pre[l] + sound_speed * f_aux
+                    _f[_opp_indices[l]] = (self.compute_dtype(1.0) - sound_speed) * _f_pre[l] + sound_speed * f_aux
             return _f
 
         kernel = self._construct_kernel(functional)
@@ -202,11 +202,11 @@ class ExtrapolationOutflowBC(BoundaryCondition):
         return (functional, assemble_dynamic_data), kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+    def warp_implementation(self, _f_pre, _f_post, bc_mask, missing_mask):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
-            inputs=[f_pre, f_post, bc_mask, missing_mask],
-            dim=f_pre.shape[1:],
+            inputs=[_f_pre, _f_post, bc_mask, missing_mask],
+            dim=_f_pre.shape[1:],
         )
-        return f_post
+        return _f_post
