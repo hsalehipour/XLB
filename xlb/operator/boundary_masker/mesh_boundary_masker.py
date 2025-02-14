@@ -20,10 +20,10 @@ class MeshBoundaryMasker(Operator):
         velocity_set: VelocitySet,
         precision_policy: PrecisionPolicy,
         compute_backend: ComputeBackend.WARP,
-        close_size: int = 1,
+        fill_in_voxels: int = 3,
     ):
         # Call super
-        self.tile_half = close_size
+        self.tile_half = fill_in_voxels
         self.tile_size = self.tile_half * 2 + 1
         super().__init__(velocity_set, precision_policy, compute_backend)
         
