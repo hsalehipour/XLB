@@ -221,7 +221,7 @@ class HelperFunctionsBC(object):
                     # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
                     if needs_mesh_distance:
                         # use weights associated with curved boundaries that are properly stored in f_1.
-                        weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                        weight = compute_dtype(f_1[_opp_indices[l], index[0], index[1], index[2]])
                     else:
                         weight = compute_dtype(0.5)
 
@@ -256,7 +256,7 @@ class HelperFunctionsBC(object):
                     # The normalized distance to the mesh or "weights" have been stored in known directions of f_1
                     if needs_mesh_distance:
                         # use weights associated with curved boundaries that are properly stored in f_1.
-                        weight = f_1[_opp_indices[l], index[0], index[1], index[2]]
+                        weight = compute_dtype(f_1[_opp_indices[l], index[0], index[1], index[2]])
                     else:
                         weight = compute_dtype(0.5)
 
