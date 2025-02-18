@@ -71,6 +71,13 @@ class HybridBC(BoundaryCondition):
         # velocity profiles given by keyword "profile" which must be a callable function.
         self.profile = profile
 
+        # A flag to enable moving wall treatment when either "prescribed_value" or "profile" are provided.
+        self.needs_moving_wall_treatment = False
+
+        if (profile is not None) or (prescribed_value is not None):
+            self.needs_moving_wall_treatment = True
+
+        # Handle no-slip BCs if neither prescribed_value or profile are provided.
         if prescribed_value is None and profile is None:
             print(f"WARNING! Assuming no-slip condition for BC type = {self.__class__.__name__}_{self.bc_method}!")
             prescribed_value = [0] * self.velocity_set.d
@@ -95,9 +102,11 @@ class HybridBC(BoundaryCondition):
             # create a constant prescribed profile
             # Note this BC class is only implemented in WARP.
             prescribed_value = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)(prescribed_value)
+
             @wp.func
             def prescribed_profile_warp(index: wp.vec3i):
                 return wp.vec3(prescribed_value[0], prescribed_value[1], prescribed_value[2])
+
             self.profile = prescribed_profile_warp
 
         # Set whether this BC needs mesh distance
@@ -152,11 +161,10 @@ class HybridBC(BoundaryCondition):
         _c = self.velocity_set.c
         _q = self.velocity_set.q
         _d = self.velocity_set.d
-        _w = self.velocity_set.w
         _opp_indices = self.velocity_set.opp_indices
-        _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
+        _f_vec = wp.vec(_q, dtype=self.compute_dtype)
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        _u_wall = _u_vec(self.u[0], self.u[1], self.u[2]) if _d == 3 else _u_vec(self.u[0], self.u[1])
+        _u_wall = _u_vec(0.0, 0.0, 0.0) if _d == 3 else _u_vec(0.0, 0.0)
 
         @wp.func
         def get_neighbour_velocity(fluid_nbr_index: Any, bc_mask: Any, f_0: Any):
@@ -196,7 +204,17 @@ class HybridBC(BoundaryCondition):
 
             # Apply interpolated bounceback first to find missing populations at the boundary
             u_wall = self.profile(index)
-            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(
+                index,
+                _missing_mask,
+                f_0,
+                f_1,
+                f_pre,
+                f_post,
+                u_wall,
+                wp.static(self.needs_moving_wall_treatment),
+                wp.static(self.needs_mesh_distance),
+            )
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -225,7 +243,17 @@ class HybridBC(BoundaryCondition):
 
             # Apply interpolated bounceback first to find missing populations at the boundary
             u_wall = self.profile(index)
-            f_post = bc_helper.interpolated_bounceback(index, _missing_mask, f_0, f_1, f_pre, f_post, u_wall, wp.static(self.needs_mesh_distance))
+            f_post = bc_helper.interpolated_bounceback(
+                index,
+                _missing_mask,
+                f_0,
+                f_1,
+                f_pre,
+                f_post,
+                u_wall,
+                wp.static(self.needs_moving_wall_treatment),
+                wp.static(self.needs_mesh_distance),
+            )
 
             # Compute density, velocity using all f_post-streaming values
             rho, u = self.macroscopic.warp_functional(f_post)
@@ -252,8 +280,17 @@ class HybridBC(BoundaryCondition):
             #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
+            u_wall = self.profile(index)
             f_post = bc_helper.interpolated_nonequilibrium_bounceback(
-                index, _missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance)
+                index,
+                _missing_mask,
+                f_0,
+                f_1,
+                f_pre,
+                f_post,
+                u_wall,
+                wp.static(self.needs_moving_wall_treatment),
+                wp.static(self.needs_mesh_distance),
             )
 
             # Compute density, velocity using all f_post-streaming values
@@ -281,10 +318,9 @@ class HybridBC(BoundaryCondition):
             #     stationary walls in entropic lattice Boltzmann simulations. Journal of Computational Physics, 295, 340-354.
             # NOTE: this BC has been reformulated to become less dependent on non-local information and so has differences
             # compared to the original paper.
-            zero = self.compute_dtype(0.0)
-            one = self.compute_dtype(1.0)
-            u_target = _u_vec(zero, zero, zero)
+            u_target = _u_wall
             u_wall = self.profile(index)
+            one = self.compute_dtype(1.0)
             num_missing = self.compute_dtype(0.0)
             for l in range(_q):
                 # If the mask is missing then take the opposite index

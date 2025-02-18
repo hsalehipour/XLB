@@ -207,6 +207,7 @@ class HelperFunctionsBC(object):
             f_pre: Any,
             f_post: Any,
             u_wall: Any,
+            needs_moving_wall_treatment: bool,
             needs_mesh_distance: bool,
         ):
             # A local single-node version of the interpolated bounce-back boundary condition due to Bouzidi for a lattice
@@ -230,8 +231,8 @@ class HelperFunctionsBC(object):
                     f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
 
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
-                    # TODO: There needs to be an input flag for this!
-                    f_post = moving_wall_fpop_correction(u_wall, l, f_post)
+                    if needs_moving_wall_treatment:
+                        f_post = moving_wall_fpop_correction(u_wall, l, f_post)
             return f_post
 
         @wp.func
@@ -242,11 +243,19 @@ class HelperFunctionsBC(object):
             f_1: Any,
             f_pre: Any,
             f_post: Any,
+            u_wall: Any,
+            needs_moving_wall_treatment: bool,
             needs_mesh_distance: bool,
         ):
             # Compute density, velocity using all f_post-collision values
             rho, u = macroscopic.warp_functional(f_pre)
             feq = equilibrium.warp_functional(rho, u)
+
+            # Compute equilibrium distribution at the wall
+            if needs_moving_wall_treatment:
+                feq_wall = equilibrium.warp_functional(rho, u_wall)
+            else:
+                feq_wall = _f_vec()
 
             # Apply method in Tao et al (2018) [1] to find missing populations at the boundary
             one = compute_dtype(1.0)
@@ -262,8 +271,14 @@ class HelperFunctionsBC(object):
 
                     # Use non-equilibrium bounceback to find f_missing:
                     fneq = f_pre[_opp_indices[l]] - feq[_opp_indices[l]]
-                    feq_wall = _w[l] * rho  # TODO: needs to be updated with u_wall
-                    f_wall = feq_wall + fneq
+
+                    # Compute equilibrium distribution at the wall
+                    # Same quadratic equilibrium but accounting for zero velocity (no-slip)
+                    if not needs_moving_wall_treatment:
+                        feq_wall[l] = _w[l] * rho
+
+                    # Assemble wall population for doing interpolation at the boundary
+                    f_wall = feq_wall[l] + fneq
                     f_post[l] = (f_wall + weight * f_pre[l]) / (one + weight)
 
             return f_post
