@@ -38,13 +38,17 @@ class HybridBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
         use_mesh_distance=False,
     ):
         assert bc_method in [
             "bounceback_regularized",
             "bounceback_grads",
             "dorschner_localized",
-        ], f"type = {bc_method} not supported! Use 'bounceback_regularized', 'bounceback_grads' or 'dorschner_localized'."
+            "nonequilibrium_regularized",
+        ], (
+            f"type = {bc_method} not supported! Use 'bounceback_regularized', 'bounceback_grads', 'dorschner_localized' or 'nonequilibrium_regularized'."
+        )
         self.bc_method = bc_method
 
         # Call the parent constructor
@@ -55,6 +59,7 @@ class HybridBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
         # Instantiate the operator for computing macroscopic values
@@ -229,6 +234,36 @@ class HybridBC(BoundaryCondition):
             f_post = bc_helper.grads_approximate_fpop(_missing_mask, rho, u, f_post)
             return f_post
 
+        @wp.func
+        def hybrid_nonequilibrium_regularized(
+            index: Any,
+            timestep: Any,
+            _missing_mask: Any,
+            f_0: Any,
+            f_1: Any,
+            f_pre: Any,
+            f_post: Any,
+        ):
+            # This boundary condition uses the method of Tao et al (2018) [1] to get unknown populations on curved boundaries (denoted here by
+            # interpolated_nonequilibrium_bounceback method). To further stabalize this BC, we add regularization technique of [2].
+            # [1] Tao, Shi, et al. "One-point second-order curved boundary condition for lattice Boltzmann simulation of suspended particles."
+            #     Computers & Mathematics with Applications 76.7 (2018): 1593-1607.
+            # [2] Latt, J., Chopard, B., Malaspinas, O., Deville, M., Michler, A., 2008. Straight velocity
+            #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
+
+            # Apply interpolated bounceback first to find missing populations at the boundary
+            f_post = bc_helper.interpolated_nonequilibrium_bounceback(
+                index, _missing_mask, f_0, f_1, f_pre, f_post, wp.static(self.needs_mesh_distance)
+            )
+
+            # Compute density, velocity using all f_post-streaming values
+            rho, u = self.macroscopic.warp_functional(f_post)
+
+            # Regularize the resulting populations
+            feq = self.equilibrium.warp_functional(rho, u)
+            f_post = bc_helper.regularize_fpop(f_post, feq)
+            return f_post
+
         # Construct the functionals for this BC
         @wp.func
         def dorschner_localized(
@@ -295,6 +330,8 @@ class HybridBC(BoundaryCondition):
             functional = hybrid_bounceback_grads
         elif self.bc_method == "dorschner_localized":
             functional = dorschner_localized
+        elif self.bc_method == "nonequilibrium_regularized":
+            functional = hybrid_nonequilibrium_regularized
 
         kernel = self._construct_kernel(functional)
 

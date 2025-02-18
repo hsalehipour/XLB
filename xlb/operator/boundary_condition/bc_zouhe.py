@@ -44,6 +44,7 @@ class ZouHeBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
     ):
         # Important Note: it is critical to add id inside __init__ for this BC because different instantiations of this BC
         # may have different types (velocity or pressure).
@@ -59,6 +60,7 @@ class ZouHeBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
         # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or

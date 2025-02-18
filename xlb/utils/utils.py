@@ -8,6 +8,8 @@ from jax import jit
 import jax.numpy as jnp
 from functools import partial
 import trimesh
+import open3d as o3d
+import h5py
 
 import os
 import __main__
@@ -87,9 +89,9 @@ def save_image(fld, timestep=None, prefix=None, **kwargs):
     plt.imsave(fname + ".png", fld.T, cmap=cm.nipy_spectral, origin="lower", **kwargs)
 
 
-def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
+def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields", shift_coords=(0, 0, 0), scale=1):
     """
-    Save VTK fields to the specified directory.
+    Save VTK fields to the specified directory, shifting the coordinates if needed.
 
     Parameters
     ----------
@@ -102,6 +104,8 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
         The key value for each field in the dictionary must be a string containing the name of the field.
     output_dir (str, optional, default: '.'): The directory in which to save the VTK files. Defaults to the current directory.
     prefix (str, optional, default: 'fields'): A prefix to be added to the filename. Defaults to 'fields'.
+    shift_coords (tuple, optional, default: (0, 0, 0)): The amount to shift in the x, y, and z directions.
+    scale (int, optional, default: 1): The amount to scale the geometry.
 
     Returns
     -------
@@ -114,6 +118,7 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
     will be saved as 'fields_0000010.vtk'in the specified directory.
 
     """
+    start = time()
     # Assert that all fields have the same dimensions
     for key, value in fields.items():
         if key == list(fields.keys())[0]:
@@ -121,7 +126,7 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
         else:
             assert value.shape == dimensions, "All fields must have the same dimensions!"
 
-    output_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:07d}.vtk")
+    output_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:08d}.vtk")
 
     # Add 1 to the dimensions tuple as we store cell values
     dimensions = tuple([dim + 1 for dim in dimensions])
@@ -130,14 +135,13 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
     if value.ndim == 2:
         dimensions = dimensions + (1,)
 
-    grid = pv.ImageData(dimensions=dimensions)
+    grid = pv.ImageData(dimensions=dimensions, origin=shift_coords, spacing=(scale, scale, scale))
 
     # Add the fields to the grid
     for key, value in fields.items():
         grid[key] = value.flatten(order="F")
 
     # Save the grid to a VTK file
-    start = time()
     grid.save(output_filename, binary=True)
     print(f"Saved {output_filename} in {time() - start:.6f} seconds.")
 
@@ -272,6 +276,68 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
     return mesh_voxelized, pitch
 
 
+def save_fields_hdf5(fields, timestep, output_dir=".", prefix="fields", shift_coords=(0, 0, 0), scale=1, compression="gzip", compression_opts=0):
+    start = time()
+    filename = str(prefix + "_" + f"{timestep:08d}.h5")
+    output_filename = os.path.join(output_dir, filename)
+
+    # Determine the dimensions (assuming all fields have the same shape)
+    for key, value in fields.items():
+        if key == list(fields.keys())[0]:
+            dimensions = value.shape
+        else:
+            assert value.shape == dimensions, "All fields must have the same dimensions!"
+
+    with h5py.File(output_filename, "w") as f:
+        # Write field data with Fortran order to match the VTK convention
+        for key, value in fields.items():
+            value = np.transpose(value, (2, 1, 0))
+
+            dataset = f.create_dataset(key, data=value, dtype="float32", compression=compression, compression_opts=compression_opts)
+            dataset.attrs["origin"] = shift_coords
+            dataset.attrs["spacing"] = (scale, scale, scale)
+
+    # Write the XDMF file using HyperSlab to properly reference the HDF5 data
+    xdmf_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:08d}.xdmf")
+    with open(xdmf_filename, "w") as xdmf:
+        xdmf.write(f"""<?xml version="1.0" ?>
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+  <Domain>
+    <Grid Name="fields" GridType="Uniform">
+      <Topology TopologyType="3DCoRectMesh" Dimensions="{dimensions[2] + 1} {dimensions[1] + 1} {dimensions[0] + 1}"/>
+      <Geometry GeometryType="ORIGIN_DXDYDZ">
+        <DataItem Dimensions="3" NumberType="Float" Precision="4" Format="XML">
+          {shift_coords[2]} {shift_coords[1]} {shift_coords[0]}
+        </DataItem>
+        <DataItem Dimensions="3" NumberType="Float" Precision="4" Format="XML">
+          {scale} {scale} {scale}
+        </DataItem>
+      </Geometry>
+""")
+        for key in fields.keys():
+            xdmf.write(f"""
+      <Attribute Name="{key}" AttributeType="Scalar" Center="Cell">
+        <DataItem ItemType="HyperSlab" Dimensions="{dimensions[2]} {dimensions[1]} {dimensions[0]}" NumberType="Float" Precision="4" Format="HDF">
+          <DataItem Dimensions="3 3" Format="XML">
+            0 0 0
+            1 1 1
+            {dimensions[2]} {dimensions[1]} {dimensions[0]}
+          </DataItem>
+          <DataItem Dimensions="{dimensions[2]} {dimensions[1]} {dimensions[0]}" NumberType="Float" Precision="4" Format="HDF">
+            {filename}:/{key}
+          </DataItem>
+        </DataItem>
+      </Attribute>
+""")
+        xdmf.write("""
+    </Grid>
+  </Domain>
+</Xdmf>
+""")
+
+    print(f"Saved {output_filename} and {xdmf_filename} in {time() - start:.6f} seconds.")
+
+
 def axangle2mat(axis, angle, is_normalized=False):
     """Rotation matrix for rotation angle `angle` around `axis`
     Parameters
@@ -314,3 +380,84 @@ def axangle2mat(axis, angle, is_normalized=False):
         [xyC + zs, y * yC + c, yzC - xs],
         [zxC - ys, yzC + xs, z * zC + c],
     ])
+
+
+def voxelize_stl_open3d(stl_filename, length_lbm_unit):
+    # Load the STL file
+    mesh = o3d.io.read_triangle_mesh(stl_filename)
+    print("..Model read")
+    # Compute the voxel grid from the mesh
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_triangle_mesh(mesh, voxel_size=length_lbm_unit)
+    print("...Grid created")
+    # Get the bounding box of the voxel grid
+    bbox = voxel_grid.get_axis_aligned_bounding_box()
+
+    # Calculate the number of voxels along each axis
+    grid_size = np.ceil((bbox.get_max_bound() - bbox.get_min_bound()) / length_lbm_unit).astype(int)
+
+    # Initialize an empty 3D array based on the calculated grid size
+    voxel_matrix = np.zeros(grid_size, dtype=bool)
+
+    # Convert voxel indices to a boolean matrix
+    for voxel in voxel_grid.get_voxels():
+        x, y, z = voxel.grid_index
+        voxel_matrix[x, y, z] = True
+
+    # Return the voxel matrix and the bounding box corners
+    return voxel_matrix, bbox.get_box_points()
+
+
+@partial(jit)
+def q_criterion(u):
+    # Compute derivatives
+    u_x = u[0, ...]
+    u_y = u[1, ...]
+    u_z = u[2, ...]
+
+    # Compute derivatives
+    u_x_dx = (u_x[2:, 1:-1, 1:-1] - u_x[:-2, 1:-1, 1:-1]) / 2
+    u_x_dy = (u_x[1:-1, 2:, 1:-1] - u_x[1:-1, :-2, 1:-1]) / 2
+    u_x_dz = (u_x[1:-1, 1:-1, 2:] - u_x[1:-1, 1:-1, :-2]) / 2
+    u_y_dx = (u_y[2:, 1:-1, 1:-1] - u_y[:-2, 1:-1, 1:-1]) / 2
+    u_y_dy = (u_y[1:-1, 2:, 1:-1] - u_y[1:-1, :-2, 1:-1]) / 2
+    u_y_dz = (u_y[1:-1, 1:-1, 2:] - u_y[1:-1, 1:-1, :-2]) / 2
+    u_z_dx = (u_z[2:, 1:-1, 1:-1] - u_z[:-2, 1:-1, 1:-1]) / 2
+    u_z_dy = (u_z[1:-1, 2:, 1:-1] - u_z[1:-1, :-2, 1:-1]) / 2
+    u_z_dz = (u_z[1:-1, 1:-1, 2:] - u_z[1:-1, 1:-1, :-2]) / 2
+
+    # Compute vorticity
+    mu_x = u_z_dy - u_y_dz
+    mu_y = u_x_dz - u_z_dx
+    mu_z = u_y_dx - u_x_dy
+    norm_mu = jnp.sqrt(mu_x**2 + mu_y**2 + mu_z**2)
+
+    # Compute strain rate
+    s_0_0 = u_x_dx
+    s_0_1 = 0.5 * (u_x_dy + u_y_dx)
+    s_0_2 = 0.5 * (u_x_dz + u_z_dx)
+    s_1_0 = s_0_1
+    s_1_1 = u_y_dy
+    s_1_2 = 0.5 * (u_y_dz + u_z_dy)
+    s_2_0 = s_0_2
+    s_2_1 = s_1_2
+    s_2_2 = u_z_dz
+    s_dot_s = s_0_0**2 + s_0_1**2 + s_0_2**2 + s_1_0**2 + s_1_1**2 + s_1_2**2 + s_2_0**2 + s_2_1**2 + s_2_2**2
+
+    # Compute omega
+    omega_0_0 = 0.0
+    omega_0_1 = 0.5 * (u_x_dy - u_y_dx)
+    omega_0_2 = 0.5 * (u_x_dz - u_z_dx)
+    omega_1_0 = -omega_0_1
+    omega_1_1 = 0.0
+    omega_1_2 = 0.5 * (u_y_dz - u_z_dy)
+    omega_2_0 = -omega_0_2
+    omega_2_1 = -omega_1_2
+    omega_2_2 = 0.0
+    omega_dot_omega = (
+        omega_0_0**2 + omega_0_1**2 + omega_0_2**2 + omega_1_0**2 + omega_1_1**2 + omega_1_2**2 + omega_2_0**2 + omega_2_1**2 + omega_2_2**2
+    )
+
+    # Compute q-criterion
+    q = 0.5 * (omega_dot_omega - s_dot_s)
+
+    return norm_mu, q

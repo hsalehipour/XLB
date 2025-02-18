@@ -36,6 +36,7 @@ class EquilibriumBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method=None,
     ):
         # Store the equilibrium information
         self.rho = rho
@@ -53,6 +54,7 @@ class EquilibriumBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
     @Operator.register_backend(ComputeBackend.JAX)

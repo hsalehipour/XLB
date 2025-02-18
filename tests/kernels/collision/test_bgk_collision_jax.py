@@ -9,7 +9,7 @@ from xlb import DefaultConfig
 
 
 def init_xlb_env(velocity_set):
-    vel_set = velocity_set(precision_policy=xlb.PrecisionPolicy.FP32FP32, backend=ComputeBackend.JAX)
+    vel_set = velocity_set(precision_policy=xlb.PrecisionPolicy.FP32FP32, compute_backend=ComputeBackend.JAX)
     xlb.init(
         default_precision_policy=xlb.PrecisionPolicy.FP32FP32,
         default_backend=ComputeBackend.JAX,
@@ -41,11 +41,11 @@ def test_bgk_ollision(dim, velocity_set, grid_shape, omega):
 
     # Compute collision
 
-    compute_collision = BGK(omega=omega)
+    compute_collision = BGK()
 
     f_orig = my_grid.create_field(cardinality=DefaultConfig.velocity_set.q)
 
-    f_out = compute_collision(f_orig, f_eq, rho, u)
+    f_out = compute_collision(f_orig, f_eq, rho, u, omega)
 
     assert jnp.allclose(f_out, f_orig - omega * (f_orig - f_eq))
 
