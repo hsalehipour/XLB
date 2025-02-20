@@ -296,7 +296,7 @@ class IncompressibleNavierStokesStepper(Stepper):
                 return
 
             # Apply streaming
-            _f_post_stream = self.stream.warp_functional(f_0, index)
+            _f_post_stream = self.stream.warp_functional(f_0, missing_mask, index)
 
             _f0_thread, _f1_thread, _missing_mask = get_thread_data(f_0, f_1, missing_mask, index)
             _f_post_collision = _f0_thread

@@ -59,11 +59,13 @@ class Stream(Operator):
         @wp.func
         def functional(
             f: wp.array4d(dtype=Any),
+            missing_mask: wp.array4d(dtype=wp.bool),
             index: Any,
         ):
             # Pull the distribution function
             _f = _f_vec()
             for l in range(self.velocity_set.q):
+                # if not missing_mask[l, index[0], index[1], index[2]]:
                 # Get pull index
                 pull_index = type(index)()
                 for d in range(self.velocity_set.d):
