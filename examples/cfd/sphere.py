@@ -157,15 +157,14 @@ class WindTunnel3D:
         inlet, outlet, walls, sphere = self.define_boundary_indices()
         bc_left = RegularizedBC("velocity", prescribed_value=(self.wind_speed, 0.0, 0.0), indices=inlet)
         bc_do_nothing = DoNothingBC(indices=outlet)
-        bc_sphere = HybridBC(bc_method="dorschner_localized", mesh_vertices=sphere, voxelization_method="winding")
-        # bc_sphere = HybridBC(bc_method="bounceback_grads", mesh_vertices=sphere, use_mesh_distance=True)
+        # bc_sphere = HybridBC(bc_method="dorschner_localized", mesh_vertices=sphere, voxelization_method="winding")
+        bc_sphere = HybridBC(bc_method="bounceback_regularized", mesh_vertices=sphere, use_mesh_distance=True, voxelization_method="ray")
         # bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere)
         # Not assining BC for walls makes them periodic.
         self.boundary_conditions = [bc_left, bc_do_nothing, bc_sphere]
 
     def setup_stepper(self):
         self.stepper = IncompressibleNavierStokesStepper(
-            omega=self.omega,
             grid=self.grid,
             boundary_conditions=self.boundary_conditions,
             collision_type="KBC",
@@ -178,7 +177,7 @@ class WindTunnel3D:
 
         start_time = time.time()
         for i in range(num_steps):
-            self.f_0, self.f_1 = self.stepper(self.f_0, self.f_1, self.bc_mask, self.missing_mask, i)
+            self.f_0, self.f_1 = self.stepper(self.f_0, self.f_1, self.bc_mask, self.missing_mask, self.omega, i)
             self.f_0, self.f_1 = self.f_1, self.f_0
 
             if i % post_process_interval == 0 or i == num_steps - 1:
@@ -187,6 +186,7 @@ class WindTunnel3D:
             if (i + 1) % print_interval == 0:
                 elapsed_time = time.time() - start_time
                 print(f"Iteration: {i + 1}/{num_steps} | Time elapsed: {elapsed_time:.2f}s")
+                start_time = time.time()
 
     def post_process(self, i):
         # Write the results. We'll use JAX backend for the post-processing
@@ -199,7 +199,7 @@ class WindTunnel3D:
         macro = Macroscopic(
             compute_backend=ComputeBackend.JAX,
             precision_policy=self.precision_policy,
-            velocity_set=xlb.velocity_set.D3Q27(precision_policy=self.precision_policy, backend=ComputeBackend.JAX),
+            velocity_set=xlb.velocity_set.D3Q27(precision_policy=self.precision_policy, compute_backend=ComputeBackend.JAX),
         )
 
         rho, u = macro(f_0)
@@ -270,10 +270,10 @@ if __name__ == "__main__":
     grid_shape = (grid_size_x, grid_size_y, grid_size_z)
 
     # Configuration
-    backend = ComputeBackend.WARP
+    compute_backend = ComputeBackend.WARP
     precision_policy = PrecisionPolicy.FP32FP32
 
-    velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, backend=backend)
+    velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
     wind_speed = 0.02
     num_steps = 100000
     print_interval = 1000
@@ -289,7 +289,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 50 + "\n")
     print("Simulation Configuration:")
     print(f"Grid size: {grid_size_x} x {grid_size_y} x {grid_size_z}")
-    print(f"Backend: {backend}")
+    print(f"Backend: {compute_backend}")
     print(f"Velocity set: {velocity_set}")
     print(f"Precision policy: {precision_policy}")
     print(f"Prescribed velocity: {wind_speed}")
@@ -297,5 +297,5 @@ if __name__ == "__main__":
     print(f"Max iterations: {num_steps}")
     print("\n" + "=" * 50 + "\n")
 
-    simulation = WindTunnel3D(omega, wind_speed, grid_shape, velocity_set, backend, precision_policy)
+    simulation = WindTunnel3D(omega, wind_speed, grid_shape, velocity_set, compute_backend, precision_policy)
     simulation.run(num_steps, print_interval, post_process_interval=1000)
