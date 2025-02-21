@@ -225,8 +225,12 @@ class HelperFunctionsBC(object):
                     else:
                         weight = compute_dtype(0.5)
 
-                    # Use differentiable interpolated BB to find f_missing:
-                    f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    if _missing_mask[_opp_indices[l]] == wp.uint8(0):
+                        # Use differentiable interpolated BB to find f_missing:
+                        f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
+                    else:
+                        # These are cases where the boundary is sandwiched between 2 solid cells and so both opposite directions are missing.
+                        f_post[l] = f_pre[_opp_indices[l]]
 
                     # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0.
                     # There needs to be an input flag for this!
