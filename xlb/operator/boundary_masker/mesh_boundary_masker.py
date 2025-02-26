@@ -59,6 +59,33 @@ class MeshBoundaryMasker(Operator):
             pos = ijk + wp.vec3(0.5, 0.5, 0.5)  # cell center
             return pos
 
+        @wp.func
+        def is_in_bounds(index: wp.vec3i, domain_shape: wp.vec3i):
+            return (
+                index[0] >= 0
+                and index[0] < domain_shape[0]
+                and index[1] >= 0
+                and index[1] < domain_shape[1]
+                and index[2] >= 0
+                and index[2] < domain_shape[2]
+            )
+
+        @wp.func
+        def out_of_bound_pull_index(
+            lattice_dir: wp.int32,
+            index: wp.vec3i,
+            domain_shape: wp.vec3i,
+        ):
+            # Get the index of the streaming direction
+            pull_index = wp.vec3i()
+            for d in range(self.velocity_set.d):
+                pull_index[d] = index[d] - _c[d, lattice_dir]
+
+            # check if pull index is out of bound
+            # These directions will have missing information after streaming
+            missing = not is_in_bounds(pull_index, domain_shape)
+            return missing
+
         # Function to precompute useful values per triangle, assuming spacing is (1,1,1)
         # inputs: verts: triangle vertices, normal: triangle unit normal
         # outputs: dist1, dist2, normal_edge0, normal_edge1, dist_edge
@@ -231,10 +258,7 @@ class MeshBoundaryMasker(Operator):
             else:
                 # Find the boundary voxels and their missing directions
                 for l in range(1, _q):
-                    # _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))
-
                     # Check to see if this neighbor is solid - this is super inefficient TODO: make it way better
-                    # if solid_mask[i,j,k] == wp.uint8(255):
                     if solid_mask[i + _c[0, l], j + _c[1, l], k + _c[2, l]] == wp.uint8(255):
                         # We know we have a solid neighbor
                         # Set the boundary id and missing_mask
@@ -430,17 +454,6 @@ class MeshBoundaryMasker(Operator):
                             bc_mask[0, push_index[0], push_index[1], push_index[2]] = wp.uint8(id_number)
                             missing_mask[l, push_index[0], push_index[1], push_index[2]] = True
 
-                    # # Stream indices
-                    # for l in range(_q):
-                    #     # Get the index of the streaming direction
-                    #     push_index = wp.vec3i()
-                    #     for d in range(self.velocity_set.d):
-                    #         push_index[d] = index[d] + _c[d, l]
-
-                    #     # Set the boundary id and missing_mask
-                    #     bc_mask[0, push_index[0], push_index[1], push_index[2]] = wp.uint8(id_number)
-                    #     missing_mask[l, push_index[0], push_index[1], push_index[2]] = True
-
         @wp.kernel
         def kernel_winding_with_distance(
             mesh_id: wp.uint64,
@@ -515,7 +528,6 @@ class MeshBoundaryMasker(Operator):
             # position of the point
             pos_bc_cell = index_to_position(index)
 
-            # Find the fractional distance to the mesh in each direction
             for l in range(1, _q):
                 _dir = wp.vec3f(wp.float32(_c[0, l]), wp.float32(_c[1, l]), wp.float32(_c[2, l]))
                 # Max length depends on ray direction (diagonals are longer)
@@ -564,6 +576,28 @@ class MeshBoundaryMasker(Operator):
                     # if weight < 0.0 or weight > 1.0:
                     #     wp.printf("Got bad weight %f at %d,%d,%d\n", weight, index[0], index[1], index[2])
 
+        @wp.kernel
+        def resolve_out_of_bound(
+            id_number: wp.int32,
+            bc_mask: wp.array4d(dtype=wp.uint8),
+            missing_mask: wp.array4d(dtype=wp.bool),
+        ):
+            # get index
+            i, j, k = wp.tid()
+
+            # Get local indices
+            index = wp.vec3i(i, j, k)
+
+            # domain shape to check for out of bounds
+            domain_shape = wp.vec3i(bc_mask.shape[1], bc_mask.shape[2], bc_mask.shape[3])
+
+            # Find the fractional distance to the mesh in each direction
+            if bc_mask[0, index[0], index[1], index[2]] == wp.uint8(id_number):
+                for l in range(1, _q):
+                    # Ensuring out of bound pull indices are properly considered in the missing_mask
+                    if out_of_bound_pull_index(l, index, domain_shape):
+                        missing_mask[l, index[0], index[1], index[2]] = True
+
         kernel_dict = {
             "ray": [kernel_ray, kernel_ray_with_distance],
             "aabb": [kernel_aabb, kernel_aabb_with_distance],
@@ -572,6 +606,7 @@ class MeshBoundaryMasker(Operator):
             "aabb_solid": kernel_aabb_solid,
             "erode_tile": erode_tile,
             "dilate_tile": dilate_tile,
+            "resolve_out_of_bound": resolve_out_of_bound,
         }
         return None, kernel_dict
 
@@ -629,6 +664,7 @@ class MeshBoundaryMasker(Operator):
         # Launch the appropriate warp kernel
         kernel_dict = self.warp_kernel
         kernel_list = kernel_dict.get(bc.voxelization_method)
+        resolve_out_of_bound = kernel_dict.get("resolve_out_of_bound")
         if bc.voxelization_method == "aabb_fill_in":
             wp.launch(
                 kernel=kernel_dict["aabb_solid"],
@@ -651,9 +687,6 @@ class MeshBoundaryMasker(Operator):
                 block_dim=32,
                 inputs=[solid_mask_out, solid_mask],
             )
-            # solid_mask_cropped = solid_mask[
-            #     2 * self.tile_half : -2 * self.tile_half, 2 * self.tile_half : -2 * self.tile_half, 2 * self.tile_half : -2 * self.tile_half
-            # ].numpy().astype(wp.uint8)
             solid_mask_cropped = wp.array(
                 solid_mask[
                     2 * self.tile_half : -2 * self.tile_half, 2 * self.tile_half : -2 * self.tile_half, 2 * self.tile_half : -2 * self.tile_half
@@ -661,7 +694,6 @@ class MeshBoundaryMasker(Operator):
                 dtype=wp.uint8,
             )
         else:
-            # solid_mask_cropped = solid_mask.numpy().astype(wp.uint8)
             solid_mask_cropped = wp.array(solid_mask, dtype=wp.uint8)
         if bc.needs_mesh_distance:
             wp.launch(
@@ -675,4 +707,9 @@ class MeshBoundaryMasker(Operator):
                 inputs=[mesh_id, id_number, bc_mask, missing_mask, solid_mask_cropped],
                 dim=bc_mask.shape[1:],
             )
+        wp.launch(
+            resolve_out_of_bound,
+            inputs=[id_number, bc_mask, missing_mask],
+            dim=bc_mask.shape[1:],
+        )
         return f_0, f_1, bc_mask, missing_mask
