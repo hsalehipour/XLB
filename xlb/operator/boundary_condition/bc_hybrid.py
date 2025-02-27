@@ -104,7 +104,7 @@ class HybridBC(BoundaryCondition):
             prescribed_value = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)(prescribed_value)
 
             @wp.func
-            def prescribed_profile_warp(index: wp.vec3i):
+            def prescribed_profile_warp(index: wp.vec3i, time: Any):
                 return wp.vec3(prescribed_value[0], prescribed_value[1], prescribed_value[2])
 
             self.profile = prescribed_profile_warp
@@ -203,7 +203,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index)
+            u_wall = self.profile(index, timestep)
             f_post = bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -242,7 +242,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index)
+            u_wall = self.profile(index, timestep)
             f_post = bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -280,7 +280,7 @@ class HybridBC(BoundaryCondition):
             #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index)
+            u_wall = self.profile(index, timestep)
             f_post = bc_helper.interpolated_nonequilibrium_bounceback(
                 index,
                 _missing_mask,
@@ -319,7 +319,7 @@ class HybridBC(BoundaryCondition):
             # NOTE: this BC has been reformulated to become less dependent on non-local information and so has differences
             # compared to the original paper.
             u_target = _u_wall
-            u_wall = self.profile(index)
+            u_wall = self.profile(index, timestep)
             one = self.compute_dtype(1.0)
             num_missing = self.compute_dtype(0.0)
             for l in range(_q):
@@ -346,7 +346,7 @@ class HybridBC(BoundaryCondition):
                     f_post[l] = f_pre[_opp_indices[l]]
 
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
-                    f_post = bc_helper.moving_wall_fpop_correction(u_wall, l, f_post)
+                    f_post[l] += bc_helper.moving_wall_fpop_correction(u_wall, l)
 
                     # Record the number of missing directions
                     num_missing += one

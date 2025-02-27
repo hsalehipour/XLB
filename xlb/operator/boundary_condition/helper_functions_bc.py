@@ -178,7 +178,6 @@ class HelperFunctionsBC(object):
         def moving_wall_fpop_correction(
             u_wall: Any,
             lattice_direction: Any,
-            f_post: Any,
         ):
             # Add forcing term necessary to account for the local density changes caused by the mass displacement
             # as the object moves with velocity u_wall.
@@ -194,9 +193,8 @@ class HelperFunctionsBC(object):
                     cu += u_wall[d]
                 elif _c[d, l] == -1:
                     cu -= u_wall[d]
-            cu *= compute_dtype(-6.0) * _w[l]
-            f_post[l] += cu
-            return f_post
+            cu *= compute_dtype(6.0) * _w[l]
+            return cu
 
         @wp.func
         def interpolated_bounceback(
@@ -236,7 +234,7 @@ class HelperFunctionsBC(object):
 
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
                     if needs_moving_wall_treatment:
-                        f_post = moving_wall_fpop_correction(u_wall, l, f_post)
+                        f_post[l] += moving_wall_fpop_correction(u_wall, l)
             return f_post
 
         @wp.func
