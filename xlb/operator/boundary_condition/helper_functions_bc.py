@@ -176,12 +176,11 @@ class HelperFunctionsBC(object):
 
         @wp.func
         def moving_wall_fpop_correction(
-            u_w: Any,
+            u_wall: Any,
             lattice_direction: Any,
-            f_post: Any,
         ):
             # Add forcing term necessary to account for the local density changes caused by the mass displacement
-            # as the object moves with velocity u_w.
+            # as the object moves with velocity u_wall.
             # [1] L.-S. Luo, Unified theory of lattice Boltzmann models for nonideal gases, Phys. Rev. Lett. 81 (1998) 1618-1621.
             # [2] L.-S. Luo, Theory of the lattice Boltzmann method: Lattice Boltzmann models for nonideal gases, Phys. Rev. E 62 (2000) 4982-4996.
             #
@@ -191,12 +190,11 @@ class HelperFunctionsBC(object):
             l = lattice_direction
             for d in range(_d):
                 if _c[d, l] == 1:
-                    cu += u_w[d]
+                    cu += u_wall[d]
                 elif _c[d, l] == -1:
-                    cu -= u_w[d]
-            cu *= compute_dtype(-6.0) * _w[l]
-            f_post[l] += cu
-            return f_post
+                    cu -= u_wall[d]
+            cu *= compute_dtype(6.0) * _w[l]
+            return cu
 
         @wp.func
         def interpolated_bounceback(
@@ -206,6 +204,8 @@ class HelperFunctionsBC(object):
             f_1: Any,
             f_pre: Any,
             f_post: Any,
+            u_wall: Any,
+            needs_moving_wall_treatment: bool,
             needs_mesh_distance: bool,
         ):
             # A local single-node version of the interpolated bounce-back boundary condition due to Bouzidi for a lattice
@@ -232,10 +232,9 @@ class HelperFunctionsBC(object):
                         # These are cases where the boundary is sandwiched between 2 solid cells and so both opposite directions are missing.
                         f_post[l] = f_pre[_opp_indices[l]]
 
-                    # TODO: Add u_wall associated with moving boundaries that are properly stored in f_1 or f_0.
-                    # There needs to be an input flag for this!
                     # Add contribution due to moving_wall to f_missing as is usual in regular Bouzidi BC
-                    # f_post = moving_wall_fpop_correction(_u_wall, l, f_post)
+                    if needs_moving_wall_treatment:
+                        f_post[l] += moving_wall_fpop_correction(u_wall, l)
             return f_post
 
         @wp.func
@@ -246,11 +245,19 @@ class HelperFunctionsBC(object):
             f_1: Any,
             f_pre: Any,
             f_post: Any,
+            u_wall: Any,
+            needs_moving_wall_treatment: bool,
             needs_mesh_distance: bool,
         ):
             # Compute density, velocity using all f_post-collision values
             rho, u = macroscopic.warp_functional(f_pre)
             feq = equilibrium.warp_functional(rho, u)
+
+            # Compute equilibrium distribution at the wall
+            if needs_moving_wall_treatment:
+                feq_wall = equilibrium.warp_functional(rho, u_wall)
+            else:
+                feq_wall = _f_vec()
 
             # Apply method in Tao et al (2018) [1] to find missing populations at the boundary
             one = compute_dtype(1.0)
@@ -266,8 +273,14 @@ class HelperFunctionsBC(object):
 
                     # Use non-equilibrium bounceback to find f_missing:
                     fneq = f_pre[_opp_indices[l]] - feq[_opp_indices[l]]
-                    feq_wall = _w[l] * rho  # TODO: needs to be updated with u_wall
-                    f_wall = feq_wall + fneq
+
+                    # Compute equilibrium distribution at the wall
+                    # Same quadratic equilibrium but accounting for zero velocity (no-slip)
+                    if not needs_moving_wall_treatment:
+                        feq_wall[l] = _w[l] * rho
+
+                    # Assemble wall population for doing interpolation at the boundary
+                    f_wall = feq_wall[l] + fneq
                     f_post[l] = (f_wall + weight * f_pre[l]) / (one + weight)
 
             return f_post

@@ -7,7 +7,7 @@ from jax import jit
 import jax.lax as lax
 from functools import partial
 import warp as wp
-from typing import Any, Union, Tuple
+from typing import Any, Union, Tuple, Callable
 import numpy as np
 
 from xlb.velocity_set.velocity_set import VelocitySet
@@ -37,7 +37,7 @@ class ZouHeBC(BoundaryCondition):
     def __init__(
         self,
         bc_type,
-        profile=None,
+        profile: Callable = None,
         prescribed_value: Union[float, Tuple[float, ...], np.ndarray] = None,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
@@ -51,7 +51,6 @@ class ZouHeBC(BoundaryCondition):
         assert bc_type in ["velocity", "pressure"], f"type = {bc_type} not supported! Use 'pressure' or 'velocity'."
         self.bc_type = bc_type
         self.equilibrium_operator = QuadraticEquilibrium()
-        self.profile = profile
 
         # Call the parent constructor
         super().__init__(
@@ -63,6 +62,10 @@ class ZouHeBC(BoundaryCondition):
             mesh_vertices,
             voxelization_method,
         )
+
+        # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
+        # velocity profiles given by keyword "profile" which must be a callable function.
+        self.profile = profile
 
         # Handle prescribed value if provided
         if prescribed_value is not None:
