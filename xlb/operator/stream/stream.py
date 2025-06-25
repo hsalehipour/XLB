@@ -127,34 +127,13 @@ class Stream(Operator):
             # Pull the distribution function
             _f = _f_vec()
             for l in range(self.velocity_set.q):
-                # Get pull index
-                # pull_index = type(index)()
-                # for d in range(self.velocity_set.d):
-                #     pull_index[d] = index[d] - _c[d, l]
-
+                # Get pull offset
                 ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
-
                 unused_is_valid = wp.bool(False)
+
+                # Read the distribution function from the neighboring cell in the pull direction
                 _f[l] = wp.neon_read_ngh(f, index, ngh, l, self.compute_dtype(0), unused_is_valid)
-
             return _f
-
-        # # Construct the warp kernel
-        # @wp.kernel
-        # def kernel(
-        #     f_0: wp.array4d(dtype=Any),
-        #     f_1: wp.array4d(dtype=Any),
-        # ):
-        #     # Get the global index
-        #     i, j, k = wp.tid()
-        #     index = wp.vec3i(i, j, k)
-        #
-        #     # Set the output
-        #     _f = functional(f_0, index)
-        #
-        #     # Write the output
-        #     for l in range(self.velocity_set.q):
-        #         f_1[l, index[0], index[1], index[2]] = self.store_dtype(_f[l])
 
         return functional, None
 

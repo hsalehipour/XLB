@@ -132,7 +132,7 @@ class MomentumTransfer(Operator):
 
                 # Apply streaming (pull method)
                 timestep = 0
-                f_post_stream = self.stream.warp_functional(f_0, index)
+                f_post_stream = self.stream_functional(f_0, index)
                 f_post_stream = self.no_slip_bc_instance.warp_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
 
                 # Compute the momentum transfer
@@ -178,6 +178,9 @@ class MomentumTransfer(Operator):
         # Allocate the force vector (the total integral value will be computed)
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         force = wp.zeros((1), dtype=_u_vec)
+
+        # Define the warp functional for streaming operation
+        self.stream_functional = self.stream.warp_functional
 
         # Launch the warp kernel
         wp.launch(
