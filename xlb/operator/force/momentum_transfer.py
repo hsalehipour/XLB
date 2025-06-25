@@ -9,6 +9,7 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.stream import Stream
+import neon
 
 
 class MomentumTransfer(Operator):
@@ -188,4 +189,62 @@ class MomentumTransfer(Operator):
             inputs=[f_0, f_1, bc_mask, missing_mask, force],
             dim=f_0.shape[1:],
         )
+        return force.numpy()[0]
+
+    def _construct_neon(self):
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+
+        @neon.Container.factory(name="MomentumTransfer")
+        def container(
+            f_0: Any,
+            f_1: Any,
+            bc_mask: Any,
+            missing_mask: Any,
+            force: Any,
+        ):
+            def container_launcher(loader: neon.Loader):
+                loader.set_grid(bc_mask.get_grid())
+                bc_mask_pn = loader.get_write_handle(bc_mask)
+                missing_mask_pn = loader.get_write_handle(missing_mask)
+                f_0_pn = loader.get_write_handle(f_0)
+                f_1_pn = loader.get_write_handle(f_1)
+
+                @wp.func
+                def container_kernel(index: Any):
+                    # apply the functional
+                    functional(
+                        index,
+                        f_0_pn,
+                        f_1_pn,
+                        bc_mask_pn,
+                        missing_mask_pn,
+                        force,
+                    )
+
+                loader.declare_kernel(container_kernel)
+
+            return container_launcher
+
+        return functional, container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(
+        self,
+        f_0,
+        f_1,
+        bc_mask,
+        missing_mask,
+        stream=0,
+    ):
+        # Allocate the force vector (the total integral value will be computed)
+        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+        force = wp.zeros((1), dtype=_u_vec)
+
+        # Define the warp functional for streaming operation
+        self.stream_functional = self.stream.neon_functional
+
+        # Launch the neon container
+        c = self.neon_container(f_0, f_1, bc_mask, missing_mask, force)
+        c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
         return force.numpy()[0]
