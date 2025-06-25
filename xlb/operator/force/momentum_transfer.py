@@ -101,28 +101,20 @@ class MomentumTransfer(Operator):
         # Find velocity index for 0, 0, 0
         lattice_central_index = self.velocity_set.center_index
 
-        # Construct the warp kernel
-        @wp.kernel
-        def kernel(
-            f_0: wp.array4d(dtype=Any),
-            f_1: wp.array4d(dtype=Any),
-            bc_mask: wp.array4d(dtype=wp.uint8),
-            missing_mask: wp.array4d(dtype=wp.uint8),
-            force: wp.array(dtype=Any),
+        @wp.func
+        def functional(
+            index: Any,
+            f_0: Any,
+            f_1: Any,
+            bc_mask: Any,
+            missing_mask: Any,
+            force: Any,
         ):
-            # Get the global index
-            i, j, k = wp.tid()
-            index = wp.vec3i(i, j, k)
-
             # Get the boundary id
-            _boundary_id = bc_mask[0, index[0], index[1], index[2]]
+            _boundary_id = self.read_field(bc_mask, index, 0)
             _missing_mask = _missing_mask_vec()
             for l in range(self.velocity_set.q):
-                # TODO fix vec bool
-                if missing_mask[l, index[0], index[1], index[2]]:
-                    _missing_mask[l] = wp.uint8(1)
-                else:
-                    _missing_mask[l] = wp.uint8(0)
+                _missing_mask[l] = self.read_field(missing_mask, index, l)
 
             # Determin if boundary is an edge by checking if center is missing
             is_edge = wp.bool(False)
@@ -136,7 +128,7 @@ class MomentumTransfer(Operator):
                 # Get the distribution function
                 f_post_collision = _f_vec()
                 for l in range(self.velocity_set.q):
-                    f_post_collision[l] = self.compute_dtype(f_0[l, index[0], index[1], index[2]])
+                    f_post_collision[l] = self.compute_dtype(self.read_field(f_0, index, l))
 
                 # Apply streaming (pull method)
                 timestep = 0
@@ -153,8 +145,31 @@ class MomentumTransfer(Operator):
                                 m[d] += phi
                             elif _c[d, _opp_indices[l]] == -1:
                                 m[d] -= phi
-
+            # Atomic sum to get the total force vector
             wp.atomic_add(force, 0, m)
+
+        # Construct the warp kernel
+        @wp.kernel
+        def kernel(
+            f_0: wp.array4d(dtype=Any),
+            f_1: wp.array4d(dtype=Any),
+            bc_mask: wp.array4d(dtype=wp.uint8),
+            missing_mask: wp.array4d(dtype=wp.uint8),
+            force: wp.array(dtype=Any),
+        ):
+            # Get the global index
+            i, j, k = wp.tid()
+            index = wp.vec3i(i, j, k)
+
+            # Call the functional to compute the force
+            functional(
+                index,
+                f_0,
+                f_1,
+                bc_mask,
+                missing_mask,
+                force,
+            )
 
         return None, kernel
 
