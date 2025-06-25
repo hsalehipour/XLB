@@ -79,8 +79,9 @@ class MultiresMomentumTransfer(MomentumTransfer):
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         force = wp.zeros((1), dtype=_u_vec)
 
-        # Define the warp functional for streaming operation
+        # Define the neon functionals needed for this operation
         self.stream_functional = self.stream.neon_functional
+        self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
 
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):

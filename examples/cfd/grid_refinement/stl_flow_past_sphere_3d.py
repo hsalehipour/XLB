@@ -1,3 +1,8 @@
+import neon
+import warp as wp
+import numpy as np
+import time
+
 import xlb
 from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import PrecisionPolicy
@@ -13,11 +18,8 @@ from xlb.operator.boundary_condition import (
     HybridBC,
 )
 from xlb.utils import make_cuboid_mesh
-import neon
-import warp as wp
-import numpy as np
-import time
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
+from xlb.operator.force import MultiresMomentumTransfer
 
 
 def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape):
@@ -85,7 +87,7 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape
         level_data.append(level)
         level_origins.append(box_origin)
 
-    return level_data, level_origins, mesh_vertices
+    return level_data, level_origins, mesh_vertices, sphere_radius
 
 
 # -------------------------- Simulation Setup --------------------------
@@ -112,7 +114,7 @@ xlb.init(
 
 # Generate the cuboid mesh and sphere vertices
 stl_filename = "examples/cfd/stl-files/sphere.stl"
-level_data, level_origins, sphere = generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape)
+level_data, level_origins, sphere, sphere_radius = generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape)
 
 # get the number of levels
 num_levels = len(level_data)
@@ -192,6 +194,23 @@ sim = xlb.helper.MultiresSimulationManager(
     collision_type="KBC",
 )
 
+# Setup Momentum Transfer for Force Calculation
+bc_sphre = boundary_conditions[-1]
+momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_backend)
+
+
+def print_lift_drag(sim):
+    # Compute lift and drag
+    boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
+    drag = boundary_force[0]  # x-direction
+    lift = boundary_force[2]
+    sphere_cross_section = np.pi * sphere_radius**2
+    u_avg = 0.5 * u_max
+    cd = 2.0 * drag / (u_avg**2 * sphere_cross_section)
+    cl = 2.0 * lift / (u_avg**2 * sphere_cross_section)
+    print(f"CD={cd}, CL={cl}")
+
+
 # -------------------------- Simulation Loop --------------------------
 
 wp.synchronize()
@@ -202,6 +221,7 @@ for step in range(num_steps):
     if step % post_process_interval == 0 or step == num_steps - 1:
         # TODO: Issues in the vtk output for rectangular cuboids (as if a duboid grid with the largest side is assumed)
         sim.export_macroscopic("multires_flow_over_sphere_3d_")
+        print_lift_drag(sim)
         wp.synchronize()
         end_time = time.time()
         elapsed = end_time - start_time

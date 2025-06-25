@@ -134,7 +134,7 @@ class MomentumTransfer(Operator):
                 # Apply streaming (pull method)
                 timestep = 0
                 f_post_stream = self.stream_functional(f_0, index)
-                f_post_stream = self.no_slip_bc_instance.warp_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
+                f_post_stream = self.no_slip_bc_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
 
                 # Compute the momentum transfer
                 for d in range(self.velocity_set.d):
@@ -172,7 +172,7 @@ class MomentumTransfer(Operator):
                 force,
             )
 
-        return None, kernel
+        return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, f_0, f_1, bc_mask, missing_mask):
@@ -180,8 +180,9 @@ class MomentumTransfer(Operator):
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         force = wp.zeros((1), dtype=_u_vec)
 
-        # Define the warp functional for streaming operation
+        # Define the warp functionals needed for this operation
         self.stream_functional = self.stream.warp_functional
+        self.no_slip_bc_functional = self.no_slip_bc_instance.warp_functional
 
         # Launch the warp kernel
         wp.launch(
@@ -241,8 +242,9 @@ class MomentumTransfer(Operator):
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         force = wp.zeros((1), dtype=_u_vec)
 
-        # Define the warp functional for streaming operation
+        # Define the neon functionals needed for this operation
         self.stream_functional = self.stream.neon_functional
+        self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
 
         # Launch the neon container
         c = self.neon_container(f_0, f_1, bc_mask, missing_mask, force)
