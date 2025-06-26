@@ -474,14 +474,12 @@ class IncompressibleNavierStokesStepper(Stepper):
                             # Perform the swapping of data
                             if l == lattice_central_index:
                                 # (i) Recover the values stored in the central index of f_1
-                                # TODO: Add store dtype
                                 _f1_thread = wp.neon_read(f_1_pn, index, l)
-                                wp.neon_write(f_0_pn, index, l, _f1_thread)
+                                wp.neon_write(f_0_pn, index, l, self.store_dtype(_f1_thread))
                             elif _missing_mask[l] == wp.uint8(1):
                                 # (ii) Recover the values stored in the missing directions of f_1
-                                # TODO: Add store dtype
                                 _f1_thread = wp.neon_read(f_1_pn, index, _opp_indices[l])
-                                wp.neon_write(f_0_pn, index, _opp_indices[l], _f1_thread)
+                                wp.neon_write(f_0_pn, index, _opp_indices[l], self.store_dtype(_f1_thread))
 
         @neon.Container.factory(name="nse_stepper")
         def container(

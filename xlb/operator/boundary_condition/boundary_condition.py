@@ -212,7 +212,7 @@ class BoundaryCondition(Operator):
         _opp_indices = self.velocity_set.opp_indices
         _num_of_aux_data = self.num_of_aux_data
 
-        # Find velocity index for 0, 0, 0
+        # Find velocity index for (0, 0, 0)
         lattice_central_index = self.velocity_set.center_index
 
         # Construct the Neon container
@@ -297,7 +297,7 @@ class BoundaryCondition(Operator):
         _opp_indices = self.velocity_set.opp_indices
         _num_of_aux_data = self.num_of_aux_data
 
-        # Find velocity index for 0, 0, 0
+        # Find velocity index for (0, 0, 0)
         lattice_central_index = self.velocity_set.center_index
 
         # Construct the Neon container
