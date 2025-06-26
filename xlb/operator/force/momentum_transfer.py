@@ -49,6 +49,10 @@ class MomentumTransfer(Operator):
             compute_backend,
         )
 
+        # Allocate the force vector (the total integral value will be computed)
+        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+        self.force = wp.zeros((1), dtype=_u_vec)
+
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
     def jax_implementation(self, f_0, f_1, bc_mask, missing_mask):
@@ -176,9 +180,8 @@ class MomentumTransfer(Operator):
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, f_0, f_1, bc_mask, missing_mask):
-        # Allocate the force vector (the total integral value will be computed)
-        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        force = wp.zeros((1), dtype=_u_vec)
+        # Ensure the force is initialized to zero
+        self.force *= 0.0
 
         # Define the warp functionals needed for this operation
         self.stream_functional = self.stream.warp_functional
@@ -187,10 +190,10 @@ class MomentumTransfer(Operator):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
-            inputs=[f_0, f_1, bc_mask, missing_mask, force],
+            inputs=[f_0, f_1, bc_mask, missing_mask, self.force],
             dim=f_0.shape[1:],
         )
-        return force.numpy()[0]
+        return self.force.numpy()[0]
 
     def _construct_neon(self):
         # Use the warp functional for the NEON backend
@@ -238,15 +241,14 @@ class MomentumTransfer(Operator):
         missing_mask,
         stream=0,
     ):
-        # Allocate the force vector (the total integral value will be computed)
-        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        force = wp.zeros((1), dtype=_u_vec)
+        # Ensure the force is initialized to zero
+        self.force *= 0.0
 
         # Define the neon functionals needed for this operation
         self.stream_functional = self.stream.neon_functional
         self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
 
         # Launch the neon container
-        c = self.neon_container(f_0, f_1, bc_mask, missing_mask, force)
+        c = self.neon_container(f_0, f_1, bc_mask, missing_mask, self.force)
         c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
-        return force.numpy()[0]
+        return self.force.numpy()[0]

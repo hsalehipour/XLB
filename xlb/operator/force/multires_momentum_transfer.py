@@ -75,9 +75,8 @@ class MultiresMomentumTransfer(MomentumTransfer):
         missing_mask,
         stream=0,
     ):
-        # Allocate the force vector (the total integral value will be computed)
-        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        force = wp.zeros((1), dtype=_u_vec)
+        # Ensure the force is initialized to zero
+        self.force *= 0.0
 
         # Define the neon functionals needed for this operation
         self.stream_functional = self.stream.neon_functional
@@ -86,6 +85,6 @@ class MultiresMomentumTransfer(MomentumTransfer):
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):
             # Launch the neon container
-            c = self.neon_container(f_0, f_1, bc_mask, missing_mask, force, level)
+            c = self.neon_container(f_0, f_1, bc_mask, missing_mask, self.force, level)
             c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
-        return force.numpy()[0]
+        return self.force.numpy()[0]
