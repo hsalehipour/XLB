@@ -72,7 +72,7 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape
             level = np.ascontiguousarray(np.ones(shape, dtype=int), dtype=np.int32)
             box_origin = (0, 0, 0)  # The coarsest level has no origin offset
         else:
-            box_size = tuple([int(shape[i] // 4 * growth) for i in range(3)])
+            box_size = tuple([int(0.3 * shape[i] * growth) for i in range(3)])
             if lvl == 0:
                 box_origin = tuple(
                     [sphere_origin[0] // divider - int(2 * growth * sphere_radius // divider)]
@@ -102,8 +102,8 @@ compute_backend = ComputeBackend.NEON
 precision_policy = PrecisionPolicy.FP32FP32
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
 u_max = 0.04
-num_steps = 1000
-post_process_interval = 100
+num_steps = 10000
+post_process_interval = 1000
 
 # Initialize XLB
 xlb.init(
@@ -175,10 +175,10 @@ bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!
 # bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
-# bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
-bc_sphere = HybridBC(
-    bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=True
-)
+bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
+# bc_sphere = HybridBC(
+#     bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=False
+# )
 
 boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
@@ -201,7 +201,9 @@ momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_
 
 def print_lift_drag(sim):
     # Compute lift and drag
+    wp.synchronize()
     boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
+    wp.synchronize()
     drag = boundary_force[0]  # x-direction
     lift = boundary_force[2]
     sphere_cross_section = np.pi * sphere_radius**2

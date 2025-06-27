@@ -28,6 +28,15 @@ class MultiresMomentumTransfer(MomentumTransfer):
         if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
 
+        # TODO! The current implementation does not support encoding and decoding of mesh distance in f_1!
+        assert not self.no_slip_bc_instance.needs_mesh_distance, "Mesh distance is not supported for Force Calculation!"
+
+        # Print a warning to the user about the boundary voxels
+        print(
+            "WARNING! make sure boundary voxels are all at the same level and not among the transition regions from one level to another. " \
+            "Otherwise, the results of force calculation are not correct!\n"
+        )
+
     def _construct_neon(self):
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
@@ -48,13 +57,19 @@ class MultiresMomentumTransfer(MomentumTransfer):
                 f_0_pn = loader.get_mres_write_handle(f_0)
                 f_1_pn = loader.get_mres_write_handle(f_1)
 
+                # Important: Note the swap to the order of f_0 and f_1 in the functional call.
+                # This is because the multiresolution simulation first performs collision and then streaming and hence
+                # f_0 refers to the post-streaming distribution function and f_1 refers to the pre-collision distribution function.
+                # This is in contrast to our dense implementations (all backends) where streaming occurs first and is followed by
+                # collision which makes. As a workaround, we can simply swap f_0 and f_1 in the functional call.
+
                 @wp.func
                 def container_kernel(index: Any):
                     # apply the functional
                     functional(
                         index,
-                        f_0_pn,
                         f_1_pn,
+                        f_0_pn,
                         bc_mask_pn,
                         missing_mask_pn,
                         force,
