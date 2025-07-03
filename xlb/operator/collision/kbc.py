@@ -92,7 +92,7 @@ class KBC(Collision):
         Returns
         -------
         jax.numpy.array
-            Entropic scalar product of x, y, and feq.
+            sp1 and sp2: Entropic scalar products of delta_s, delta_h, and feq.
         """
         temp = delta_h / feq
         sp1 = jnp.sum(temp * delta_s, axis=0)
@@ -249,7 +249,7 @@ class KBC(Collision):
 
             return s
 
-        # Construct functional for computing entropic scalar product
+        # Construct functional for computing entropic scalar products
         @wp.func
         def compute_entropic_scalar_products(
             delta_s: Any,
