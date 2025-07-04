@@ -135,6 +135,12 @@ xlb.init(
 stl_filename = "examples/cfd/stl-files/sphere.stl"
 level_data, sphere, grid_shape_finest = generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part)
 
+
+# Define exporter object for hdf5 output
+from xlb.utils import ExportMultiresHDF5
+
+h5exporter = ExportMultiresHDF5(level_data)
+
 # Prepare the sparsity pattern and origins from the level data
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
 
@@ -243,8 +249,15 @@ for step in range(num_steps):
     sim.step()
 
     if step % post_process_interval == 0 or step == num_steps - 1:
-        # TODO: Issues in the vtk output for rectangular cuboids (as if a duboid grid with the largest side is assumed)
-        sim.export_macroscopic("multires_flow_over_sphere_3d_")
+        # Call the Macroscopic operator to compute macroscopic fields
+        sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
+        wp.synchronize()
+
+        # Call the exporter to save the current state
+        filename = f"multires_flow_over_sphere_3d_step_{step:04d}"
+        h5exporter(filename, sim.u, sim.rho, compression="gzip", compression_opts=2)
+
+        # Print lift and drag coefficients
         print_lift_drag(sim)
         wp.synchronize()
         end_time = time.time()
