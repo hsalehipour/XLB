@@ -33,7 +33,7 @@ class MultiresMomentumTransfer(MomentumTransfer):
 
         # Print a warning to the user about the boundary voxels
         print(
-            "WARNING! make sure boundary voxels are all at the same level and not among the transition regions from one level to another. " \
+            "WARNING! make sure boundary voxels are all at the same level and not among the transition regions from one level to another. "
             "Otherwise, the results of force calculation are not correct!\n"
         )
 

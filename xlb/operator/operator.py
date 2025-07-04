@@ -246,8 +246,8 @@ class Operator:
             ):
                 # This function reads a field value at a given neighboring index and direction.
                 unused_is_valid = wp.bool(False)
-                dtype = neon_get_type(field)  # This is a placeholder to ensure the dtype is set correctly
-                return wp.neon_read_ngh(field, index, offset, direction, dtype(0.0), unused_is_valid)
+                # dtype = neon_get_type(field)  # This is a placeholder to ensure the dtype is set correctly
+                return wp.neon_read_ngh(field, index, offset, direction, wp.uint8(0.0), unused_is_valid)
 
         else:
             raise ValueError(f"Unsupported compute backend: {self.compute_backend}")
