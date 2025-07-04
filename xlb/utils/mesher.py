@@ -116,7 +116,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_name):
         voxel_matrix_k[i_start:i_end, j_start:j_end, k_start:k_end] = 0
 
     # Step 3 Convert to Indices from STL units
-    level_data = [(dr, int(v / voxel_size), np.round(dOrigin / voxel_size).astype(int), l) for dr, v, dOrigin, l in level_data]
+    num_levels = len(level_data)
+    level_data = [(dr, int(v / voxel_size), np.round(dOrigin / v).astype(int), num_levels - 1 - l) for dr, v, dOrigin, l in level_data]
 
-    # Reverse to have finest level first
     return list(reversed(level_data))
