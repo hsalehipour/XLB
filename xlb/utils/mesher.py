@@ -1,5 +1,9 @@
 import numpy as np
 import open3d as o3d
+from typing import Any
+
+import neon
+import warp as wp
 
 
 def adjust_bbox(cuboid_max, cuboid_min, voxel_size_coarsest):
@@ -162,6 +166,12 @@ class ExportMultiresHDF5(object):
         self.connectivity = connectivity
         self.level_id_field = level_id_field
         self.total_cells = total_cells
+
+        # Prepare and allocate the inputs for the NEON container
+        self.velocity_warp_list, self.density_warp_list, self.origin_list = self._prepare_container_inputs()
+
+        # Construct the NEON container for exporting multi-resolution data
+        self.container = self._construct_neon_container()
 
     def process_geometry(self, levels_data, scale):
         num_voxels_per_level = [np.sum(data) for data, _, _, _ in levels_data]
@@ -338,27 +348,86 @@ class ExportMultiresHDF5(object):
         offset = np.array(offset, dtype=np.float32)
         return coordinates * scale + offset
 
-    def __call__(self, filename, velocity_neon, density_neon, compression="gzip", compression_opts=0, store_precision=None):
-        from typing import Any
-        import time
-        import neon
-        import warp as wp
-
+    def _prepare_container_inputs(self, store_precision=None):
+        # load necessary modules
         from xlb.compute_backend import ComputeBackend
         from xlb.grid import grid_factory
         from xlb import DefaultConfig
 
-        # Ensure that this operator is called on multires grids
-        grid_mres = velocity_neon.get_grid()
-        assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
+        # Get the number of levels from the levels_data
+        num_levels = len(self.levels_data)
 
         # Set the default precision policy if not provided
         if store_precision is None:
             store_precision = DefaultConfig.default_precision_policy.store_precision
 
+        # Prepare lists to hold warp fields and origins allocated for each level
+        velocity_warp_list = []
+        density_warp_list = []
+        origin_list = []
+        for level in range(num_levels):
+            # get the shape of the grid at this level
+            box_shape = self.levels_data[level][0].shape
+
+            # Use the warp backend to create dense fields to be written in multi-res NEON fields
+            grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
+            velocity_warp_list.append(grid_dense.create_field(cardinality=3, dtype=store_precision))
+            density_warp_list.append(grid_dense.create_field(cardinality=1, dtype=store_precision))
+            origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
+
+        return velocity_warp_list, density_warp_list, origin_list
+
+    def _construct_neon_container(self):
+        """
+        Constructs a NEON container for exporting multi-resolution data to HDF5.
+        This container will be used to transfer multi-resolution NEON fields into stacked warp fields.
+        """
+
+        @neon.Container.factory(name="HDF5MultiresExporter")
+        def container(
+            velocity_neon: Any,
+            density_neon: Any,
+            velocity_warp: Any,
+            density_warp: Any,
+            origin: Any,
+            level: Any,
+        ):
+            def launcher(loader: neon.Loader):
+                loader.set_mres_grid(velocity_neon.get_grid(), level)
+                velocity_neon_hdl = loader.get_mres_read_handle(velocity_neon)
+                density_neon_hdl = loader.get_mres_read_handle(density_neon)
+                refinement = 2**level
+
+                @wp.func
+                def kernel(index: Any):
+                    cIdx = wp.neon_global_idx(velocity_neon_hdl, index)
+                    # Get local indices by dividing the global indices (associated with the finest level) by 2^level
+                    # Subtract the origin to get the local indices in the warp field
+                    lx = wp.neon_get_x(cIdx) // refinement - origin[0]
+                    ly = wp.neon_get_y(cIdx) // refinement - origin[1]
+                    lz = wp.neon_get_z(cIdx) // refinement - origin[2]
+
+                    # write the values to the warp field
+                    density_warp[0, lx, ly, lz] = wp.neon_read(density_neon_hdl, index, 0)
+                    for card in range(3):
+                        velocity_warp[card, lx, ly, lz] = wp.neon_read(velocity_neon_hdl, index, card)
+
+                loader.declare_kernel(kernel)
+
+            return launcher
+
+        return container
+
+    def __call__(self, filename, velocity_neon, density_neon, compression="gzip", compression_opts=0, store_precision=None):
+        import time
+
+        # Ensure that this operator is called on multires grids
+        grid_mres = velocity_neon.get_grid()
+        assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
+
         # number of levels
         num_levels = grid_mres.get_num_levels()
-        assert num_levels == len(self.levels_data), "Error: Inconsistent number of levels"
+        assert num_levels == len(self.levels_data), "Error: Inconsistent number of levels!"
 
         # Prepare the fields to be written by transfering multi-res NEON fields into stacked warp fields
         fields_data = {
@@ -368,64 +437,27 @@ class ExportMultiresHDF5(object):
             "density": [],
         }
         for level in range(num_levels):
-            # get the shape of the grid at this level
-            box_shape = self.levels_data[level][0].shape
-
-            # Use the warp backend to create dense fields to be written in multi-res NEON fields
-            grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
-            velocity_warp = grid_dense.create_field(cardinality=3, dtype=store_precision)
-            density_warp = grid_dense.create_field(cardinality=1, dtype=store_precision)
-            refinement = 2**level
-            origin_x, origin_y, origin_z = [int(x) for x in self.levels_data[level][2]]
-
-            @neon.Container.factory(name="HDF5MultiresExporter")
-            def container(
-                velocity_neon: Any,
-                density_neon: Any,
-                velocity_warp: Any,
-                density_warp: Any,
-            ):
-                def launcher(loader: neon.Loader):
-                    loader.set_mres_grid(velocity_neon.get_grid(), level)
-                    velocity_neon_hdl = loader.get_mres_read_handle(velocity_neon)
-                    density_neon_hdl = loader.get_mres_read_handle(density_neon)
-
-                    @wp.func
-                    def kernel(index: Any):
-                        cIdx = wp.neon_global_idx(velocity_neon_hdl, index)
-                        # Get local indices by dividing the global indices (associated with the finest level) by 2^level
-                        # Subtract the origin to get the local indices in the warp field
-                        lx = wp.neon_get_x(cIdx) // refinement - origin_x
-                        ly = wp.neon_get_y(cIdx) // refinement - origin_y
-                        lz = wp.neon_get_z(cIdx) // refinement - origin_z
-
-                        # write the values to the warp field
-                        density_warp[0, lx, ly, lz] = wp.neon_read(density_neon_hdl, index, 0)
-                        for card in range(3):
-                            velocity_warp[card, lx, ly, lz] = wp.neon_read(velocity_neon_hdl, index, card)
-
-                    loader.declare_kernel(kernel)
-
-                return launcher
 
             # Create the container and run it to fill the warp fields
-            c = container(velocity_neon, density_neon, velocity_warp, density_warp)
-            c.run(0)
-            wp.synchronize()
+            c = self.container(
+                velocity_neon,
+                density_neon,
+                self.velocity_warp_list[level],
+                self.density_warp_list[level],
+                self.origin_list[level],
+                level
+            )
+            c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
             # Convert the warp fields to numpy arrays and use level's mask to filter the data
             mask = self.levels_data[level][0]
-            velocity_np = np.array(wp.to_jax(velocity_warp))
+            velocity_np = np.array(wp.to_jax(self.velocity_warp_list[level]))
+            rho = np.array(wp.to_jax(self.density_warp_list[level]))[0][mask]
             vx, vy, vz = velocity_np[0][mask], velocity_np[1][mask], velocity_np[2][mask]
-            rho = np.array(wp.to_jax(density_warp))[0][mask]
             fields_data["velocity_x"].append(vx)
             fields_data["velocity_y"].append(vy)
             fields_data["velocity_z"].append(vz)
             fields_data["density"].append(rho)
-
-            # Clean up
-            del velocity_warp
-            del density_warp
 
         # Concatenate all field data
         for field_name in fields_data.keys():

@@ -201,9 +201,7 @@ momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_
 
 def print_lift_drag(sim):
     # Compute lift and drag
-    wp.synchronize()
     boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
-    wp.synchronize()
     drag = boundary_force[0]  # x-direction
     lift = boundary_force[2]
     sphere_cross_section = np.pi * sphere_radius**2

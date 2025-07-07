@@ -7,7 +7,6 @@ import xlb
 from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import PrecisionPolicy
 from xlb.grid import multires_grid_factory
-from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import (
     FullwayBounceBackBC,
     HalfwayBounceBackBC,
@@ -139,6 +138,7 @@ level_data, sphere, grid_shape_finest = generate_cuboid_mesh(stl_filename, num_f
 # Define exporter object for hdf5 output
 from xlb.utils import ExportMultiresHDF5
 
+# Define an exporter for the multiresolution data
 h5exporter = ExportMultiresHDF5(level_data)
 
 # Prepare the sparsity pattern and origins from the level data
@@ -229,9 +229,7 @@ momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_
 
 def print_lift_drag(sim):
     # Compute lift and drag
-    wp.synchronize()
     boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
-    wp.synchronize()
     drag = boundary_force[0]  # x-direction
     lift = boundary_force[2]
     sphere_cross_section = np.pi * sphere_radius**2
@@ -249,12 +247,17 @@ for step in range(num_steps):
     sim.step()
 
     if step % post_process_interval == 0 or step == num_steps - 1:
+        # # Export VTK for comparison
+        # tic_write = time.perf_counter()
+        # sim.export_macroscopic("multires_flow_over_sphere_3d_")
+        # toc_write = time.perf_counter()
+        # print(f"\tVTK file written in {toc_write - tic_write:0.1f} seconds")
+
         # Call the Macroscopic operator to compute macroscopic fields
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
-        wp.synchronize()
 
         # Call the exporter to save the current state
-        filename = f"multires_flow_over_sphere_3d_step_{step:04d}"
+        filename = f"multires_flow_over_sphere_3d_{step:04d}"
         h5exporter(filename, sim.u, sim.rho, compression="gzip", compression_opts=2)
 
         # Print lift and drag coefficients
