@@ -82,10 +82,10 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         # Initialize auxiliary data if needed
         f_1 = self._initialize_auxiliary_data(self.boundary_conditions, f_1, bc_mask, missing_mask)
         # bc_mask.update_host(0)
-        bc_mask.update_host(0)
-        f_0.update_host(0)
-        wp.synchronize()
-        bc_mask.export_vti("bc_mask.vti", "bc_mask")
+        # bc_mask.update_host(0)
+        # f_0.update_host(0)
+        # wp.synchronize()
+        # bc_mask.export_vti("bc_mask.vti", "bc_mask")
         # f_0.export_vti("init_f0.vti", 'init_f0')
         # missing_mask.export_vti("missing_mask.vti", 'missing_mask')
 
