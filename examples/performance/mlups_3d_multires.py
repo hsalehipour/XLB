@@ -126,7 +126,7 @@ def problem1(grid_shape, velocity_set):
         levels.append(lastLevel)
         return levels
 
-    num_levels = 4
+    num_levels = 2
     levels = get_levels(num_levels)
 
     grid = multires_grid_factory(
@@ -195,10 +195,10 @@ def run(velocity_set, grid_shape, num_steps):
     # walls = construct_indices_per_level(grid_shape, walls, levels_mask, level_origins)
 
     # Example 1: fine to coarse
-    # grid, lid, walls = problem1(grid_shape, velocity_set)
+    grid, lid, walls = problem1(grid_shape, velocity_set)
 
     # Example 2: Coarse to fine:
-    grid, lid, walls = problem2(grid_shape, velocity_set)
+    # grid, lid, walls = problem2(grid_shape, velocity_set)
 
     prescribed_vel = 0.1
     boundary_conditions = [
@@ -207,13 +207,14 @@ def run(velocity_set, grid_shape, num_steps):
     ]
 
     # Problem parameters
-    Re = 5000.0
-    clength = grid_shape[0] - 1
-    visc = prescribed_vel * clength / Re
-    omega = 1.0 / (3.0 * visc + 0.5)
+    # Re = 5000.0
+    # clength = grid_shape[0] - 1
+    # visc = prescribed_vel * clength / Re
+    # omega = 1.0 / (3.0 * visc + 0.5)
+    omega = 1.0
 
     # Define a multi-resolution simulation manager
-    sim = xlb.helper.MultiresSimulationManager(omega=omega, grid=grid, boundary_conditions=boundary_conditions, collision_type="KBC")
+    sim = xlb.helper.MultiresSimulationManager(omega=omega, grid=grid, boundary_conditions=boundary_conditions, collision_type="BGK")
 
     # sim.export_macroscopic("Initial_")
     # sim.step()
@@ -223,9 +224,9 @@ def run(velocity_set, grid_shape, num_steps):
     start_time = time.time()
     for i in range(num_steps):
         sim.step()
-        # if i % 1000 == 0:
-        #     print(f"step {i}")
-        #     sim.export_macroscopic("u_lid_driven_cavity_")
+        if i % 1 == 0:
+            print(f"step {i}")
+            sim.export_macroscopic("u_lid_driven_cavity_")
     wp.synchronize()
     t = time.time() - start_time
     print(f"Timing  {t}")
