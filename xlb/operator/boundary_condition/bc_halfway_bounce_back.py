@@ -84,13 +84,15 @@ class HalfwayBounceBackBC(BoundaryCondition):
             if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
                 if self.velocity_set.d == 2:
                     prescribed_value = np.array([prescribed_value[0], prescribed_value[1], 0.0], dtype=np.float64)
-                prescribed_value = wp.vec(3, dtype=self.precision_policy.store_precision.wp_dtype)(prescribed_value)
+                prescribed_value = wp.vec(3, dtype=self.store_dtype)(prescribed_value)
             self.profile = self._create_constant_prescribed_profile(prescribed_value)
 
     def _create_constant_prescribed_profile(self, prescribed_value):
+        _u_vec = wp.vec(3, dtype=self.store_dtype)
+
         @wp.func
         def prescribed_profile_warp(index: Any, time: Any):
-            return wp.vec3(prescribed_value[0], prescribed_value[1], prescribed_value[2])
+            return _u_vec(prescribed_value[0], prescribed_value[1], prescribed_value[2])
 
         def prescribed_profile_jax():
             return jnp.array(prescribed_value, dtype=self.precision_policy.store_precision.jax_dtype).reshape(-1, 1)

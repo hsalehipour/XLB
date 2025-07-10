@@ -91,7 +91,7 @@ class MultiresMomentumTransfer(MomentumTransfer):
         stream=0,
     ):
         # Ensure the force is initialized to zero
-        self.force *= 0.0
+        self.force *= self.compute_dtype(0.0)
 
         # Define the neon functionals needed for this operation
         self.stream_functional = self.stream.neon_functional

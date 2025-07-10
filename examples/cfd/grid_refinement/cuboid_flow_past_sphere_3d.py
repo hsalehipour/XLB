@@ -117,7 +117,7 @@ num_finest_voxels_across_part = 2 * sphere_radius
 # Other setup parameters
 Re = 5000.0
 compute_backend = ComputeBackend.NEON
-precision_policy = PrecisionPolicy.FP32FP32
+precision_policy = PrecisionPolicy.FP64FP64
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
 u_max = 0.04
 num_steps = 10000
@@ -171,22 +171,25 @@ def bc_profile():
 
     # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
     nx, ny, nz = grid_shape_finest
-    H_y = float(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
-    H_z = float(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    dtype = precision_policy.compute_precision.wp_dtype
+    H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
+    H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    two = dtype(2.0)
+    u_max_wp = dtype(u_max)
 
     @wp.func
     def bc_profile_warp(index: wp.vec3i):
         # Poiseuille flow profile: parabolic velocity distribution
-        y = wp.float32(index[1])
-        z = wp.float32(index[2])
+        y = dtype(index[1])
+        z = dtype(index[2])
 
         # Calculate normalized distance from center
-        y_center = y - (H_y / 2.0)
-        z_center = z - (H_z / 2.0)
-        r_squared = (2.0 * y_center / H_y) ** 2.0 + (2.0 * z_center / H_z) ** 2.0
+        y_center = y - (H_y / two)
+        z_center = z - (H_z / two)
+        r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
         # Parabolic profile: u = u_max * (1 - r²)
-        return wp.vec(u_max * wp.max(0.0, 1.0 - r_squared), length=1)
+        return wp.vec(u_max_wp * wp.max(dtype(0.0), dtype(1.0) - r_squared), length=1)
 
     return bc_profile_warp
 
@@ -236,7 +239,7 @@ def print_lift_drag(sim):
     u_avg = 0.5 * u_max
     cd = 2.0 * drag / (u_avg**2 * sphere_cross_section)
     cl = 2.0 * lift / (u_avg**2 * sphere_cross_section)
-    print(f"CD={cd}, CL={cl}")
+    print(f"\tCD={cd}, CL={cl}")
 
 
 # -------------------------- Simulation Loop --------------------------
@@ -265,5 +268,5 @@ for step in range(num_steps):
         wp.synchronize()
         end_time = time.time()
         elapsed = end_time - start_time
-        print(f"Completed step {step}. Time elapsed for {post_process_interval} steps: {elapsed:.6f} seconds.")
+        print(f"\tCompleted step {step}. Time elapsed for {post_process_interval} steps: {elapsed:.6f} seconds.")
         start_time = time.time()
