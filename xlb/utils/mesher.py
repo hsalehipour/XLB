@@ -437,15 +437,9 @@ class ExportMultiresHDF5(object):
             "density": [],
         }
         for level in range(num_levels):
-
             # Create the container and run it to fill the warp fields
             c = self.container(
-                velocity_neon,
-                density_neon,
-                self.velocity_warp_list[level],
-                self.density_warp_list[level],
-                self.origin_list[level],
-                level
+                velocity_neon, density_neon, self.velocity_warp_list[level], self.density_warp_list[level], self.origin_list[level], level
             )
             c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 

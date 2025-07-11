@@ -1,6 +1,11 @@
 import xlb
 import trimesh
 import time
+import warp as wp
+import numpy as np
+import jax.numpy as jnp
+from typing import Any
+
 from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import PrecisionPolicy
 from xlb.grid import grid_factory
@@ -15,15 +20,11 @@ from xlb.operator.boundary_condition import (
 from xlb.operator.force.momentum_transfer import MomentumTransfer
 from xlb.operator.macroscopic import Macroscopic
 from xlb.utils import save_fields_vtk, save_image
-import warp as wp
-import numpy as np
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator import Operator
-from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
-
+from xlb.operator.boundary_masker import MeshVoxelizationMethod
 
 # -------------------------- Simulation Setup --------------------------
 
@@ -125,7 +126,11 @@ bc_left = RegularizedBC("velocity", prescribed_value=(wind_speed, 0.0, 0.0), ind
 bc_do_nothing = DoNothingBC(indices=outlet)
 # bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method="ray", profile=bc_profile())
 bc_sphere = HybridBC(
-    bc_method="nonequilibrium_regularized", mesh_vertices=sphere, use_mesh_distance=True, voxelization_method="ray", profile=bc_profile()
+    bc_method="nonequilibrium_regularized",
+    mesh_vertices=sphere,
+    use_mesh_distance=True,
+    voxelization_method=MeshVoxelizationMethod.RAY,
+    profile=bc_profile(),
 )
 # Not assining BC for walls makes them periodic.
 boundary_conditions = [bc_left, bc_do_nothing, bc_sphere]
