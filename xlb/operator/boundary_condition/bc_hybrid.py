@@ -99,11 +99,12 @@ class HybridBC(BoundaryCondition):
                 prescribed_value = np.array([prescribed_value[0], prescribed_value[1], 0.0], dtype=np.float64)
 
             # create a constant prescribed profile
-            prescribed_value = wp.vec(3, dtype=self.compute_dtype)(prescribed_value)
+            _u_vec = wp.vec(3, dtype=self.store_dtype)
+            prescribed_value = _u_vec(prescribed_value)
 
             @wp.func
             def prescribed_profile_warp(index: Any, time: Any):
-                return wp.vec3(prescribed_value[0], prescribed_value[1], prescribed_value[2])
+                return _u_vec(prescribed_value[0], prescribed_value[1], prescribed_value[2])
 
             self.profile = prescribed_profile_warp
 
