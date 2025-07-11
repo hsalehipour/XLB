@@ -25,7 +25,7 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part):
     """
     Generate a cuboid mesh based on the provided voxel size and domain multipliers.
     """
-    import open3d as o3d
+    import trimesh
     import os
 
     # Domain multipliers for each refinement level
@@ -42,14 +42,13 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part):
     ]
 
     # Load the mesh
-    mesh = o3d.io.read_triangle_mesh(stl_filename)
-    if mesh.is_empty():
-        raise ValueError("Loaded mesh is empty or invalid.")
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    assert not mesh.is_empty, ValueError("Loaded mesh is empty or invalid.")
 
     # Compute original bounds
-    aabb = mesh.get_axis_aligned_bounding_box()
-    min_bound = aabb.get_min_bound()
-    max_bound = aabb.get_max_bound()
+    # Find voxel size and sphere radius
+    min_bound = mesh.vertices.min(axis=0)
+    max_bound = mesh.vertices.max(axis=0)
     partSize = max_bound - min_bound
 
     # smallest voxel size
@@ -66,10 +65,10 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part):
     )
 
     # Apply translation and save out temp stl
-    mesh.translate(shift)
-    mesh.compute_vertex_normals()
+    mesh.apply_translation(shift)
+    _ = mesh.vertex_normals
     mesh_vertices = np.asarray(mesh.vertices) / voxel_size
-    o3d.io.write_triangle_mesh("temp.stl", mesh)
+    mesh.export("temp.stl")
 
     # Mesh based on temp stl
     level_data = make_cuboid_mesh(

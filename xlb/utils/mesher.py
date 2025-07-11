@@ -1,5 +1,5 @@
 import numpy as np
-import open3d as o3d
+import trimesh
 from typing import Any
 
 import neon
@@ -23,7 +23,7 @@ def adjust_bbox(cuboid_max, cuboid_min, voxel_size_coarsest):
     return adjusted_min, adjusted_max
 
 
-def make_cuboid_mesh(voxel_size, cuboids, stl_name):
+def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     """
     Create a multi-level cuboid mesh with bounding boxes aligned to the level 0 grid.
     Voxel matrices are set to ones only in regions not covered by finer levels.
@@ -37,13 +37,12 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_name):
         list: Level data with voxel matrices, voxel sizes, origins, and levels.
     """
     # Load the mesh and get its bounding box
-    mesh = o3d.io.read_triangle_mesh(stl_name)
-    if mesh.is_empty():
-        raise ValueError("Loaded mesh is empty or invalid.")
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    assert not mesh.is_empty, ValueError("Loaded mesh is empty or invalid.")
 
-    aabb = mesh.get_axis_aligned_bounding_box()
-    min_bound = aabb.get_min_bound()
-    max_bound = aabb.get_max_bound()
+    mesh_vertices = mesh.vertices
+    min_bound = mesh_vertices.min(axis=0)
+    max_bound = mesh_vertices.max(axis=0)
     partSize = max_bound - min_bound
 
     level_data = []

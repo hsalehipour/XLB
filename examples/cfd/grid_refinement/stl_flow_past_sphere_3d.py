@@ -26,40 +26,33 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part, grid_shape
     """
     Generate a cuboid mesh based on the provided voxel size and domain multipliers.
     """
-    import open3d as o3d
-    import os
+    import trimesh
 
     # STL position
     nx, ny, nz = grid_shape
     sphere_origin = (nx // 6, ny // 2, nz // 2)
 
     # Load the mesh
-    mesh = o3d.io.read_triangle_mesh(stl_filename)
-    if mesh.is_empty():
-        raise ValueError("Loaded mesh is empty or invalid.")
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    assert not mesh.is_empty, ValueError("Loaded mesh is empty or invalid.")
+    mesh_vertices = mesh.vertices
 
-    # Compute original bounds
-    aabb = mesh.get_axis_aligned_bounding_box()
-    min_bound = aabb.get_min_bound()
-    max_bound = aabb.get_max_bound()
-    partSize = max_bound - min_bound
-    sphere_diameter_phys_units = float(min(partSize))
-
-    # smallest voxel size
+    # Find voxel size and sphere radius
+    min_bound = mesh_vertices.min(axis=0)
+    max_bound = mesh_vertices.max(axis=0)
+    mesh_extents = max_bound - min_bound
+    sphere_diameter_phys_units = float(min(mesh_extents))
     voxel_size = sphere_diameter_phys_units / num_finest_voxels_across_part
     sphere_radius = sphere_diameter_phys_units / voxel_size / 2.0
 
-    # Compute translation to put mesh into first octant of that domain—
+    # Compute translation to put mesh into first octant of that domain
     shift = np.array(sphere_origin) * voxel_size - sphere_diameter_phys_units / 2.0 - min_bound
 
     # Apply translation and save out temp stl
-    mesh.translate(shift)
-    mesh.compute_vertex_normals()
-    mesh_vertices = np.asarray(mesh.vertices) / voxel_size
-    o3d.io.write_triangle_mesh("temp.stl", mesh)
-    os.remove("temp.stl")
+    mesh_vertices = mesh_vertices + shift
+    mesh_vertices = np.asarray(mesh_vertices) / voxel_size
 
-    # Mesh base don temp stl
+    # Mesh based on temp stl
     # Create the multires grid
     num_levels = 3
     level_origins = []
