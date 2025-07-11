@@ -88,7 +88,7 @@ class HalfwayBounceBackBC(BoundaryCondition):
             self.profile = self._create_constant_prescribed_profile(prescribed_value)
 
     def _create_constant_prescribed_profile(self, prescribed_value):
-        _u_vec = wp.vec(3, dtype=self.store_dtype)
+        _u_vec = wp.vec(3, dtype=self.precision_policy.store_precision.wp_dtype)
 
         @wp.func
         def prescribed_profile_warp(index: Any, time: Any):

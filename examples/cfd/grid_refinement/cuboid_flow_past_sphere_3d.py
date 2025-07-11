@@ -170,7 +170,7 @@ def bc_profile():
     assert compute_backend == ComputeBackend.NEON
 
     # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
-    nx, ny, nz = grid_shape_finest
+    _, ny, nz = grid_shape_finest
     dtype = precision_policy.compute_precision.wp_dtype
     H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
     H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction

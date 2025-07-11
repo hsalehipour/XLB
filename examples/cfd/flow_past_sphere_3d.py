@@ -81,20 +81,24 @@ def bc_profile():
         return bc_profile_jax
 
     elif compute_backend == ComputeBackend.WARP:
+        wp_dtype = precision_policy.compute_precision.wp_dtype
+        H_y = wp_dtype(grid_shape[1] - 1)  # Height in y direction
+        H_z = wp_dtype(grid_shape[2] - 1)  # Height in z direction
+        two = wp_dtype(2.0)
 
         @wp.func
         def bc_profile_warp(index: wp.vec3i):
             # Poiseuille flow profile: parabolic velocity distribution
-            y = wp.float32(index[1])
-            z = wp.float32(index[2])
+            y = wp_dtype(index[1])
+            z = wp_dtype(index[2])
 
             # Calculate normalized distance from center
-            y_center = y - (H_y / 2.0)
-            z_center = z - (H_z / 2.0)
-            r_squared = (2.0 * y_center / H_y) ** 2.0 + (2.0 * z_center / H_z) ** 2.0
+            y_center = y - (H_y / two)
+            z_center = z - (H_z / two)
+            r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
             # Parabolic profile: u = u_max * (1 - r²)
-            return wp.vec(u_max * wp.max(0.0, 1.0 - r_squared), length=1)
+            return wp.vec(wp_dtype(u_max) * wp.max(wp_dtype(0.0), wp_dtype(1.0) - r_squared), length=1)
 
         return bc_profile_warp
 

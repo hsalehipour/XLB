@@ -105,16 +105,17 @@ sphere_cross_section = np.pi * diam**2 / 4.0
 
 # Define rotating boundary profile
 def bc_profile():
-    _u_vec = wp.vec(velocity_set.d, dtype=precision_policy.compute_precision.wp_dtype)
+    dtype = precision_policy.compute_precision.wp_dtype
+    _u_vec = wp.vec(velocity_set.d, dtype=dtype)
     angular_velocity = _u_vec(0.0, rot_rate, 0.0)
     origin_np = shift + diam / 2
     origin_wp = _u_vec(origin_np[0], origin_np[1], origin_np[2])
 
     @wp.func
     def bc_profile_warp(index: wp.vec3i, time: Any):
-        x = wp.float32(index[0])
-        y = wp.float32(index[1])
-        z = wp.float32(index[2])
+        x = dtype(index[0])
+        y = dtype(index[1])
+        z = dtype(index[2])
         surface_coord = _u_vec(x, y, z) - origin_wp
         return wp.cross(angular_velocity, surface_coord)
 

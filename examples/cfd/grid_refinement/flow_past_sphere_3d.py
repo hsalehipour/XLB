@@ -82,23 +82,27 @@ sphere = [sphere] + [[] for _ in range(num_levels - 1)]
 def bc_profile():
     assert compute_backend == ComputeBackend.NEON
 
-    # Note nx, ny, nz are the dimensions of the grid at the finest level
-    H_y = float(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
-    H_z = float(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
+    _, ny, nz = grid_shape
+    dtype = precision_policy.compute_precision.wp_dtype
+    H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
+    H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    two = dtype(2.0)
+    u_max_wp = dtype(u_max)
 
     @wp.func
     def bc_profile_warp(index: wp.vec3i):
         # Poiseuille flow profile: parabolic velocity distribution
-        y = wp.float32(index[1])
-        z = wp.float32(index[2])
+        y = dtype(index[1])
+        z = dtype(index[2])
 
         # Calculate normalized distance from center
-        y_center = y - (H_y / 2.0)
-        z_center = z - (H_z / 2.0)
-        r_squared = (2.0 * y_center / H_y) ** 2.0 + (2.0 * z_center / H_z) ** 2.0
+        y_center = y - (H_y / two)
+        z_center = z - (H_z / two)
+        r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
         # Parabolic profile: u = u_max * (1 - r²)
-        return wp.vec(u_max * wp.max(0.0, 1.0 - r_squared), length=1)
+        return wp.vec(u_max_wp * wp.max(dtype(0.0), dtype(1.0) - r_squared), length=1)
 
     return bc_profile_warp
 
