@@ -334,12 +334,31 @@ class ExportMultiresHDF5(object):
     def _merge_duplicates(self, coordinates, connectivity):
         # Merging duplicate points
         tolerance = 0.01
-        grid_coords = np.round(coordinates / tolerance).astype(np.int64)
-        hash_keys = grid_coords[:, 0] + grid_coords[:, 1] * 1_000_000 + grid_coords[:, 2] * 1_000_000_000_000
+        chunk_size = 10_000_000  # Adjust based on GPU memory
+        num_points = coordinates.shape[0]
+        unique_points = []
+        mapping = np.zeros(num_points, dtype=np.int32)
+        unique_idx = 0
 
-        _, unique_indices, inverse = np.unique(hash_keys, return_index=True, return_inverse=True)
-        coordinates = coordinates[unique_indices]
-        connectivity = inverse[connectivity]
+        for start in range(0, num_points, chunk_size):
+            end = min(start + chunk_size, num_points)
+            coords_chunk = coordinates[start:end]
+
+            # Simple hashing: grid coordinates as tuple keys
+            grid_coords = np.round(coords_chunk / tolerance).astype(np.int64)
+            hash_keys = (grid_coords[:, 0] +
+                         grid_coords[:, 1] * 1_000_000 +
+                         grid_coords[:, 2] * 1_000_000_000_000)
+            unique_hash, inverse = np.unique(hash_keys, return_inverse=True)
+            unique_hash, unique_indices, inverse = np.unique(hash_keys, return_index=True, return_inverse=True)
+            unique_chunk = coords_chunk[unique_indices]
+
+            unique_points.append(unique_chunk)
+            mapping[start:end] = inverse + unique_idx
+            unique_idx += len(unique_hash)
+
+        coordinates = np.concatenate(unique_points)
+        connectivity = mapping[connectivity]
         return coordinates, connectivity
 
     def _transform_coordinates(self, coordinates, scale, offset):
