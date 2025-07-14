@@ -89,7 +89,7 @@ class OutletInitializer(Operator):
             # Set the velocity at the outlet (i.e. where i = nx-1)
             functional(index, bc_mask, f_field)
 
-        return None, kernel
+        return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, bc_mask, f_field):
@@ -131,4 +131,52 @@ class OutletInitializer(Operator):
         # Launch the neon container
         c = self.neon_container(bc_mask, f_field)
         c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
+        return f_field
+
+
+# Defining an initializer for outlet only
+class MultiresOutletInitializer(OutletInitializer):
+    def __init__(
+        self,
+        outlet_bc_id: int = None,
+        wind_vector=None,
+        velocity_set: VelocitySet = None,
+        precision_policy=None,
+        compute_backend=None,
+    ):
+        super().__init__(outlet_bc_id, wind_vector, velocity_set, precision_policy, compute_backend)
+
+    def _construct_neon(self):
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+
+        @neon.Container.factory(name="MultiresOutletInitializer")
+        def container(
+            bc_mask: Any,
+            f_field: Any,
+            level: Any,
+        ):
+            def launcher(loader: neon.Loader):
+                loader.set_mres_grid(f_field.get_grid(), level)
+                f_field_pn = loader.get_mres_write_handle(f_field)
+                bc_mask_pn = loader.get_mres_read_handle(bc_mask)
+
+                @wp.func
+                def kernel(index: Any):
+                    # apply the functional
+                    functional(index, bc_mask_pn, f_field_pn)
+
+                loader.declare_kernel(kernel)
+
+            return launcher
+
+        return _, container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, bc_mask, f_field, stream=0):
+        grid = bc_mask.get_grid()
+        for level in range(grid.num_levels):
+            # Launch the neon container
+            c = self.neon_container(bc_mask, f_field, level)
+            c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
         return f_field

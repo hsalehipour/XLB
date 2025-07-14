@@ -216,12 +216,24 @@ boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 visc = u_max * num_finest_voxels_across_part / Re
 omega = 1.0 / (3.0 * visc + 0.5)
 
+# Make initializer operator
+from xlb.helper.initializers import MultiresOutletInitializer
+
+initializer = MultiresOutletInitializer(
+    outlet_bc_id=bc_outlet.id,
+    wind_vector=(u_max, 0.0, 0.0),
+    velocity_set=velocity_set,
+    precision_policy=precision_policy,
+    compute_backend=compute_backend,
+)
+
 # Define a multi-resolution simulation manager
 sim = xlb.helper.MultiresSimulationManager(
     omega=omega,
     grid=grid,
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
+    initializer=initializer,
 )
 
 # Setup Momentum Transfer for Force Calculation
