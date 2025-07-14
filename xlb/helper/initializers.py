@@ -5,6 +5,7 @@ from xlb.velocity_set import VelocitySet
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator.equilibrium import MultiresQuadraticEquilibrium
+import neon
 
 
 def initialize_eq(f, grid, velocity_set, precision_policy, compute_backend, rho=None, u=None):
@@ -38,53 +39,96 @@ def initialize_multires_eq(f, grid, velocity_set, precision_policy, backend, rho
 class OutletInitializer(Operator):
     def __init__(
         self,
-        wind_speed=None,
-        grid_shape=None,
+        outlet_bc_id: int = None,
+        wind_vector=None,
         velocity_set: VelocitySet = None,
         precision_policy=None,
         compute_backend=None,
     ):
-        self.wind_speed = wind_speed
+        assert outlet_bc_id is not None, "Outlet BC ID must be provided."
+        self.outlet_bc_id = outlet_bc_id
+        self.wind_vector = wind_vector
         self.rho = 1.0
-        self.grid_shape = grid_shape
-        self.equilibrium = QuadraticEquilibrium(velocity_set=velocity_set, precision_policy=precision_policy, compute_backend=compute_backend)
+        self.equilibrium = QuadraticEquilibrium(
+            velocity_set=velocity_set,
+            precision_policy=precision_policy,
+            compute_backend=ComputeBackend.WARP,
+        )
         super().__init__(velocity_set, precision_policy, compute_backend)
 
     def _construct_warp(self):
-        nx, ny, nz = self.grid_shape
         _q = self.velocity_set.q
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+        _u = _u_vec(self.wind_vector[0], self.wind_vector[1], self.wind_vector[2])
         _rho = self.compute_dtype(self.rho)
-        _u = _u_vec(self.wind_speed, 0.0, 0.0)
         _w = self.velocity_set.w
+        outlet_bc_id = self.outlet_bc_id
+
+        @wp.func
+        def functional(index: Any, bc_mask: Any, f_field: Any):
+            # Check if the index corresponds to the outlet
+            if self.read_field(bc_mask, index, 0) == outlet_bc_id:
+                _feq = self.equilibrium.warp_functional(_rho, _u)
+                for l in range(_q):
+                    self.write_field(f_field, index, l, _feq[l])
+            else:
+                # In the rest of the domain, we assume zero velocity and equilibrium distribution.
+                for l in range(_q):
+                    self.write_field(f_field, index, l, _w[l])
 
         # Construct the warp kernel
         @wp.kernel
-        def kernel(f: wp.array4d(dtype=Any)):
+        def kernel(
+            bc_mask: wp.array4d(dtype=wp.uint8),
+            f_field: wp.array4d(dtype=Any),
+        ):
             # Get the global index
             i, j, k = wp.tid()
             index = wp.vec3i(i, j, k)
 
             # Set the velocity at the outlet (i.e. where i = nx-1)
-            if index[0] == nx - 1:
-                _feq = self.equilibrium.warp_functional(_rho, _u)
-                for l in range(_q):
-                    f[l, index[0], index[1], index[2]] = _feq[l]
-            else:
-                # In the rest of the domain, we assume zero velocity and equilibrium distribution.
-                for l in range(_q):
-                    f[l, index[0], index[1], index[2]] = _w[l]
+            functional(index, bc_mask, f_field)
 
         return None, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f):
+    def warp_implementation(self, bc_mask, f_field):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
-            inputs=[
-                f,
-            ],
-            dim=f.shape[1:],
+            inputs=[bc_mask, f_field],
+            dim=f_field.shape[1:],
         )
-        return f
+        return f_field
+
+    def _construct_neon(self):
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+
+        @neon.Container.factory(name="OutletInitializer")
+        def container(
+            bc_mask: Any,
+            f_field: Any,
+        ):
+            def launcher(loader: neon.Loader):
+                loader.set_grid(f_field.get_grid())
+                f_field_pn = loader.get_write_handle(f_field)
+                bc_mask_pn = loader.get_read_handle(bc_mask)
+
+                @wp.func
+                def kernel(index: Any):
+                    # apply the functional
+                    functional(index, bc_mask_pn, f_field_pn)
+
+                loader.declare_kernel(kernel)
+
+            return launcher
+
+        return _, container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, bc_mask, f_field, stream=0):
+        # Launch the neon container
+        c = self.neon_container(bc_mask, f_field)
+        c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
+        return f_field

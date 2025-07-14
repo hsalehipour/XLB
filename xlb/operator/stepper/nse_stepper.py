@@ -77,14 +77,6 @@ class IncompressibleNavierStokesStepper(Stepper):
             grid=self.grid, velocity_set=self.velocity_set, compute_backend=self.compute_backend, precision_policy=self.precision_policy
         )
 
-        # Initialize distribution functions if initializer is provided
-        if initializer is not None:
-            f_0 = initializer(f_0)
-        else:
-            from xlb.helper.initializers import initialize_eq
-
-            f_0 = initialize_eq(f_0, self.grid, self.velocity_set, self.precision_policy, self.compute_backend)
-
         # Copy f_0 using backend-specific copy to f_1
         if self.compute_backend == ComputeBackend.JAX:
             f_1 = f_0.copy()
@@ -92,35 +84,8 @@ class IncompressibleNavierStokesStepper(Stepper):
             wp.copy(f_1, f_0)
         if self.compute_backend == ComputeBackend.NEON:
             f_1.copy_from_run(f_0, 0)
-        if True:
-            import xlb.velocity_set
-            from xlb.operator.macroscopic import Macroscopic
 
-            # macro = Macroscopic(
-            #     compute_backend=ComputeBackend.NEON,
-            #     precision_policy=self.precision_policy,
-            #     velocity_set=xlb.velocity_set.D3Q19(precision_policy=self.precision_policy, backend=ComputeBackend.NEON),
-            # )
-            rho = self.grid.create_field(1, dtype=self.precision_policy.store_precision)
-            u = self.grid.create_field(3, dtype=self.precision_policy.store_precision)
-            # rho, u = macro(f_0, rho, u)
-            # wp.synchronize()
-            # wp.synchronize()
-            # u.update_host(0)
-            # rho.update_host(0)
-            # wp.synchronize()
-            # u.export_vti("u_init.vti", 'u')
-            # rho.export_vti("rho_init.vti", 'rho')
-            # rho, u = macro(f_1, rho, u)
-            # wp.synchronize()
-            # wp.synchronize()
-            # u.update_host(0)
-            # rho.update_host(0)
-            # wp.synchronize()
-            # u.export_vti("u_f1_init.vti", 'u')
-            # rho.export_vti("rho_f1_init.vti", 'rho')
         # Important note: XLB uses f_1 buffer (center index and missing directions) to store auxiliary data for boundary conditions.
-
         # Process boundary conditions and update masks
         f_1, bc_mask, missing_mask = self._process_boundary_conditions(self.boundary_conditions, f_1, bc_mask, missing_mask)
 
@@ -131,6 +96,14 @@ class IncompressibleNavierStokesStepper(Stepper):
         wp.synchronize()
         # bc_mask.export_vti("bc_mask.vti", 'bc_mask')
         # missing_mask.export_vti("missing_mask.vti", 'missing_mask')
+
+        # Initialize distribution functions if initializer is provided
+        if initializer is not None:
+            f_0 = initializer(bc_mask, f_0)
+        else:
+            from xlb.helper.initializers import initialize_eq
+
+            f_0 = initialize_eq(f_0, self.grid, self.velocity_set, self.precision_policy, self.compute_backend)
 
         return f_0, f_1, bc_mask, missing_mask
 

@@ -346,9 +346,7 @@ class ExportMultiresHDF5(object):
 
             # Simple hashing: grid coordinates as tuple keys
             grid_coords = np.round(coords_chunk / tolerance).astype(np.int64)
-            hash_keys = (grid_coords[:, 0] +
-                         grid_coords[:, 1] * 1_000_000 +
-                         grid_coords[:, 2] * 1_000_000_000_000)
+            hash_keys = grid_coords[:, 0] + grid_coords[:, 1] * 1_000_000 + grid_coords[:, 2] * 1_000_000_000_000
             unique_hash, inverse = np.unique(hash_keys, return_inverse=True)
             unique_hash, unique_indices, inverse = np.unique(hash_keys, return_index=True, return_inverse=True)
             unique_chunk = coords_chunk[unique_indices]
