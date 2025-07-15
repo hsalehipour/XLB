@@ -154,7 +154,7 @@ class ExportMultiresHDF5(object):
         assert coordinates.size != 0, "Error: No valid data to process. Check the input levels_data."
 
         # Merge duplicate points
-        coordinates, connectivity = self._merge_duplicates(coordinates, connectivity)
+        coordinates, connectivity = self._merge_duplicates(coordinates, connectivity, levels_data)
 
         # Apply scale and offset
         coordinates = self._transform_coordinates(coordinates, scale, offset)
@@ -331,7 +331,7 @@ class ExportMultiresHDF5(object):
             for fname, fdata in field_data.items():
                 fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts)
 
-    def _merge_duplicates(self, coordinates, connectivity):
+    def _merge_duplicates(self, coordinates, connectivity, levels_data):
         # Merging duplicate points
         tolerance = 0.01
         chunk_size = 10_000_000  # Adjust based on GPU memory
@@ -340,13 +340,17 @@ class ExportMultiresHDF5(object):
         mapping = np.zeros(num_points, dtype=np.int32)
         unique_idx = 0
 
+        # Get the grid shape of computational box at the finest level from the levels_data
+        num_levels = len(levels_data)
+        grid_shape_finest = np.array(levels_data[-1][0].shape) * 2 ** (num_levels - 1)
+
         for start in range(0, num_points, chunk_size):
             end = min(start + chunk_size, num_points)
             coords_chunk = coordinates[start:end]
 
             # Simple hashing: grid coordinates as tuple keys
             grid_coords = np.round(coords_chunk / tolerance).astype(np.int64)
-            hash_keys = grid_coords[:, 0] + grid_coords[:, 1] * 1_000_000 + grid_coords[:, 2] * 1_000_000_000_000
+            hash_keys = grid_coords[:, 0] + grid_coords[:, 1] * grid_shape_finest[0] + grid_coords[:, 2] * grid_shape_finest[0] * grid_shape_finest[1]
             unique_hash, inverse = np.unique(hash_keys, return_inverse=True)
             unique_hash, unique_indices, inverse = np.unique(hash_keys, return_index=True, return_inverse=True)
             unique_chunk = coords_chunk[unique_indices]
