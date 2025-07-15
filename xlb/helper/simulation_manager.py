@@ -17,9 +17,11 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         collision_type="BGK",
         forcing_scheme="exact_difference",
         force_vector=None,
+        initializer=None,
     ):
         super().__init__(grid, boundary_conditions, collision_type, forcing_scheme, force_vector)
 
+        self.initializer = initializer
         self.omega = omega
         self.count_levels = grid.count_levels
         # Create fields
@@ -38,7 +40,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         # self.u.export_vti(f"u_{fname_prefix}_topology.vti", 'u')
 
         # Prepare fields
-        self.f_0, self.f_1, self.bc_mask, self.missing_mask = self.prepare_fields(self.rho, self.u)
+        self.f_0, self.f_1, self.bc_mask, self.missing_mask = self.prepare_fields(self.rho, self.u, self.initializer)
         self.prepare_coalescence_count(coalescence_factor=self.coalescence_factor, bc_mask=self.bc_mask)
 
         # wp.synchronize()

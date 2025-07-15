@@ -67,10 +67,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         missing_mask = self.grid.create_field(cardinality=self.velocity_set.q, dtype=Precision.UINT8)
         bc_mask = self.grid.create_field(cardinality=1, dtype=Precision.UINT8)
 
-        from xlb.helper.initializers import initialize_multires_eq
-
-        f_0 = initialize_multires_eq(f_0, self.grid, self.velocity_set, self.precision_policy, self.compute_backend, rho=rho, u=u)
-
         for level in range(self.grid.count_levels):
             f_1.copy_from_run(level, f_0, 0)
         # f_0.update_host(0)
@@ -88,6 +84,15 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         # bc_mask.export_vti("bc_mask.vti", "bc_mask")
         # f_0.export_vti("init_f0.vti", 'init_f0')
         # missing_mask.export_vti("missing_mask.vti", 'missing_mask')
+
+        # Initialize distribution functions if initializer is provided
+        if initializer is not None:
+            # Refer to xlb.helper.initializers for available initializers
+            f_0 = initializer(bc_mask, f_0)
+        else:
+            from xlb.helper.initializers import initialize_multires_eq
+
+            f_0 = initialize_multires_eq(f_0, self.grid, self.velocity_set, self.precision_policy, self.compute_backend, rho=rho, u=u)
 
         return f_0, f_1, bc_mask, missing_mask
 
