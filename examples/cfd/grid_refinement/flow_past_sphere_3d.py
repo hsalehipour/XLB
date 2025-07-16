@@ -35,23 +35,48 @@ level_origins = []
 level_list = []
 for lvl in range(num_levels):
     divider = 2**lvl
-    growth = 1.5**lvl
-    shape = grid_shape[0] // divider, grid_shape[1] // divider, grid_shape[2] // divider
+    growth = 1.25**lvl
+    shape = nx // divider, ny // divider, nz // divider
     if lvl == num_levels - 1:
         level = np.ascontiguousarray(np.ones(shape, dtype=int), dtype=np.int32)
-        box_origin = (0, 0, 0)  # The coarsest level has no origin offset
+        box_origin = np.array([0, 0, 0])  # The coarsest level has no origin offset
     else:
-        box_size = tuple([int(shape[i] // 4 * growth) for i in range(3)])
-        box_origin = tuple([sphere_origin[0] // divider - 4 * sphere_radius // divider] + [shape[i] // 2 - box_size[i] // 2 for i in range(1, 3)])
+        box_size = tuple([int(0.3 * shape[i] * growth) for i in range(3)])
         level = np.ascontiguousarray(np.ones(box_size, dtype=int), dtype=np.int32)
+        if lvl == 0:
+            box_origin = tuple(
+                [sphere_origin[0] // divider - int(2 * growth * sphere_radius // divider)] + [shape[i] // 2 - box_size[i] // 2 for i in range(1, 3)]
+            )
+        else:
+            finer_box_size = level_list[-1].shape
+            finer_box_origin = np.array(level_origins[-1])
+            shift = np.array(box_size) - np.array(finer_box_size) // 2
+            box_origin = finer_box_origin // 2 - shift // 2
     level_list.append(level)
-    level_origins.append(neon.Index_3d(*box_origin))
+    level_origins.append(box_origin)
 
+
+# Note that this exporter does not produce expected results at the moment because the level_list
+# produced above include dense fields and are not sparse.
+
+# # Define exporter object for hdf5 output
+# from xlb.utils import MultiresIO
+
+# # Pack the needed information for the exporter in a list called "level_data"
+# level_data = []
+# for level in range(num_levels):
+#     voxel_size = 2**level
+#     level_data.append(
+#         [level_list[level].astype(bool), voxel_size, level_origins[level], level],
+#     )
+# exporter = MultiresIO(level_data)
+
+# Create the multires grid
 grid = multires_grid_factory(
     grid_shape,
     velocity_set=velocity_set,
     sparsity_pattern_list=level_list,
-    sparsity_pattern_origins=level_origins,
+    sparsity_pattern_origins=[neon.Index_3d(*origin) for origin in level_origins],
 )
 
 # Define Boundary Indices
@@ -138,7 +163,8 @@ for step in range(num_steps):
     sim.step()
 
     if step % post_process_interval == 0 or step == num_steps - 1:
-        # TODO: Issues in the vtk output for rectangular cuboids (as if a duboid grid with the largest side is assumed)
+        # TODO: Issues in the vtk output for rectangular cuboids (as if a cuboid grid with the largest side is assumed)
+        wp.synchronize()
         sim.export_macroscopic("multires_flow_over_sphere_3d_")
         wp.synchronize()
         end_time = time.time()

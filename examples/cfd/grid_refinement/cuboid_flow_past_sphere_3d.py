@@ -268,6 +268,7 @@ for step in range(num_steps):
         # print(f"\tVTK file written in {toc_write - tic_write:0.1f} seconds")
 
         # Call the Macroscopic operator to compute macroscopic fields
+        wp.synchronize()
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
 
         # Call the exporter to save the current state
