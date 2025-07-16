@@ -125,27 +125,19 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     return list(reversed(level_data))
 
 
-class ExportMultiresHDF5(object):
+class MultiresIO(object):
     def __init__(self, levels_data, scale=1, offset=(0.0, 0.0, 0.0)):
         """
-        Initialize the ExportMultiresHDF5 object.
+        Initialize the MultiresIO object.
 
         Parameters
         ----------
         levels_data : list of tuples
             Each tuple contains (data, voxel_size, origin, level).
-        filename : str
-            The name of the output HDF5 file.
-        fields : dict, optional
-            A dictionary of fields to be included in the HDF5 file.
         scale : float or tuple, optional
             Scale factor for the coordinates.
         offset : tuple, optional
             Offset to be applied to the coordinates.
-        compression : str, optional
-            Compression method for the HDF5 datasets.
-        compression_opts : int, optional
-            Compression options for the HDF5 datasets.
         """
         # Process the multires geometry and extract coordinates and connectivity in the coordinate system of the finest level
         coordinates, connectivity, level_id_field, total_cells = self.process_geometry(levels_data, scale)
@@ -296,7 +288,7 @@ class ExportMultiresHDF5(object):
         print("\tXDMF file written successfully")
         return
 
-    def write_hdf5_file(self, filename, coordinates, connectivity, level_id_field, field_data, compression="gzip", compression_opts=0):
+    def save_hdf5_file(self, filename, coordinates, connectivity, level_id_field, field_data, compression="gzip", compression_opts=0):
         """Write the processed mesh data to an HDF5 file.
         Parameters
         ----------
@@ -438,9 +430,10 @@ class ExportMultiresHDF5(object):
 
         return container
 
-    def __call__(self, filename, velocity_neon, density_neon, compression="gzip", compression_opts=0, store_precision=None):
-        import time
-
+    def get_fields_data(self, velocity_neon, density_neon):
+        """
+        Extracts and prepares the fields data from the NEON fields for export.
+        """
         # Ensure that this operator is called on multires grids
         grid_mres = velocity_neon.get_grid()
         assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
@@ -478,12 +471,145 @@ class ExportMultiresHDF5(object):
             fields_data[field_name] = np.concatenate(fields_data[field_name])
             assert fields_data[field_name].size == self.total_cells, f"Error: Field {field_name} size mismatch!"
 
+        return fields_data
+
+    def to_hdf5(self, filename, velocity_neon, density_neon, compression="gzip", compression_opts=0, store_precision=None):
+        """
+        Export the multi-resolution mesh data to an HDF5 file.
+        Parameters
+        ----------
+        filename : str
+            The name of the output HDF5 file (without extension).
+        velocity_neon : neon mGrid Field
+            The NEON field containing velocity data.
+        density_neon : neon mGrid Field
+            The NEON field containing density data.
+        compression : str, optional
+            The compression method to use for the HDF5 file.
+        compression_opts : int, optional
+            The compression options to use for the HDF5 file.
+        store_precision : str, optional
+            The precision policy for storing data in the HDF5 file.
+        """
+        import time
+
+        # Get the fields data from the NEON fields
+        fields_data = self.get_fields_data(velocity_neon, density_neon)
+
         # Save XDMF file
         self.save_xdmf(filename + ".h5", filename + ".xmf", self.total_cells, len(self.coordinates), fields_data)
 
         # Writing HDF5 file
         print("\tWriting HDF5 file")
         tic_write = time.perf_counter()
-        self.write_hdf5_file(filename, self.coordinates, self.connectivity, self.level_id_field, fields_data, compression, compression_opts)
+        self.save_hdf5_file(filename, self.coordinates, self.connectivity, self.level_id_field, fields_data, compression, compression_opts)
         toc_write = time.perf_counter()
         print(f"\tHDF5 file written in {toc_write - tic_write:0.1f} seconds")
+
+    def to_slice_image(
+        self,
+        field_name,
+        velocity_neon,
+        density_neon,
+        plane_point,
+        plane_normal,
+        slice_thickness,
+        output_filename,
+        bounds=[0, 1, 0, 1],
+        grid_res=512,
+        cmap=None,
+    ):
+        """
+        Export an arbitrary-plane slice from unstructured point data to PNG.
+
+        Parameters
+        ----------
+        field_name : str
+            The field to plot.
+        plane_point : array_like
+            A point [x, y, z] on the plane.
+        plane_normal : array_like
+            Plane normal vector [nx, ny, nz].
+        slice_thickness : float
+            How thick (in units of the coordinate system) the slice should be.
+        output_filename : str
+            Output PNG filename (without extension).
+        grid_resolution : tuple
+            Resolution of output image (pixels in plane u, v directions).
+        grid_size : tuple
+            Physical size of slice grid (width, height).
+        cmap : str
+            Matplotlib colormap.
+        """
+        from matplotlib import cm
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from scipy.interpolate import griddata
+
+        # Get the fields data from the NEON fields
+        fields_data = self.get_fields_data(velocity_neon, density_neon)
+        cell_values = fields_data[field_name]
+
+        # get the normalized plane normal
+        plane_normal = np.asarray(plane_normal)
+        n = plane_normal / np.linalg.norm(plane_normal)
+
+        # Compute centroids (K = 8 for hexahedral cells)
+        cell_points = self.coordinates[self.connectivity]  # shape (M, K, 3)
+        centroids = np.mean(cell_points, axis=1)  # (M, 3)
+
+        # Compute signed distances of each cell center to the plane
+        plane_point *= plane_normal
+        sdf = np.dot(centroids - plane_point, n)
+
+        # Filter: cells with centroid near plane
+        mask = np.abs(sdf) <= slice_thickness / 2
+        if not np.any(mask):
+            raise ValueError("No cells intersect the plane within thickness.")
+
+        # Project centroids to plane
+        centroids_slice = centroids[mask]
+        sdf_slice = sdf[mask]
+        proj = centroids_slice - np.outer(sdf_slice, n)
+
+        values = cell_values[mask]
+
+        # Build in-plane basis
+        if np.allclose(n, [1, 0, 0]):
+            u1 = np.array([0, 1, 0])
+        else:
+            u1 = np.array([1, 0, 0])
+        u2 = np.cross(n, u1)
+
+        local_x = np.dot(proj - plane_point, u1)
+        local_y = np.dot(proj - plane_point, u2)
+
+        # Define extent of the plot
+        xmin, xmax, ymin, ymax = local_x.min(), local_x.max(), local_y.min(), local_y.max()
+        Lx = xmax - xmin
+        Ly = ymax - ymin
+        extent = np.array([xmin + bounds[0] * Lx, xmin + bounds[1] * Lx, ymin + bounds[2] * Ly, ymin + bounds[3] * Ly])
+        mask_bounds = (extent[0] <= local_x) & (local_x <= extent[1]) & (extent[2] <= local_y) & (local_y <= extent[3])
+
+        if cmap is None:
+            cmap = cm.nipy_spectral
+
+        # Rasterize: scatter cell centers to 2D grid
+        grid_x = np.linspace(local_x[mask_bounds].min(), local_x[mask_bounds].max(), grid_res)
+        grid_y = np.linspace(local_y[mask_bounds].min(), local_y[mask_bounds].max(), grid_res)
+        xv, yv = np.meshgrid(grid_x, grid_y, indexing="xy")
+
+        # Linear interpolation for each grid point
+        grid_field = griddata(points=(local_x, local_y), values=values, xi=(xv, yv), method="linear", fill_value=np.nan)
+
+        # Plot
+        plt.imshow(
+            grid_field,
+            extent=[xmin, xmax, ymin, ymax],
+            cmap=cmap,
+            origin="lower",
+            aspect="equal",
+        )
+        plt.colorbar(label=field_name)
+        plt.savefig(output_filename + ".png", dpi=300, bbox_inches="tight")
+        plt.close()
