@@ -62,14 +62,21 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 - missing_mask: Mask indicating which populations are missing at boundary nodes
         """
 
-        f_0 = self.grid.create_field(cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision)
-        f_1 = self.grid.create_field(cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision)
+        f_0 = self.grid.create_field(cardinality=self.velocity_set.q,
+                                     dtype=self.precision_policy.store_precision,
+                                     neon_data_use=neon.DataUse.host_device())
+
+        f_1 = self.grid.create_field(cardinality=self.velocity_set.q,
+                                     dtype=self.precision_policy.store_precision,
+                                     neon_data_use=neon.DataUse.host_device())
+
         missing_mask = self.grid.create_field(cardinality=self.velocity_set.q, dtype=Precision.UINT8)
         bc_mask = self.grid.create_field(cardinality=1, dtype=Precision.UINT8)
 
         from xlb.helper.initializers import initialize_multires_eq
 
-        f_0 = initialize_multires_eq(f_0, self.grid, self.velocity_set, self.precision_policy, self.compute_backend, rho=rho, u=u)
+        f_0 = initialize_multires_eq(f_0, self.grid, self.velocity_set,
+                                     self.precision_policy, self.compute_backend, rho=rho, u=u)
 
         for level in range(self.grid.count_levels):
             f_1.copy_from_run(level, f_0, 0)
