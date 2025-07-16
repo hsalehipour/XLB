@@ -310,18 +310,18 @@ class MultiresIO(object):
         import h5py
 
         with h5py.File(filename + ".h5", "w") as f:
-            f.create_dataset("/Mesh/Points", data=coordinates, compression=compression, compression_opts=compression_opts, chunks=(100000, 3))
+            f.create_dataset("/Mesh/Points", data=coordinates, compression=compression, compression_opts=compression_opts, chunks=True)
             f.create_dataset(
                 "/Mesh/Connectivity",
                 data=connectivity,
                 compression=compression,
                 compression_opts=compression_opts,
-                chunks=(30000, 8),
+                chunks=True,
             )
             f.create_dataset("/Mesh/Level", data=level_id_field, compression=compression, compression_opts=compression_opts)
             fg = f.create_group("/Fields")
             for fname, fdata in field_data.items():
-                fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts)
+                fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts, chunks=True)
 
     def _merge_duplicates(self, coordinates, connectivity, levels_data):
         # Merging duplicate points
