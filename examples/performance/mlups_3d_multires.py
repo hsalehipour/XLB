@@ -61,24 +61,6 @@ def setup_simulation(args):
     return velocity_set
 
 
-# def construct_indices_per_level(grid_shape_finest, indices_finest, active_voxels_mask_per_level, level_origins):
-#     # TODO: HS: This is not the efficient way of doing this. I need to write a Warp operator for this purpose
-#     num_levels = len(active_voxels_mask_per_level)
-#     indices_list = []
-#     for level in range(num_levels):
-#         refinement = 2**level
-#         grid_shape = tuple(x // refinement for x in grid_shape_finest)
-#         mask = np.zeros(grid_shape, dtype=bool)
-#         ox, oy, oz = level_origins[level]
-#         Lx, Ly, Lz = active_voxels_mask_per_level[level].shape
-#         mask[ox : ox + Lx, oy : oy + Ly, oz : oz + Lz] = active_voxels_mask_per_level[level]
-#         indices_per_level = (np.array(indices_finest) // refinement)[:, ::refinement]
-#         mask_per_level = mask[tuple(indices_per_level)]
-#         active_bc_indices_per_level = indices_per_level[:, mask_per_level].tolist()
-#         indices_list.append(active_bc_indices_per_level)
-#     return indices_list
-
-
 def problem1(grid_shape, velocity_set):
     def peel(dim, idx, peel_level, outwards):
         if outwards:

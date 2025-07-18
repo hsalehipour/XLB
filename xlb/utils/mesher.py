@@ -8,24 +8,27 @@ import warp as wp
 
 def adjust_bbox(cuboid_max, cuboid_min, voxel_size_coarsest):
     """
-    Adjust the bounding box to the nearest level 0 grid points that enclose the desired region.
+    Adjust the bounding box to the nearest points of coarsest level that enclose the desired region.
 
     Args:
         cuboid_min (np.ndarray): Desired minimum coordinates of the bounding box.
         cuboid_max (np.ndarray): Desired maximum coordinates of the bounding box.
-        voxel_size_coarsest (float): Voxel size of the coarsest grid (level 0).
+        voxel_size_coarsest (float): Voxel size of the coarsest grid.
 
     Returns:
-        tuple: (adjusted_min, adjusted_max) snapped to level 0 grid points.
+        tuple: (adjusted_min, adjusted_max) snapped to coarsest level grid points.
     """
     adjusted_min = np.round(cuboid_min / voxel_size_coarsest) * voxel_size_coarsest
     adjusted_max = np.round(cuboid_max / voxel_size_coarsest) * voxel_size_coarsest
+
+    # Ensure that the adjusted min is not less than zero
+    adjusted_min = np.maximum(adjusted_min, 0)
     return adjusted_min, adjusted_max
 
 
 def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     """
-    Create a multi-level cuboid mesh with bounding boxes aligned to the level 0 grid.
+    Create a multi-level cuboid mesh with bounding boxes aligned to the coarsest level grid.
     Voxel matrices are set to ones only in regions not covered by finer levels.
 
     Args:
@@ -71,23 +74,17 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
         # Set voxel size for this level
         voxel_size_level = max_voxel_size / pow(2, level)
-        if level > 0:
-            voxel_level_up = max_voxel_size / pow(2, level - 1)
-        else:
-            voxel_level_up = voxel_size_level
-        # Adjust bounding box to align with level 0 grid
-        adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, voxel_level_up)
 
+        # Adjust bounding box to align with coarsest level grid
+        adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, max_voxel_size)
         xmin, ymin, zmin = adjusted_min
         xmax, ymax, zmax = adjusted_max
-
-        cuboid = adjusted_max - adjusted_min
 
         # Compute number of voxels based on level-specific voxel size
         nx = int(np.round((xmax - xmin) / voxel_size_level))
         ny = int(np.round((ymax - ymin) / voxel_size_level))
         nz = int(np.round((zmax - zmin) / voxel_size_level))
-        print(f"Domain {nx}, {ny}, {nz}  Origin {adjusted_min}  Voxel Size {voxel_size_level} Voxel Level Up {voxel_level_up}")
+        print(f"Domain {nx}, {ny}, {nz}  Origin {adjusted_min}  Voxel Size {voxel_size_level}")
 
         voxel_matrix = np.ones((nx, ny, nz), dtype=bool)
 
@@ -556,9 +553,11 @@ class MultiresIO(object):
             cell_data = list(fields_data.values())
             squared = [comp**2 for comp in cell_data]
             cell_data = np.sqrt(sum(squared))
-            field_name = list(fields_data.keys())[0].split('_')[0] + '_magnitude'
+            field_name = list(fields_data.keys())[0].split("_")[0] + "_magnitude"
         else:
-            assert component < max(self.field_name_cardinality_dict.values()), f"Error: Component {component} is out of range for the provided fields."
+            assert component < max(self.field_name_cardinality_dict.values()), (
+                f"Error: Component {component} is out of range for the provided fields."
+            )
             print(f"\tCreating slice image for component {component} of the input field!")
             field_name = list(fields_data.keys())[component]
             cell_data = fields_data[field_name]
