@@ -138,7 +138,7 @@ level_data, sphere, grid_shape_finest = generate_cuboid_mesh(stl_filename, num_f
 from xlb.utils import MultiresIO
 
 # Define an exporter for the multiresolution data
-exporter = MultiresIO(level_data)
+exporter = MultiresIO({"velocity": 3, "density": 1}, level_data)
 
 # Prepare the sparsity pattern and origins from the level data
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
@@ -274,15 +274,12 @@ for step in range(num_steps):
         # Call the exporter to save the current state
         nx, ny, nz = grid_shape_finest
         filename = f"multires_flow_over_sphere_3d_{step:04d}"
-        exporter.to_hdf5(filename, sim.u, sim.rho, compression="gzip", compression_opts=2)
+        exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
         exporter.to_slice_image(
-            "velocity_x",
-            sim.u,
-            sim.rho,
+            filename,
+            {"velocity": sim.u},
             plane_point=(nx // 2, ny // 2, nz // 2),
             plane_normal=(0, 0, 1),
-            slice_thickness=1.0,
-            output_filename=f"{filename}_slice_x.png",
             grid_res=256,
             bounds=(0.4, 0.6, 0.4, 0.6),
         )

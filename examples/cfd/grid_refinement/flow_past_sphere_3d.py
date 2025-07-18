@@ -69,7 +69,7 @@ for lvl in range(num_levels):
 #     level_data.append(
 #         [level_list[level].astype(bool), voxel_size, level_origins[level], level],
 #     )
-# exporter = MultiresIO(level_data)
+# exporter = MultiresIO({"velocity": 3, "density": 1}, level_data)
 
 # Create the multires grid
 grid = multires_grid_factory(

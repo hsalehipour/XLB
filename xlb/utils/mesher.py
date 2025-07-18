@@ -126,12 +126,15 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
 
 class MultiresIO(object):
-    def __init__(self, levels_data, scale=1, offset=(0.0, 0.0, 0.0)):
+    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0)):
         """
         Initialize the MultiresIO object.
 
         Parameters
         ----------
+        field_name_cardinality_dict : dict
+            A dictionary mapping field names to their cardinalities.
+            Example: {'velocity_x': 1, 'velocity_y': 1, 'velocity': 3, 'density': 1}
         levels_data : list of tuples
             Each tuple contains (data, voxel_size, origin, level).
         scale : float or tuple, optional
@@ -152,6 +155,7 @@ class MultiresIO(object):
         coordinates = self._transform_coordinates(coordinates, scale, offset)
 
         # Assign to self
+        self.field_name_cardinality_dict = field_name_cardinality_dict
         self.levels_data = levels_data
         self.coordinates = coordinates
         self.connectivity = connectivity
@@ -159,7 +163,7 @@ class MultiresIO(object):
         self.total_cells = total_cells
 
         # Prepare and allocate the inputs for the NEON container
-        self.velocity_warp_list, self.density_warp_list, self.origin_list = self._prepare_container_inputs()
+        self.field_warp_dict, self.origin_list = self._prepare_container_inputs()
 
         # Construct the NEON container for exporting multi-resolution data
         self.container = self._construct_neon_container()
@@ -288,7 +292,7 @@ class MultiresIO(object):
         print("\tXDMF file written successfully")
         return
 
-    def save_hdf5_file(self, filename, coordinates, connectivity, level_id_field, field_data, compression="gzip", compression_opts=0):
+    def save_hdf5_file(self, filename, coordinates, connectivity, level_id_field, fields_data, compression="gzip", compression_opts=0):
         """Write the processed mesh data to an HDF5 file.
         Parameters
         ----------
@@ -300,7 +304,7 @@ class MultiresIO(object):
             An array of all connectivity data.
         level_id_field : numpy.ndarray
             An array of all level data.
-        field_data : dict
+        fields_data : dict
             A dictionary of all field data.
         compression : str, optional
             The compression method to use for the HDF5 file.
@@ -320,7 +324,7 @@ class MultiresIO(object):
             )
             f.create_dataset("/Mesh/Level", data=level_id_field, compression=compression, compression_opts=compression_opts)
             fg = f.create_group("/Fields")
-            for fname, fdata in field_data.items():
+            for fname, fdata in fields_data.items():
                 fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts, chunks=True)
 
     def _merge_duplicates(self, coordinates, connectivity, levels_data):
@@ -374,20 +378,20 @@ class MultiresIO(object):
             store_precision = DefaultConfig.default_precision_policy.store_precision
 
         # Prepare lists to hold warp fields and origins allocated for each level
-        velocity_warp_list = []
-        density_warp_list = []
+        field_warp_dict = {}
         origin_list = []
-        for level in range(num_levels):
-            # get the shape of the grid at this level
-            box_shape = self.levels_data[level][0].shape
+        for field_name, cardinality in self.field_name_cardinality_dict.items():
+            field_warp_dict[field_name] = []
+            for level in range(num_levels):
+                # get the shape of the grid at this level
+                box_shape = self.levels_data[level][0].shape
 
-            # Use the warp backend to create dense fields to be written in multi-res NEON fields
-            grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
-            velocity_warp_list.append(grid_dense.create_field(cardinality=3, dtype=store_precision))
-            density_warp_list.append(grid_dense.create_field(cardinality=1, dtype=store_precision))
-            origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
+                # Use the warp backend to create dense fields to be written in multi-res NEON fields
+                grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
+                field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=store_precision))
+                origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
 
-        return velocity_warp_list, density_warp_list, origin_list
+        return field_warp_dict, origin_list
 
     def _construct_neon_container(self):
         """
@@ -397,22 +401,19 @@ class MultiresIO(object):
 
         @neon.Container.factory(name="HDF5MultiresExporter")
         def container(
-            velocity_neon: Any,
-            density_neon: Any,
-            velocity_warp: Any,
-            density_warp: Any,
+            field_neon: Any,
+            field_warp: Any,
             origin: Any,
             level: Any,
         ):
             def launcher(loader: neon.Loader):
-                loader.set_mres_grid(velocity_neon.get_grid(), level)
-                velocity_neon_hdl = loader.get_mres_read_handle(velocity_neon)
-                density_neon_hdl = loader.get_mres_read_handle(density_neon)
+                loader.set_mres_grid(field_neon.get_grid(), level)
+                field_neon_hdl = loader.get_mres_read_handle(field_neon)
                 refinement = 2**level
 
                 @wp.func
                 def kernel(index: Any):
-                    cIdx = wp.neon_global_idx(velocity_neon_hdl, index)
+                    cIdx = wp.neon_global_idx(field_neon_hdl, index)
                     # Get local indices by dividing the global indices (associated with the finest level) by 2^level
                     # Subtract the origin to get the local indices in the warp field
                     lx = wp.neon_get_x(cIdx) // refinement - origin[0]
@@ -420,9 +421,9 @@ class MultiresIO(object):
                     lz = wp.neon_get_z(cIdx) // refinement - origin[2]
 
                     # write the values to the warp field
-                    density_warp[0, lx, ly, lz] = wp.neon_read(density_neon_hdl, index, 0)
-                    for card in range(3):
-                        velocity_warp[card, lx, ly, lz] = wp.neon_read(velocity_neon_hdl, index, card)
+                    cardinality = field_warp.shape[0]
+                    for card in range(cardinality):
+                        field_warp[card, lx, ly, lz] = wp.neon_read(field_neon_hdl, index, card)
 
                 loader.declare_kernel(kernel)
 
@@ -430,41 +431,46 @@ class MultiresIO(object):
 
         return container
 
-    def get_fields_data(self, velocity_neon, density_neon):
+    def get_fields_data(self, field_neon_dict):
         """
         Extracts and prepares the fields data from the NEON fields for export.
         """
         # Ensure that this operator is called on multires grids
-        grid_mres = velocity_neon.get_grid()
+        grid_mres = next(iter(field_neon_dict.values())).get_grid()
         assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
+
+        for field_name in field_neon_dict.keys():
+            assert field_name in self.field_name_cardinality_dict.keys(), (
+                f"Field {field_name} is not provided in the instantiation of the MultiresIO class!"
+            )
 
         # number of levels
         num_levels = grid_mres.get_num_levels()
         assert num_levels == len(self.levels_data), "Error: Inconsistent number of levels!"
 
-        # Prepare the fields to be written by transfering multi-res NEON fields into stacked warp fields
-        fields_data = {
-            "velocity_x": [],
-            "velocity_y": [],
-            "velocity_z": [],
-            "density": [],
-        }
-        for level in range(num_levels):
-            # Create the container and run it to fill the warp fields
-            c = self.container(
-                velocity_neon, density_neon, self.velocity_warp_list[level], self.density_warp_list[level], self.origin_list[level], level
-            )
-            c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+        # Prepare the fields dictionary to be written by transfering multi-res NEON fields into stacked warp fields and then numpy arrays
+        fields_data = {}
+        for field_name, cardinality in self.field_name_cardinality_dict.items():
+            if field_name not in field_neon_dict:
+                continue
+            for card in range(cardinality):
+                fields_data[f"{field_name}_{card}"] = []
 
-            # Convert the warp fields to numpy arrays and use level's mask to filter the data
-            mask = self.levels_data[level][0]
-            velocity_np = np.array(wp.to_jax(self.velocity_warp_list[level]))
-            rho = np.array(wp.to_jax(self.density_warp_list[level]))[0][mask]
-            vx, vy, vz = velocity_np[0][mask], velocity_np[1][mask], velocity_np[2][mask]
-            fields_data["velocity_x"].append(vx)
-            fields_data["velocity_y"].append(vy)
-            fields_data["velocity_z"].append(vz)
-            fields_data["density"].append(rho)
+        # Iterate over each field and level to fill the dictionary with numpy fields
+        for field_name, cardinality in self.field_name_cardinality_dict.items():
+            if field_name not in field_neon_dict:
+                continue
+            for level in range(num_levels):
+                # Create the container and run it to fill the warp fields
+                c = self.container(field_neon_dict[field_name], self.field_warp_dict[field_name][level], self.origin_list[level], level)
+                c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+
+                # Convert the warp fields to numpy arrays and use level's mask to filter the data
+                mask = self.levels_data[level][0]
+                field_np = np.array(wp.to_jax(self.field_warp_dict[field_name][level]))
+                for card in range(cardinality):
+                    field_np_card = field_np[card][mask]
+                    fields_data[f"{field_name}_{card}"].append(field_np_card)
 
         # Concatenate all field data
         for field_name in fields_data.keys():
@@ -473,17 +479,15 @@ class MultiresIO(object):
 
         return fields_data
 
-    def to_hdf5(self, filename, velocity_neon, density_neon, compression="gzip", compression_opts=0, store_precision=None):
+    def to_hdf5(self, output_filename, field_neon_dict, compression="gzip", compression_opts=0, store_precision=None):
         """
         Export the multi-resolution mesh data to an HDF5 file.
         Parameters
         ----------
-        filename : str
+        output_filename : str
             The name of the output HDF5 file (without extension).
-        velocity_neon : neon mGrid Field
-            The NEON field containing velocity data.
-        density_neon : neon mGrid Field
-            The NEON field containing density data.
+        field_neon_dict : a dictionary of neon mGrid Fields
+            Eg. The NEON fields containing velocity and density data as { "velocity": velocity_neon, "density": density_neon}
         compression : str, optional
             The compression method to use for the HDF5 file.
         compression_opts : int, optional
@@ -494,46 +498,47 @@ class MultiresIO(object):
         import time
 
         # Get the fields data from the NEON fields
-        fields_data = self.get_fields_data(velocity_neon, density_neon)
+        fields_data = self.get_fields_data(field_neon_dict)
 
         # Save XDMF file
-        self.save_xdmf(filename + ".h5", filename + ".xmf", self.total_cells, len(self.coordinates), fields_data)
+        self.save_xdmf(output_filename + ".h5", output_filename + ".xmf", self.total_cells, len(self.coordinates), fields_data)
 
         # Writing HDF5 file
         print("\tWriting HDF5 file")
         tic_write = time.perf_counter()
-        self.save_hdf5_file(filename, self.coordinates, self.connectivity, self.level_id_field, fields_data, compression, compression_opts)
+        self.save_hdf5_file(output_filename, self.coordinates, self.connectivity, self.level_id_field, fields_data, compression, compression_opts)
         toc_write = time.perf_counter()
         print(f"\tHDF5 file written in {toc_write - tic_write:0.1f} seconds")
 
     def to_slice_image(
         self,
-        field_name,
-        velocity_neon,
-        density_neon,
+        output_filename,
+        field_neon_dict,
         plane_point,
         plane_normal,
-        slice_thickness,
-        output_filename,
+        slice_thickness=1.0,
         bounds=[0, 1, 0, 1],
         grid_res=512,
         cmap=None,
+        component=None,
+        **kwargs,
     ):
         """
         Export an arbitrary-plane slice from unstructured point data to PNG.
 
         Parameters
         ----------
-        field_name : str
-            The field to plot.
+        output_filename : str
+            Output PNG filename (without extension).
+        field_neon_dict : dict
+            A dictionary of NEON fields containing the data to be plotted.
+            Example: {"velocity": velocity_neon, "density": density_neon}
         plane_point : array_like
             A point [x, y, z] on the plane.
         plane_normal : array_like
             Plane normal vector [nx, ny, nz].
         slice_thickness : float
             How thick (in units of the coordinate system) the slice should be.
-        output_filename : str
-            Output PNG filename (without extension).
         grid_resolution : tuple
             Resolution of output image (pixels in plane u, v directions).
         grid_size : tuple
@@ -541,14 +546,59 @@ class MultiresIO(object):
         cmap : str
             Matplotlib colormap.
         """
+        # Get the fields data from the NEON fields
+        assert len(field_neon_dict.keys()) == 1, "Error: This function is designed to plot a single field at a time."
+        fields_data = self.get_fields_data(field_neon_dict)
+
+        # Check if the component is within the valid range
+        if component is None:
+            print("\tCreating slice image of the field magnitude!")
+            cell_data = list(fields_data.values())
+            squared = [comp**2 for comp in cell_data]
+            cell_data = np.sqrt(sum(squared))
+            field_name = list(fields_data.keys())[0].split('_')[0] + '_magnitude'
+        else:
+            assert component < max(self.field_name_cardinality_dict.values()), f"Error: Component {component} is out of range for the provided fields."
+            print(f"\tCreating slice image for component {component} of the input field!")
+            field_name = list(fields_data.keys())[component]
+            cell_data = fields_data[field_name]
+
+        # Plot each field in the dictionary
+        self._to_slice_image_single_field(
+            f"{output_filename}_{field_name}",
+            cell_data,
+            plane_point,
+            plane_normal,
+            slice_thickness=slice_thickness,
+            bounds=bounds,
+            grid_res=grid_res,
+            cmap=cmap,
+            **kwargs,
+        )
+        print(f"\tSlice image for field {field_name} saved as {output_filename}.png")
+
+    def _to_slice_image_single_field(
+        self,
+        output_filename,
+        field_data,
+        plane_point,
+        plane_normal,
+        slice_thickness,
+        bounds,
+        grid_res,
+        cmap,
+        **kwargs,
+    ):
+        """
+        Helper function to create a slice image for a single field.
+        """
         from matplotlib import cm
         import numpy as np
         import matplotlib.pyplot as plt
         from scipy.interpolate import griddata
 
-        # Get the fields data from the NEON fields
-        fields_data = self.get_fields_data(velocity_neon, density_neon)
-        cell_values = fields_data[field_name]
+        # field data are associated with the cells centers
+        cell_values = field_data
 
         # get the normalized plane normal
         plane_normal = np.asarray(plane_normal)
@@ -609,7 +659,8 @@ class MultiresIO(object):
             cmap=cmap,
             origin="lower",
             aspect="equal",
+            **kwargs,
         )
-        plt.colorbar(label=field_name)
+        plt.colorbar()
         plt.savefig(output_filename + ".png", dpi=300, bbox_inches="tight")
         plt.close()
