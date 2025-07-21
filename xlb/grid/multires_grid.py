@@ -94,7 +94,7 @@ class NeonMultiresGrid(Grid):
         # level = 0 corresponds to the finest level
         return tuple(x // self.refinement_factor**level for x in self.shape)
 
-    def boundary_indices_across_levels(self, level_data, box_side: str = "front"):
+    def boundary_indices_across_levels(self, level_data, box_side: str = "front", remove_edges: bool = False):
         """
         Get indices for creating a boundary condition on the specified box side that crosses multiples levels of a multiresolution grid.
         The indices are returned as a list of lists, where each sublist corresponds to a level
@@ -116,7 +116,7 @@ class NeonMultiresGrid(Grid):
 
             # Get bottom indices of the bounding box at this level
             grid_shape = self.level_to_shape(level)
-            box = self.bounding_box_indices(shape=grid_shape)
+            box = self.bounding_box_indices(shape=grid_shape, remove_edges=remove_edges)
             bc_indices = np.array([box[box_side][i] for i in range(self.velocity_set.d)])
 
             # Convert to flat indices
