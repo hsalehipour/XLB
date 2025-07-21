@@ -123,7 +123,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
 
 class MultiresIO(object):
-    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0)):
+    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0), store_precision=None):
         """
         Initialize the MultiresIO object.
 
@@ -158,6 +158,13 @@ class MultiresIO(object):
         self.connectivity = connectivity
         self.level_id_field = level_id_field
         self.total_cells = total_cells
+
+        # Set the default precision policy if not provided
+        from xlb import DefaultConfig
+
+        if store_precision is None:
+            self.store_precision = DefaultConfig.default_precision_policy.store_precision
+            self.store_dtype = DefaultConfig.default_precision_policy.store_precision.wp_dtype
 
         # Prepare and allocate the inputs for the NEON container
         self.field_warp_dict, self.origin_list = self._prepare_container_inputs()
@@ -361,18 +368,13 @@ class MultiresIO(object):
         offset = np.array(offset, dtype=np.float32)
         return coordinates * scale + offset
 
-    def _prepare_container_inputs(self, store_precision=None):
+    def _prepare_container_inputs(self):
         # load necessary modules
         from xlb.compute_backend import ComputeBackend
         from xlb.grid import grid_factory
-        from xlb import DefaultConfig
 
         # Get the number of levels from the levels_data
         num_levels = len(self.levels_data)
-
-        # Set the default precision policy if not provided
-        if store_precision is None:
-            store_precision = DefaultConfig.default_precision_policy.store_precision
 
         # Prepare lists to hold warp fields and origins allocated for each level
         field_warp_dict = {}
@@ -385,7 +387,7 @@ class MultiresIO(object):
 
                 # Use the warp backend to create dense fields to be written in multi-res NEON fields
                 grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
-                field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=store_precision))
+                field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=self.store_precision))
                 origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
 
         return field_warp_dict, origin_list
@@ -420,7 +422,7 @@ class MultiresIO(object):
                     # write the values to the warp field
                     cardinality = field_warp.shape[0]
                     for card in range(cardinality):
-                        field_warp[card, lx, ly, lz] = wp.neon_read(field_neon_hdl, index, card)
+                        field_warp[card, lx, ly, lz] = self.store_dtype(wp.neon_read(field_neon_hdl, index, card))
 
                 loader.declare_kernel(kernel)
 
