@@ -282,6 +282,7 @@ for step in range(num_steps):
             plane_point=(nx // 2, ny // 2, nz // 2),
             plane_normal=(0, 0, 1),
             grid_res=256,
+            slice_thickness=2 ** (num_levels - 1),
             bounds=(0.4, 0.6, 0.4, 0.6),
         )
 

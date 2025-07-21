@@ -436,6 +436,10 @@ class MultiresIO(object):
         """
         Extracts and prepares the fields data from the NEON fields for export.
         """
+        # Check if the field_neon_dict is empty
+        if not field_neon_dict:
+            return {}
+
         # Ensure that this operator is called on multires grids
         grid_mres = next(iter(field_neon_dict.values())).get_grid()
         assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
@@ -604,7 +608,7 @@ class MultiresIO(object):
         cell_values = field_data
 
         # get the normalized plane normal
-        plane_normal = np.asarray(plane_normal)
+        plane_normal = np.asarray(np.abs(plane_normal))
         n = plane_normal / np.linalg.norm(plane_normal)
 
         # Compute centroids (K = 8 for hexahedral cells)
@@ -632,7 +636,7 @@ class MultiresIO(object):
             u1 = np.array([0, 1, 0])
         else:
             u1 = np.array([1, 0, 0])
-        u2 = np.cross(n, u1)
+        u2 = np.abs(np.cross(n, u1))
 
         local_x = np.dot(proj - plane_point, u1)
         local_y = np.dot(proj - plane_point, u2)
