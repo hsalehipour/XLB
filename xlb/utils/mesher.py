@@ -6,30 +6,27 @@ import neon
 import warp as wp
 
 
-def adjust_bbox(cuboid_max, cuboid_min, voxel_size_coarsest):
+def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
     """
-    Adjust the bounding box to the nearest points of coarsest level that enclose the desired region.
+    Adjust the bounding box to the nearest points of one level finer grid that encloses the desired region.
 
     Args:
         cuboid_min (np.ndarray): Desired minimum coordinates of the bounding box.
         cuboid_max (np.ndarray): Desired maximum coordinates of the bounding box.
-        voxel_size_coarsest (float): Voxel size of the coarsest grid.
+        voxel_size_up (float): Voxel size of one level higher (finer) grid.
 
     Returns:
-        tuple: (adjusted_min, adjusted_max) snapped to coarsest level grid points.
+        tuple: (adjusted_min, adjusted_max) snapped to grid points of one level higher.
     """
-    adjusted_min = np.round(cuboid_min / voxel_size_coarsest) * voxel_size_coarsest
-    adjusted_max = np.round(cuboid_max / voxel_size_coarsest) * voxel_size_coarsest
-
-    # Ensure that the adjusted min is not less than zero
-    adjusted_min = np.maximum(adjusted_min, 0)
+    adjusted_min = np.round(cuboid_min / voxel_size_up) * voxel_size_up
+    adjusted_max = np.round(cuboid_max / voxel_size_up) * voxel_size_up
     return adjusted_min, adjusted_max
 
 
 def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     """
-    Create a multi-level cuboid mesh with bounding boxes aligned to the coarsest level grid.
-    Voxel matrices are set to ones only in regions not covered by finer levels.
+    Create a strongly-balanced multi-level cuboid mesh with a sequence of bounding boxes.
+    Outputs mask arrays that are set to True only in regions not covered by finer levels.
 
     Args:
         voxel_size (float): Voxel size of the finest grid .
@@ -37,7 +34,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         stl_name (str): Path to the STL file.
 
     Returns:
-        list: Level data with voxel matrices, voxel sizes, origins, and levels.
+        list: Level data with mask arrays, voxel sizes, origins, and levels.
     """
     # Load the mesh and get its bounding box
     mesh = trimesh.load_mesh(stl_filename, process=False)
@@ -75,8 +72,13 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         # Set voxel size for this level
         voxel_size_level = max_voxel_size / pow(2, level)
 
-        # Adjust bounding box to align with coarsest level grid
-        adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, max_voxel_size)
+        # Adjust bounding box to align with one level up (finer grid)
+        if level > 0:
+            voxel_level_up = max_voxel_size / pow(2, level - 1)
+        else:
+            voxel_level_up = voxel_size_level
+        adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, voxel_level_up)
+
         xmin, ymin, zmin = adjusted_min
         xmax, ymax, zmax = adjusted_max
 
@@ -84,7 +86,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         nx = int(np.round((xmax - xmin) / voxel_size_level))
         ny = int(np.round((ymax - ymin) / voxel_size_level))
         nz = int(np.round((zmax - zmin) / voxel_size_level))
-        print(f"Domain {nx}, {ny}, {nz}  Origin {adjusted_min}  Voxel Size {voxel_size_level}")
+        print(f"Domain {nx}, {ny}, {nz}  Origin {adjusted_min}  Voxel Size {voxel_size_level} Voxel Level Up {voxel_level_up}")
 
         voxel_matrix = np.ones((nx, ny, nz), dtype=bool)
 
