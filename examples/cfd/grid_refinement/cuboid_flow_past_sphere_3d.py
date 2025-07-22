@@ -135,10 +135,10 @@ level_data, sphere, grid_shape_finest = generate_cuboid_mesh(stl_filename, num_f
 
 
 # Define exporter object for hdf5 output
-from xlb.utils import ExportMultiresHDF5
+from xlb.utils import MultiresIO
 
 # Define an exporter for the multiresolution data
-h5exporter = ExportMultiresHDF5(level_data)
+exporter = MultiresIO({"velocity": 3, "density": 1}, level_data)
 
 # Prepare the sparsity pattern and origins from the level data
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
@@ -203,6 +203,7 @@ bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
 # Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!
+# bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="front"))
 # bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
 bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
@@ -268,11 +269,23 @@ for step in range(num_steps):
         # print(f"\tVTK file written in {toc_write - tic_write:0.1f} seconds")
 
         # Call the Macroscopic operator to compute macroscopic fields
+        wp.synchronize()
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
 
         # Call the exporter to save the current state
+        nx, ny, nz = grid_shape_finest
         filename = f"multires_flow_over_sphere_3d_{step:04d}"
-        h5exporter(filename, sim.u, sim.rho, compression="gzip", compression_opts=2)
+        wp.synchronize()
+        exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
+        exporter.to_slice_image(
+            filename,
+            {"velocity": sim.u},
+            plane_point=(nx // 2, ny // 2, nz // 2),
+            plane_normal=(0, 0, 1),
+            grid_res=256,
+            slice_thickness=2 ** (num_levels - 1),
+            bounds=(0.4, 0.6, 0.4, 0.6),
+        )
 
         # Print lift and drag coefficients
         print_lift_drag(sim)
