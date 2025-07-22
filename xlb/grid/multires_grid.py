@@ -67,6 +67,7 @@ class NeonMultiresGrid(Grid):
             sparsity_pattern_origins=self.sparsity_pattern_origins,
             stencil=self.neon_stencil,
         )
+        self.grid.print_info()
         pass
 
     def create_field(
