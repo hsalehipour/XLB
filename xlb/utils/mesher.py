@@ -470,6 +470,9 @@ class MultiresIO(object):
                 c = self.container(field_neon_dict[field_name], self.field_warp_dict[field_name][level], self.origin_list[level], level)
                 c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
+                # Ensure all operations are complete before converting to JAX and Numpy arrays
+                wp.synchronize()
+
                 # Convert the warp fields to numpy arrays and use level's mask to filter the data
                 mask = self.levels_data[level][0]
                 field_np = np.array(wp.to_jax(self.field_warp_dict[field_name][level]))
