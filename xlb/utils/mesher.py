@@ -140,6 +140,8 @@ class MultiresIO(object):
             Scale factor for the coordinates.
         offset : tuple, optional
             Offset to be applied to the coordinates.
+        store_precision : str, optional
+            The precision policy for storing data.
         """
         # Process the multires geometry and extract coordinates and connectivity in the coordinate system of the finest level
         coordinates, connectivity, level_id_field, total_cells = self.process_geometry(levels_data, scale)
