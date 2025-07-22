@@ -274,6 +274,7 @@ for step in range(num_steps):
         # Call the exporter to save the current state
         nx, ny, nz = grid_shape_finest
         filename = f"multires_flow_over_sphere_3d_{step:04d}"
+        wp.synchronize()
         exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
         exporter.to_slice_image(
             filename,
