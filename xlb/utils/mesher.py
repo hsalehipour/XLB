@@ -6,27 +6,27 @@ import neon
 import warp as wp
 
 
-def adjust_bbox(cuboid_max, cuboid_min, voxel_size_coarsest):
+def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
     """
-    Adjust the bounding box to the nearest level 0 grid points that enclose the desired region.
+    Adjust the bounding box to the nearest points of one level finer grid that encloses the desired region.
 
     Args:
         cuboid_min (np.ndarray): Desired minimum coordinates of the bounding box.
         cuboid_max (np.ndarray): Desired maximum coordinates of the bounding box.
-        voxel_size_coarsest (float): Voxel size of the coarsest grid (level 0).
+        voxel_size_up (float): Voxel size of one level higher (finer) grid.
 
     Returns:
-        tuple: (adjusted_min, adjusted_max) snapped to level 0 grid points.
+        tuple: (adjusted_min, adjusted_max) snapped to grid points of one level higher.
     """
-    adjusted_min = np.round(cuboid_min / voxel_size_coarsest) * voxel_size_coarsest
-    adjusted_max = np.round(cuboid_max / voxel_size_coarsest) * voxel_size_coarsest
+    adjusted_min = np.round(cuboid_min / voxel_size_up) * voxel_size_up
+    adjusted_max = np.round(cuboid_max / voxel_size_up) * voxel_size_up
     return adjusted_min, adjusted_max
 
 
 def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     """
-    Create a multi-level cuboid mesh with bounding boxes aligned to the level 0 grid.
-    Voxel matrices are set to ones only in regions not covered by finer levels.
+    Create a strongly-balanced multi-level cuboid mesh with a sequence of bounding boxes.
+    Outputs mask arrays that are set to True only in regions not covered by finer levels.
 
     Args:
         voxel_size (float): Voxel size of the finest grid .
@@ -34,7 +34,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         stl_name (str): Path to the STL file.
 
     Returns:
-        list: Level data with voxel matrices, voxel sizes, origins, and levels.
+        list: Level data with mask arrays, voxel sizes, origins, and levels.
     """
     # Load the mesh and get its bounding box
     mesh = trimesh.load_mesh(stl_filename, process=False)
@@ -71,17 +71,16 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
         # Set voxel size for this level
         voxel_size_level = max_voxel_size / pow(2, level)
+
+        # Adjust bounding box to align with one level up (finer grid)
         if level > 0:
             voxel_level_up = max_voxel_size / pow(2, level - 1)
         else:
             voxel_level_up = voxel_size_level
-        # Adjust bounding box to align with level 0 grid
         adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, voxel_level_up)
 
         xmin, ymin, zmin = adjusted_min
         xmax, ymax, zmax = adjusted_max
-
-        cuboid = adjusted_max - adjusted_min
 
         # Compute number of voxels based on level-specific voxel size
         nx = int(np.round((xmax - xmin) / voxel_size_level))
@@ -126,7 +125,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
 
 class MultiresIO(object):
-    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0)):
+    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0), store_precision=None):
         """
         Initialize the MultiresIO object.
 
@@ -161,6 +160,13 @@ class MultiresIO(object):
         self.connectivity = connectivity
         self.level_id_field = level_id_field
         self.total_cells = total_cells
+
+        # Set the default precision policy if not provided
+        from xlb import DefaultConfig
+
+        if store_precision is None:
+            self.store_precision = DefaultConfig.default_precision_policy.store_precision
+            self.store_dtype = DefaultConfig.default_precision_policy.store_precision.wp_dtype
 
         # Prepare and allocate the inputs for the NEON container
         self.field_warp_dict, self.origin_list = self._prepare_container_inputs()
@@ -364,18 +370,13 @@ class MultiresIO(object):
         offset = np.array(offset, dtype=np.float32)
         return coordinates * scale + offset
 
-    def _prepare_container_inputs(self, store_precision=None):
+    def _prepare_container_inputs(self):
         # load necessary modules
         from xlb.compute_backend import ComputeBackend
         from xlb.grid import grid_factory
-        from xlb import DefaultConfig
 
         # Get the number of levels from the levels_data
         num_levels = len(self.levels_data)
-
-        # Set the default precision policy if not provided
-        if store_precision is None:
-            store_precision = DefaultConfig.default_precision_policy.store_precision
 
         # Prepare lists to hold warp fields and origins allocated for each level
         field_warp_dict = {}
@@ -388,7 +389,7 @@ class MultiresIO(object):
 
                 # Use the warp backend to create dense fields to be written in multi-res NEON fields
                 grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
-                field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=store_precision))
+                field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=self.store_precision))
                 origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
 
         return field_warp_dict, origin_list
@@ -423,7 +424,7 @@ class MultiresIO(object):
                     # write the values to the warp field
                     cardinality = field_warp.shape[0]
                     for card in range(cardinality):
-                        field_warp[card, lx, ly, lz] = wp.neon_read(field_neon_hdl, index, card)
+                        field_warp[card, lx, ly, lz] = self.store_dtype(wp.neon_read(field_neon_hdl, index, card))
 
                 loader.declare_kernel(kernel)
 
@@ -435,6 +436,10 @@ class MultiresIO(object):
         """
         Extracts and prepares the fields data from the NEON fields for export.
         """
+        # Check if the field_neon_dict is empty
+        if not field_neon_dict:
+            return {}
+
         # Ensure that this operator is called on multires grids
         grid_mres = next(iter(field_neon_dict.values())).get_grid()
         assert grid_mres.get_name() == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
@@ -556,9 +561,11 @@ class MultiresIO(object):
             cell_data = list(fields_data.values())
             squared = [comp**2 for comp in cell_data]
             cell_data = np.sqrt(sum(squared))
-            field_name = list(fields_data.keys())[0].split('_')[0] + '_magnitude'
+            field_name = list(fields_data.keys())[0].split("_")[0] + "_magnitude"
         else:
-            assert component < max(self.field_name_cardinality_dict.values()), f"Error: Component {component} is out of range for the provided fields."
+            assert component < max(self.field_name_cardinality_dict.values()), (
+                f"Error: Component {component} is out of range for the provided fields."
+            )
             print(f"\tCreating slice image for component {component} of the input field!")
             field_name = list(fields_data.keys())[component]
             cell_data = fields_data[field_name]
@@ -601,7 +608,7 @@ class MultiresIO(object):
         cell_values = field_data
 
         # get the normalized plane normal
-        plane_normal = np.asarray(plane_normal)
+        plane_normal = np.asarray(np.abs(plane_normal))
         n = plane_normal / np.linalg.norm(plane_normal)
 
         # Compute centroids (K = 8 for hexahedral cells)
@@ -629,7 +636,7 @@ class MultiresIO(object):
             u1 = np.array([0, 1, 0])
         else:
             u1 = np.array([1, 0, 0])
-        u2 = np.cross(n, u1)
+        u2 = np.abs(np.cross(n, u1))
 
         local_x = np.dot(proj - plane_point, u1)
         local_y = np.dot(proj - plane_point, u2)
