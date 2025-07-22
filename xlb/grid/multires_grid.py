@@ -74,13 +74,13 @@ class NeonMultiresGrid(Grid):
         cardinality: int,
         dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None,
         fill_value=None,
-        neon_data_use: neon.DataUse = neon.DataUse.host_device(),
+        neon_memory_type: neon.MemoryType = neon.MemoryType.host_device(),
     ):
         dtype = dtype.wp_dtype if dtype else DefaultConfig.default_precision_policy.store_precision.wp_dtype
         field = self.grid.new_field(
             cardinality=cardinality,
             dtype=dtype,
-            data_use=neon_data_use,
+            memory_type=neon_memory_type,
         )
         for l in range(self.count_levels):
             if fill_value is None:
