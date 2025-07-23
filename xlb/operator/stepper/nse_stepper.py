@@ -512,6 +512,22 @@ class IncompressibleNavierStokesStepper(Stepper):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_launch(self, f_0, f_1, bc_mask, missing_mask, omega, timestep):
-        c = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, timestep)
-        c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+        self.sk[self.sk_iter].run()
+        self.sk_iter = (self.sk_iter + 1) % 2
         return f_0, f_1
+
+    def prepare_skeleton(self, f_0, f_1, bc_mask, missing_mask, omega):
+        grid = f_0.get_grid()
+        bk = grid.get_backend()
+        self.neon_skeleton = {'odd': {}, 'even': {}}
+        self.neon_skeleton['odd']['container'] = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, 0)
+        self.neon_skeleton['even']['container'] = self.neon_container(f_1, f_0, bc_mask, missing_mask, omega, 1)
+
+        for key in self.neon_skeleton:
+            self.neon_skeleton[key]['app'] = [self.neon_skeleton[key]['container']]
+            self.neon_skeleton[key]['skeleton'] = neon.Skeleton(backend=bk)
+            self.neon_skeleton[key]['skeleton'].sequence("mres_nse_stepper", self.neon_skeleton[key]['app'])
+
+        self.sk = [self.neon_skeleton['odd']['skeleton'],
+                   self.neon_skeleton['even']['skeleton']]
+        self.sk_iter = 0

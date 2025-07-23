@@ -9,6 +9,8 @@ from xlb.grid import grid_factory
 from xlb.operator.stepper import IncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import FullwayBounceBackBC, EquilibriumBC
 from xlb.distribute import distribute
+from xlb.operator.macroscopic import Macroscopic
+
 
 # -------------------------- Simulation Setup --------------------------
 
@@ -17,7 +19,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="MLUPS for 3D Lattice Boltzmann Method Simulation (BGK)")
     parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid")
     parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation")
-    parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax or warp)")
+    parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
     parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
     return parser.parse_args()
 
@@ -80,6 +82,14 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
     # Initialize fields
     omega = 1.0
     f_0, f_1, bc_mask, missing_mask = stepper.prepare_fields()
+    if compute_backend == ComputeBackend.NEON:
+        stepper.prepare_skeleton(f_0, f_1, bc_mask, missing_mask, omega)
+
+    # Warp-up iterations
+    for i in range(10):
+        f_0, f_1 = stepper(f_0, f_1, bc_mask, missing_mask, omega, i)
+        f_0, f_1 = f_1, f_0
+    wp.synchronize()
 
     start_time = time.time()
     for i in range(num_steps):
@@ -88,11 +98,29 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
     wp.synchronize()
     elapsed_time = time.time() - start_time
 
+    # Define Macroscopic Calculation
+    macro = Macroscopic(
+        compute_backend=compute_backend,
+        precision_policy=precision_policy,
+        velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend),
+    )
+    # if compute_backend == ComputeBackend.NEON:
+    #
+    #     rho = grid.create_field(cardinality=1, dtype=precision_policy.store_precision)
+    #     u = grid.create_field(cardinality=3, dtype=precision_policy.store_precision)
+    #
+    #     macro(f_0, rho, u)
+    #
+    #     wp.synchronize()
+    #     u.update_host(0)
+    #     wp.synchronize()
+    #     u.export_vti(f"{"mlups"}{num_steps}.vti", "u")
+
     return elapsed_time
 
 
 def calculate_mlups(cube_edge, num_steps, elapsed_time):
-    total_lattice_updates = cube_edge**3 * num_steps
+    total_lattice_updates = cube_edge ** 3 * num_steps
     mlups = (total_lattice_updates / elapsed_time) / 1e6
     return mlups
 

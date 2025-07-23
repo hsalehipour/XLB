@@ -24,9 +24,9 @@ class NeonGrid(Grid):
 
     def _initialize_backend(self):
         # FIXME@max: for now we hardcode the number of devices to 0
-        num_devs = 1
+        num_devs = 2
         dev_idx_list = list(range(num_devs))
-
+        dev_idx_list = [0,1]
         if len(self.shape) == 2:
             import py_neon
 
@@ -45,7 +45,7 @@ class NeonGrid(Grid):
                 self.neon_stencil.append([xval, yval, zval])
 
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
-
+        self.bk.info_print()
         self.grid = neon.dense.dGrid(backend=self.bk, dim=self.dim, sparsity=None, stencil=self.neon_stencil)
         pass
 
