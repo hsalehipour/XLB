@@ -140,6 +140,8 @@ class MultiresIO(object):
             Scale factor for the coordinates.
         offset : tuple, optional
             Offset to be applied to the coordinates.
+        store_precision : str, optional
+            The precision policy for storing data.
         """
         # Process the multires geometry and extract coordinates and connectivity in the coordinate system of the finest level
         coordinates, connectivity, level_id_field, total_cells = self.process_geometry(levels_data, scale)
@@ -469,6 +471,9 @@ class MultiresIO(object):
                 # Create the container and run it to fill the warp fields
                 c = self.container(field_neon_dict[field_name], self.field_warp_dict[field_name][level], self.origin_list[level], level)
                 c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+
+                # Ensure all operations are complete before converting to JAX and Numpy arrays
+                wp.synchronize()
 
                 # Convert the warp fields to numpy arrays and use level's mask to filter the data
                 mask = self.levels_data[level][0]
