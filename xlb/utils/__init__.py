@@ -8,3 +8,4 @@ from .utils import (
     axangle2mat,
 )
 from .mesher import make_cuboid_mesh, MultiresIO
+from .makemesh import generate_mesh
