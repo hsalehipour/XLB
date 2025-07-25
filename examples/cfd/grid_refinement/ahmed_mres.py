@@ -1,0 +1,461 @@
+import neon
+import warp as wp
+import numpy as np
+import time
+import os
+import re
+import matplotlib.pyplot as plt
+import trimesh
+
+import xlb
+from xlb.compute_backend import ComputeBackend
+from xlb.precision_policy import PrecisionPolicy
+from xlb.grid import multires_grid_factory
+from xlb.operator.boundary_condition import (
+    FullwayBounceBackBC,
+    HalfwayBounceBackBC,
+    RegularizedBC,
+    ExtrapolationOutflowBC,
+    DoNothingBC,
+    ZouHeBC,
+    HybridBC,
+)
+from xlb.operator.boundary_masker import MeshVoxelizationMethod
+from xlb.utils.mesher import generate_mesh, make_cuboid_mesh, MultiresIO
+from xlb.operator.force import MultiresMomentumTransfer
+from xlb.helper.initializers import MultiresOutletInitializer
+
+def generate_makemesh_mesh(stl_filename, voxel_size):
+    """
+    Generate a makemesh mesh based on the provided voxel size in meters, domain multipliers, and padding values.
+    """
+    # Number of requested refinement levels
+    num_levels = 4
+
+    # Domain multipliers for the full domain
+    domainMultiplier = {
+        "-x": 0.75,
+        "x": 1,
+        "-y": 1.5,
+        "y": 1.5,
+        "-z": 0.1,
+        "z": 1.5,
+    }
+
+    # Padding values to control voxel growth
+    padding_values = {
+        0: (6, 30, 10, 10, 10, 10),
+        1: (8, 16, 8, 8, 8, 8),
+        2: (8, 16, 8, 8, 8, 8),
+        3: (8, 16, 8, 8, 8, 8),
+        4: (8, 40, 10, 10, 10, 10),
+        5: (4, 40, 4, 4, 4, 4),
+        6: (4, 4, 4, 4, 4, 4),
+        7: (4, 4, 4, 4, 4, 4),
+        8: (4, 4, 4, 4, 4, 4),
+        9: (4, 4, 4, 4, 4, 4),
+        10: (4, 4, 4, 4, 4, 4),
+        11: (4, 4, 4, 4, 4, 4),
+        12: (4, 4, 4, 4, 4, 4),
+        13: (4, 4, 4, 4, 4, 4),
+        14: (4, 4, 4, 4, 4, 4),
+        15: (4, 4, 4, 4, 4, 4),
+    }
+
+    # Load the mesh
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    if mesh.is_empty:
+        raise ValueError("Loaded mesh is empty or invalid.")
+
+    # Compute original bounds
+    min_bound = mesh.vertices.min(axis=0)
+    max_bound = mesh.vertices.max(axis=0)
+    partSize = max_bound - min_bound
+
+    # Compute translation to put mesh into first octant of the domain
+    shift = np.array(
+        [
+            domainMultiplier["-x"] * partSize[0] - min_bound[0],
+            domainMultiplier["-y"] * partSize[1] - min_bound[1],
+            domainMultiplier["-z"] * partSize[2] - min_bound[2],
+        ],
+        dtype=float,
+    )
+
+    # Apply translation and save out temp STL
+    mesh.apply_translation(shift)
+    _ = mesh.vertex_normals
+    mesh_vertices = np.asarray(mesh.vertices) / voxel_size
+    mesh.export("temp.stl")
+
+    # Generate mesh using generate_mesh
+    level_data, _ = generate_mesh(
+        num_levels,
+        "temp.stl",
+        voxel_size,
+        padding_values,
+        domainMultiplier,
+    )
+    actual_num_levels = len(level_data)
+    grid_shape_finest = tuple([int(i * 2 ** (actual_num_levels - 1)) for i in level_data[-1][0].shape])
+    print(f"Requested levels: {num_levels}, Actual levels: {actual_num_levels}")
+    print(f"Full shape based on finest voxel size is {grid_shape_finest}")
+    os.remove("temp.stl")
+    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels
+
+def generate_cuboid_mesh(stl_filename, voxel_size):
+    """
+    Alternative cuboid mesh generation based on Apolo's method with domain multipliers per level.
+    """
+    # Domain multipliers for each refinement level
+    domainMultiplier = [
+        [0.75, 1, 1.5, 1.5, 0.1, 1.5],
+        [0.5, 0.5, 0.5, 0.5, 0.1, 0.5],
+        [0.15, 0.15, 0.15, 0.15, 0.1, 0.15],
+    ]
+
+    # Load the mesh
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    if mesh.is_empty:
+        raise ValueError("Loaded mesh is empty or invalid.")
+
+    # Compute original bounds
+    min_bound = mesh.vertices.min(axis=0)
+    max_bound = mesh.vertices.max(axis=0)
+    partSize = max_bound - min_bound
+
+    # Compute translation to put mesh into first octant of the domain
+    shift = np.array(
+        [
+            domainMultiplier[0][0] * partSize[0] - min_bound[0],
+            domainMultiplier[0][2] * partSize[1] - min_bound[1],
+            domainMultiplier[0][4] * partSize[2] - min_bound[2],
+        ],
+        dtype=float,
+    )
+
+    # Apply translation and save out temp STL
+    mesh.apply_translation(shift)
+    _ = mesh.vertex_normals
+    mesh_vertices = np.asarray(mesh.vertices) / voxel_size
+    mesh.export("temp.stl")
+
+    # Generate mesh using make_cuboid_mesh
+    level_data = make_cuboid_mesh(
+        voxel_size,
+        domainMultiplier,
+        "temp.stl",
+    )
+    actual_num_levels = len(level_data)
+    grid_shape_finest = tuple([int(i * 2 ** (actual_num_levels - 1)) for i in level_data[-1][0].shape])
+    print(f"Requested levels: {len(domainMultiplier)}, Actual levels: {actual_num_levels}")
+    print(f"Full shape based on finest voxel size is {grid_shape_finest}")
+    os.remove("temp.stl")
+    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels
+
+def prepare_sparsity_pattern(level_data):
+    """
+    Prepare the sparsity pattern for the multiresolution grid based on the level data.
+    """
+    sparsity_pattern = []
+    level_origins = []
+    for lvl in range(len(level_data)):
+        level_mask = level_data[lvl][0]
+        level_mask = np.ascontiguousarray(level_mask, dtype=np.int32)
+        sparsity_pattern.append(level_mask)
+        level_origins.append(level_data[lvl][2])
+    return sparsity_pattern, level_origins
+
+# -------------------------- Simulation Setup --------------------------
+
+# Define physical and simulation parameters
+voxel_size = 0.0025  # Finest voxel size in meters
+u_physical = 4  # Physical inlet velocity in m/s
+ulb = 0.05  # Lattice velocity
+kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
+
+# Other setup parameters
+compute_backend = ComputeBackend.NEON
+precision_policy = PrecisionPolicy.FP32FP32
+velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
+flow_passes = 5
+print_interval_percentage = 1.0  # Print every 1% of iterations
+file_output_crossover_percentage = 50.0  # Crossover at 80% of iterations
+num_file_outputs_pre_crossover = 50  # 8 outputs before crossover (e.g., every 10% up to 80%)
+num_file_outputs_post_crossover = 50  # 20 outputs in the last 20%
+
+# Initialize XLB
+xlb.init(
+    velocity_set=velocity_set,
+    default_backend=compute_backend,
+    default_precision_policy=precision_policy,
+)
+
+# Generate the mesh and Ahmed body vertices
+stl_filename = "examples/cfd/stl-files/Ahmed_25.stl"
+level_data, ahmed_vertices, grid_shape_zip, partSize, actual_num_levels = generate_makemesh_mesh(stl_filename, voxel_size)
+
+# Characteristic length (Ahmed body length, approximately 1.044 meters)
+L = partSize[0]  # Use x-dimension (length) of the Ahmed body
+
+# Calculate Reynolds number
+Re = u_physical * L / kinematic_viscosity
+
+# Calculate lattice viscosity using coarsest voxel size
+delta_x_coarse = voxel_size * 2 ** (actual_num_levels - 1)
+delta_t = delta_x_coarse * ulb / u_physical
+nu_lattice = kinematic_viscosity * delta_t / (delta_x_coarse ** 2)
+omega = 1.0 / (3.0 * nu_lattice + 0.5)
+
+# Create output directory based on script name
+script_name = os.path.splitext(os.path.basename(__file__))[0]
+output_dir = os.path.join("examples/cfd/grid_refinement", script_name)
+
+# Clear and recreate the output directory
+import shutil
+if os.path.exists(output_dir):
+    shutil.rmtree(output_dir)
+os.makedirs(output_dir)
+
+# Define exporter object for HDF5 output
+field_name_cardinality_dict = {"velocity": 3, "density": 1}
+h5exporter = MultiresIO(field_name_cardinality_dict, level_data)
+
+def fix_xmf_paths(xmf_filename, hdf5_basename):
+    """
+    Modify the XMF file to use relative HDF5 paths.
+    """
+    with open(xmf_filename, 'r') as f:
+        content = f.read()
+    pattern = rf'examples/cfd/grid_refinement/[^/]+/{re.escape(hdf5_basename)}'
+    fixed_content = re.sub(pattern, hdf5_basename, content)
+    with open(xmf_filename, 'w') as f:
+        f.write(fixed_content)
+
+# Prepare the sparsity pattern and origins
+sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
+
+# Compute active voxels per level
+active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
+print("Active voxels per level:", active_voxels)
+
+# Compute total lattice updates per global step
+total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
+print("Total lattice updates per global step:", total_lattice_updates_per_step)
+
+# Create the multires grid
+grid = multires_grid_factory(
+    grid_shape_zip,
+    velocity_set=velocity_set,
+    sparsity_pattern_list=sparsity_pattern,
+    sparsity_pattern_origins=[neon.Index_3d(*box_origin) for box_origin in level_origins],
+)
+
+# Calculate iterations based on flow passes
+coarsest_level = grid.count_levels - 1
+grid_shape_x_coarsest = grid.level_to_shape(coarsest_level)[0]
+num_steps = int(flow_passes * (grid_shape_x_coarsest / ulb))
+
+# Calculate print and file output intervals
+print_interval = max(1, int(num_steps * (print_interval_percentage / 100.0)))
+crossover_step = int(num_steps * (file_output_crossover_percentage / 100.0))
+file_output_interval_pre_crossover = max(1, int(crossover_step / num_file_outputs_pre_crossover)) if num_file_outputs_pre_crossover > 0 else num_steps + 1
+file_output_interval_post_crossover = max(1, int((num_steps - crossover_step) / num_file_outputs_post_crossover)) if num_file_outputs_post_crossover > 0 else num_steps + 1
+
+# Define Boundary Indices
+box = grid.bounding_box_indices(shape=grid.level_to_shape(coarsest_level))
+box_no_edge = grid.bounding_box_indices(shape=grid.level_to_shape(coarsest_level), remove_edges=True)
+inlet = box_no_edge["left"]
+outlet = box_no_edge["right"]
+ground = [box["bottom"][i] for i in range(velocity_set.d)]
+walls = [
+        box["back"][i]
+        + box["top"][i]
+        + box["front"][i]            
+        for i in range(velocity_set.d)
+     ]
+     
+#Remove overlap between walls and ground
+
+walls_x ,walls_y ,walls_z  = np.array(walls[0]), np.array(walls[1]), np.array(walls[2]) 
+walls_z_min = np.min(walls_z)
+walls_mask_zmin = walls_z == walls_z_min
+walls_filter = np.where(~walls_mask_zmin)[0]
+
+walls = [
+    tuple(walls_x[walls_filter]),
+    tuple(walls_y[walls_filter]),
+    tuple(walls_z[walls_filter])
+    ]
+walls = np.unique(np.array(walls), axis=-1).tolist()
+
+# Convert bc indices to a list of lists
+inlet = [[] for _ in range(actual_num_levels - 1)] + [inlet]
+outlet = [[] for _ in range(actual_num_levels - 1)] + [outlet]
+walls = [[] for _ in range(actual_num_levels - 1)] + [walls]
+
+# Initialize Boundary Conditions
+bc_left = RegularizedBC("velocity", prescribed_value=(ulb, 0.0, 0.0), indices=inlet)
+bc_walls = FullwayBounceBackBC(indices=walls)
+bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="bottom"))
+bc_outlet = DoNothingBC(indices=outlet)
+bc_ahmed = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=ahmed_vertices, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=False)
+boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_ground, bc_ahmed]
+
+# Make initializer operator
+initializer = MultiresOutletInitializer(
+    outlet_bc_id=bc_outlet.id,
+    wind_vector=(ulb, 0.0, 0.0),
+    velocity_set=velocity_set,
+    precision_policy=precision_policy,
+    compute_backend=compute_backend,
+)
+
+# Define a multi-resolution simulation manager
+sim = xlb.helper.MultiresSimulationManager(
+    omega=omega,
+    grid=grid,
+    boundary_conditions=boundary_conditions,
+    collision_type="KBC",
+    initializer=initializer,
+)
+
+# Setup Momentum Transfer for Force Calculation
+bc_ahmed = boundary_conditions[-1]
+momentum_transfer = MultiresMomentumTransfer(bc_ahmed, compute_backend=compute_backend)
+
+def print_lift_drag(sim):
+    boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
+    drag = boundary_force[0]  # x-direction
+    lift = boundary_force[2]
+    # Approximate frontal area of Ahmed body (width * height)
+    reference_area = partSize[1] * partSize[2]
+    reference_area_lattice = reference_area / voxel_size**2
+    cd = 2.0 * drag / (ulb**2 * reference_area_lattice)
+    cl = 2.0 * lift / (ulb**2 * reference_area_lattice)
+    # Check for NaN values
+    if np.isnan(cd) or np.isnan(cl):
+        raise ValueError(f"NaN detected in coefficients at step {step}: Cd={cd}, Cl={cl}")
+    drag_values.append([cd, cl])
+    print(f"CD={cd}, CL={cl}")
+
+def plot_drag_lift(drag_values, output_dir, print_interval, percentile_range=(15, 85), use_log_scale=False):
+    """
+    Plot CD and CL over time and save the plot to the output directory.
+    """
+    drag_values_array = np.array(drag_values)
+    steps = np.arange(0, len(drag_values) * print_interval, print_interval)
+    cd_values = drag_values_array[:, 0]
+    cl_values = drag_values_array[:, 1]
+    y_min = min(np.percentile(cd_values, percentile_range[0]), np.percentile(cl_values, percentile_range[0]))
+    y_max = max(np.percentile(cd_values, percentile_range[1]), np.percentile(cl_values, percentile_range[1]))
+    padding = (y_max - y_min) * 0.1
+    y_min, y_max = y_min - padding, y_max + padding
+    if use_log_scale:
+        y_min = max(y_min, 1e-6)
+    plt.figure(figsize=(10, 6))
+    plt.plot(steps, cd_values, label='Drag Coefficient (Cd)', color='blue')
+    plt.plot(steps, cl_values, label='Lift Coefficient (Cl)', color='red')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Coefficient')
+    plt.title('Drag and Lift Coefficients Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.ylim(y_min, y_max)
+    if use_log_scale:
+        plt.yscale('log')
+    plt.savefig(os.path.join(output_dir, 'drag_lift_plot.png'))
+    plt.close()
+
+# -------------------------- Simulation Loop --------------------------
+
+wp.synchronize()
+start_time = time.time()
+compute_time = 0.0
+steps_since_last_print = 0
+drag_values = []
+
+# Print simulation info
+print("\n" + "=" * 50 + "\n")
+print("Simulation Configuration:")
+print(f"Grid shape at finest level: {grid_shape_zip}")
+print(f"Grid shape at coarsest level: {grid.level_to_shape(coarsest_level)}")
+print(f"Number of flow passes: {flow_passes}")
+print(f"Calculated iterations: {num_steps:,}")
+print(f"Output directory: {output_dir}")
+print(f"Print interval: {print_interval} steps (every {print_interval_percentage}% of iterations)")
+print(f"File output interval pre-crossover (0-{file_output_crossover_percentage}%): {file_output_interval_pre_crossover} steps")
+print(f"File output interval post-crossover ({file_output_crossover_percentage}-100%): {file_output_interval_post_crossover} steps")
+print(f"Finest voxel size: {voxel_size} meters")
+print(f"Coarsest voxel size: {delta_x_coarse} meters")
+print(f"Actual number of refinement levels: {actual_num_levels}")
+print(f"Physical inlet velocity: {u_physical} m/s")
+print(f"Lattice velocity (ulb): {ulb}")
+print(f"Characteristic length: {L} meters")
+print(f"Kinematic viscosity: {kinematic_viscosity} m^2/s")
+print(f"Reynolds number: {Re:.2f}")
+print(f"Lattice viscosity: {nu_lattice}")
+print(f"Relaxation parameter (omega): {omega}")
+print("\n" + "=" * 50 + "\n")
+
+for step in range(num_steps):
+    step_start = time.time()
+    sim.step()
+    wp.synchronize()
+    compute_time += time.time() - step_start
+    steps_since_last_print += 1
+    if step % print_interval == 0 or step == num_steps - 1:
+        sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
+        print_lift_drag(sim)
+        wp.synchronize()
+        end_time = time.time()
+        elapsed = end_time - start_time
+        total_lattice_updates = total_lattice_updates_per_step * steps_since_last_print
+        MLUPS = total_lattice_updates / compute_time / 1e6 if compute_time > 0 else 0.0
+        current_flow_passes = step * ulb / grid_shape_x_coarsest
+        remaining_steps = num_steps - step - 1
+        time_remaining = 0.0 if MLUPS == 0 else (total_lattice_updates_per_step * remaining_steps) / (MLUPS * 1e6)
+        hours, rem = divmod(time_remaining, 3600)
+        minutes, seconds = divmod(rem, 60)
+        time_remaining_str = f"{int(hours):02d}h {int(minutes):02d}m {int(seconds):02d}s"
+        print(f"Completed step {step}/{num_steps} ({remaining_steps} remaining). "
+              f"Flow Passes: {current_flow_passes:.2f}. "
+              f"Time elapsed for last {steps_since_last_print} steps: {elapsed:.6f} seconds. "
+              f"Compute time: {compute_time:.6f} seconds. "
+              f"MLUPS: {MLUPS:.2f}. "
+              f"Estimated time remaining: {time_remaining_str}")
+        start_time = time.time()
+        compute_time = 0.0
+        steps_since_last_print = 0
+    file_output_interval = file_output_interval_pre_crossover if step < crossover_step else file_output_interval_post_crossover
+    if step % file_output_interval == 0 or step == num_steps - 1:
+        sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
+        filename = os.path.join(output_dir, f"{script_name}_{step:04d}")
+        try:
+            h5exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
+            xmf_filename = f"{filename}.xmf"
+            hdf5_basename = f"{script_name}_{step:04d}.h5"
+            fix_xmf_paths(xmf_filename, hdf5_basename)
+        except Exception as e:
+            print(f"Error during file output at step {step}: {e}")
+        wp.synchronize()
+
+# Save drag and lift data to CSV
+if len(drag_values) > 0:
+    with open(os.path.join(output_dir, "drag_lift.csv"), 'w') as fd:
+        fd.write("Step,Cd,Cl\n")
+        for i, (cd, cl) in enumerate(drag_values):
+            fd.write(f"{i * print_interval},{cd},{cl}\n")
+    plot_drag_lift(drag_values, output_dir, print_interval)
+
+# Calculate and print average Cd and Cl for the last 50%
+drag_values_array = np.array(drag_values)
+if len(drag_values) > 0:
+    start_index = len(drag_values) // 2
+    last_half = drag_values_array[start_index:, :]
+    avg_cd = np.mean(last_half[:, 0])
+    avg_cl = np.mean(last_half[:, 1])
+    print(f"Average Drag Coefficient (Cd) for last 50%: {avg_cd:.6f}")
+    print(f"Average Lift Coefficient (Cl) for last 50%: {avg_cl:.6f}")
+else:
+    print("No drag or lift data collected.")
