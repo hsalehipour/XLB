@@ -7,6 +7,7 @@ import re
 import matplotlib.pyplot as plt  # Added for plotting
 import trimesh
 
+
 import xlb
 from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import PrecisionPolicy
@@ -21,16 +22,18 @@ from xlb.operator.boundary_condition import (
     HybridBC,
 )
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
-from xlb.utils.mesher import generate_mesh, MultiresIO  # Updated to import MultiresIO
+from xlb.utils.mesher import MultiresIO
+from xlb.utils.makemesh import generate_mesh
 from xlb.operator.force import MultiresMomentumTransfer
 from xlb.helper.initializers import MultiresOutletInitializer
 
+
 def generate_makemesh_mesh(stl_filename, num_finest_voxels_across_part):
     """
-    Generate a makemesh mesh based on the provided voxel size, domain multipliers, and padding values.
+    Generate a cuboid mesh based on the provided voxel size, domain multipliers, and padding values.
     """
     # Number of refinement levels
-    num_levels = 5
+    num_levels = 6
 
     # Domain multipliers for the full domain
     domainMultiplier = {
@@ -44,8 +47,8 @@ def generate_makemesh_mesh(stl_filename, num_finest_voxels_across_part):
 
     # Padding values to control voxel growth
     padding_values = {
-        0: (10, 96, 16, 16, 16, 16),
-        1: (8, 48, 8, 8, 8, 8),
+        0: (8, 8, 8, 8, 8, 8),
+        1: (8, 8, 8, 8, 8, 8),
         2: (8, 36, 8, 8, 8, 8),
         3: (8, 24, 8, 8, 8, 8),
         4: (8, 12, 8, 8, 8, 8),
@@ -136,16 +139,17 @@ flow_passes = 10
 print_interval_percentage = 1.0  # Print every 1% of iterations
 file_output_crossover_percentage = 80.0  # Crossover at 80% of iterations
 num_file_outputs_pre_crossover = 8  # 8 outputs before crossover (e.g., every 10% up to 80%)
-num_file_outputs_post_crossover = 20  # 20 outputs in the last 20%
+num_file_outputs_post_crossover = 40  # 20 outputs in the last 20%
 
 # Initialize XLB
+# wp.config.max_unroll = 27
 xlb.init(
     velocity_set=velocity_set,
     default_backend=compute_backend,
     default_precision_policy=precision_policy,
 )
 
-# Generate the makemesh mesh and sphere vertices
+# Generate the cuboid mesh and sphere vertices
 stl_filename = "examples/cfd/stl-files/sphere.stl"
 level_data, sphere, grid_shape_zip = generate_makemesh_mesh(stl_filename, num_finest_voxels_across_part)
 
@@ -159,9 +163,13 @@ if os.path.exists(output_dir):
     shutil.rmtree(output_dir)  # Remove the directory and all its contents
 os.makedirs(output_dir)  # Recreate the empty directory
 
-# Define exporter object for HDF5 output
+# Define an exporter for the multiresolution data
 field_name_cardinality_dict = {"velocity": 3, "density": 1}
 h5exporter = MultiresIO(field_name_cardinality_dict, level_data)
+
+# Define a separate exporter for the initial bc_mask output
+bc_mask_exporter = MultiresIO({"bc_mask": 1}, level_data)
+
 
 def fix_xmf_paths(xmf_filename, hdf5_basename):
     """
@@ -223,8 +231,6 @@ inlet = box_no_edge["left"]
 outlet = box_no_edge["right"]
 walls = [box["bottom"][i] + box["top"][i] + box["front"][i] + box["back"][i] for i in range(velocity_set.d)]
 walls = np.unique(np.array(walls), axis=-1).tolist()
-# Define ground indices (for GroundBC, commented out)
-ground = box["bottom"]
 
 # Define Boundary Conditions
 def bc_profile():
@@ -248,7 +254,6 @@ def bc_profile():
 inlet = [[] for _ in range(num_levels - 1)] + [inlet]
 outlet = [[] for _ in range(num_levels - 1)] + [outlet]
 walls = [[] for _ in range(num_levels - 1)] + [walls]
-ground = [[] for _ in range(num_levels - 1)] + [ground]  # Ground indices for coarsest level
 
 # Initialize Boundary Conditions
 bc_left = RegularizedBC("velocity", prescribed_value=(ulb, 0.0, 0.0), indices=inlet)
@@ -257,12 +262,12 @@ bc_walls = FullwayBounceBackBC(indices=walls)
 bc_outlet = DoNothingBC(indices=outlet)
 bc_sphere = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=False)
 # bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
-# bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="front"))
 
 boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
-# boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere, bc_ground]  # Uncomment to include ground BC
 
 # Make initializer operator
+from xlb.helper.initializers import MultiresOutletInitializer
+
 initializer = MultiresOutletInitializer(
     outlet_bc_id=bc_outlet.id,
     wind_vector=(ulb, 0.0, 0.0),
@@ -284,6 +289,18 @@ sim = xlb.helper.MultiresSimulationManager(
     initializer=initializer,
 )
 
+# Save bc_mask at initialization (step 0)
+sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
+filename = os.path.join(output_dir, f"{script_name}_initial_bc_mask")
+try:
+    bc_mask_exporter.to_hdf5(filename, {"bc_mask": sim.bc_mask}, compression="gzip", compression_opts=2)
+    xmf_filename = f"{filename}.xmf"
+    hdf5_basename = f"{script_name}_initial_bc_mask.h5"
+    fix_xmf_paths(xmf_filename, hdf5_basename)
+except Exception as e:
+    print(f"Error during initial bc_mask output: {e}")
+wp.synchronize()
+
 # Setup Momentum Transfer for Force Calculation
 bc_sphere = boundary_conditions[-1]
 momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_backend)
@@ -296,6 +313,9 @@ def print_lift_drag(sim):
     u_avg = ulb
     cd = 2.0 * drag / (u_avg**2 * sphere_cross_section)
     cl = 2.0 * lift / (u_avg**2 * sphere_cross_section)
+    # Check for NaN values
+    if np.isnan(cd) or np.isnan(cl):
+        raise ValueError(f"NaN detected in coefficients at step {step}: Cd={cd}, Cl={cl}")
     drag_values.append([cd, cl])
     print(f"CD={cd}, CL={cl}")
 
@@ -306,7 +326,7 @@ def plot_drag_lift(drag_values, output_dir, print_interval, percentile_range=(15
     Parameters:
     - drag_values: List or array of [Cd, Cl] values.
     - output_dir: Directory to save the plot.
-    - print_interval: Interval between simulation steps.
+    - post_process_interval: Interval between simulation steps.
     - percentile_range: Tuple of (lower, upper) percentiles for y-axis limits (default: (5, 95)).
     - use_log_scale: If True, use logarithmic y-axis (default: False).
     """
