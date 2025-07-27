@@ -25,7 +25,7 @@ from xlb.utils.mesher import make_cuboid_mesh, MultiresIO
 from xlb.utils.makemesh import generate_mesh
 from xlb.operator.force import MultiresMomentumTransfer
 from xlb.helper.initializers import MultiresOutletInitializer
-from xlb.optimization_type import OptimizationType
+from xlb.optimization_type import OptimizationType as OptimizationType
 
 wp.clear_kernel_cache()
 
@@ -393,7 +393,7 @@ sim = xlb.helper.MultiresSimulationManager(
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
     initializer=initializer,
-    OptimizationType = OptimizationType.FUSION_AT_FINEST,
+    optimization_type=OptimizationType.FUSION_AT_FINEST,
 )
 
 # Save bc_mask at initialization (step 0)
