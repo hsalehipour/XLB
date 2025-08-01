@@ -19,6 +19,7 @@ class MultiresMomentumTransfer(MomentumTransfer):
     def __init__(
         self,
         no_slip_bc_instance,
+        collision_type="BGK",
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
@@ -59,9 +60,10 @@ class MultiresMomentumTransfer(MomentumTransfer):
 
                 # Important: Note the swap to the order of f_0 and f_1 in the functional call.
                 # This is because the multiresolution simulation first performs collision and then streaming and hence
-                # f_0 refers to the post-streaming distribution function and f_1 refers to the pre-collision distribution function.
+                # f_0 refers to the post-streaming distribution function and f_1 refers to the post-collision distribution function.
                 # This is in contrast to our dense implementations (all backends) where streaming occurs first and is followed by
-                # collision which makes. As a workaround, we can simply swap f_0 and f_1 in the functional call.
+                # collision which makes f_0 post-collision and f_1 post-streaming.
+                # So as a workaround, we can simply swap f_0 and f_1 in the functional call.
 
                 @wp.func
                 def container_kernel(index: Any):
@@ -94,8 +96,7 @@ class MultiresMomentumTransfer(MomentumTransfer):
         self.force *= self.compute_dtype(0.0)
 
         # Define the neon functionals needed for this operation
-        self.stream_functional = self.stream.neon_functional
-        self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
+        self.stepper_functional = self.stepper.neon_functional
 
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):

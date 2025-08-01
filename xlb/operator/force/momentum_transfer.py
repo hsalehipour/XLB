@@ -12,6 +12,77 @@ from xlb.operator.stream import Stream
 import neon
 
 
+class MomentumTransferLBMStepper(Operator):
+    """
+    This operator is used to apply the streaming and boundary conditions to the post-collision distribution function.
+    Note that for dense and single resolution simulations in XLB, f_0 represents the post-collision distribution
+    function. Therefore, we do not need to apply the collision operator here. See the MultiresStepper function in
+    the multires_momentum_transfer for the multi-resolution case.
+    """
+
+    def __init__(
+        self,
+        no_slip_bc_instance,
+        collision_type=None,
+        velocity_set: VelocitySet = None,
+        precision_policy: PrecisionPolicy = None,
+        compute_backend: ComputeBackend = None,
+    ):
+        self.no_slip_bc_instance = no_slip_bc_instance
+        self.stream = Stream(velocity_set, precision_policy, compute_backend)
+
+        if compute_backend == ComputeBackend.WARP:
+            self.stream_functional = self.stream.warp_functional
+            self.bc_functional = self.no_slip_bc_instance.warp_functional
+        elif compute_backend == ComputeBackend.NEON:
+            self.stream_functional = self.stream.neon_functional
+            self.bc_functional = self.no_slip_bc_instance.neon_functional
+
+        # Call the parent constructor
+        super().__init__(
+            velocity_set,
+            precision_policy,
+            compute_backend,
+        )
+
+    @Operator.register_backend(ComputeBackend.JAX)
+    @partial(jit, static_argnums=(0))
+    def jax_implementation(self, f_0, f_1, bc_mask, missing_mask):
+        # Give the input post-collision populations, streaming once and apply the BC the find post-stream values.
+        f_post_collision = f_0
+        f_post_stream = self.stream(f_post_collision)
+        f_post_stream = self.no_slip_bc_instance(f_post_collision, f_post_stream, bc_mask, missing_mask)
+        return f_post_collision, f_post_stream
+
+    def _construct_warp(self):
+        _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
+
+        @wp.func
+        def functional(
+            index: Any,
+            f_0: Any,
+            f_1: Any,
+            _missing_mask: Any,
+        ):
+            # Get the distribution function
+            f_post_collision = _f_vec()
+            for l in range(self.velocity_set.q):
+                f_post_collision[l] = self.compute_dtype(self.read_field(f_0, index, l))
+
+            # Apply streaming (pull method)
+            timestep = 0
+            f_post_stream = self.stream_functional(f_0, index)
+            f_post_stream = self.bc_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
+            return f_post_collision, f_post_stream
+
+        return functional, None
+
+    def _construct_neon(self):
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+        return functional, None
+
+
 class MomentumTransfer(Operator):
     """
     An opertor for the momentum exchange method to compute the boundary force vector exerted on the solid geometry
@@ -39,8 +110,16 @@ class MomentumTransfer(Operator):
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
+        # Assign the no-slip boundary condition instance
         self.no_slip_bc_instance = no_slip_bc_instance
-        self.stream = Stream(velocity_set, precision_policy, compute_backend)
+
+        # Define the **minimal** stepper operator needed for the momentum transfer
+        self.stepper = MomentumTransferLBMStepper(
+            no_slip_bc_instance,
+            velocity_set=velocity_set,
+            precision_policy=precision_policy,
+            compute_backend=compute_backend,
+        )
 
         # Call the parent constructor
         super().__init__(
@@ -49,9 +128,10 @@ class MomentumTransfer(Operator):
             compute_backend,
         )
 
-        # Allocate the force vector (the total integral value will be computed)
-        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        self.force = wp.zeros((1), dtype=_u_vec)
+        if self.compute_backend != ComputeBackend.JAX:
+            # Allocate the force vector (the total integral value will be computed)
+            _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+            self.force = wp.zeros((1), dtype=_u_vec)
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
@@ -76,9 +156,7 @@ class MomentumTransfer(Operator):
             The force exerted on the solid geometry at each boundary node.
         """
         # Give the input post-collision populations, streaming once and apply the BC the find post-stream values.
-        f_post_collision = f_0
-        f_post_stream = self.stream(f_post_collision)
-        f_post_stream = self.no_slip_bc_instance(f_post_collision, f_post_stream, bc_mask, missing_mask)
+        f_post_collision, f_post_stream = self.stepper(f_0, f_1, bc_mask, missing_mask)
 
         # Compute momentum transfer
         boundary = bc_mask == self.no_slip_bc_instance.id
@@ -98,7 +176,6 @@ class MomentumTransfer(Operator):
         # Set local constants
         _c = self.velocity_set.c
         _opp_indices = self.velocity_set.opp_indices
-        _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
         _missing_mask_vec = wp.vec(self.velocity_set.q, dtype=wp.uint8)
         _no_slip_id = self.no_slip_bc_instance.id
@@ -130,15 +207,8 @@ class MomentumTransfer(Operator):
             # If the boundary is an edge then add the momentum transfer
             m = _u_vec()
             if is_edge:
-                # Get the distribution function
-                f_post_collision = _f_vec()
-                for l in range(self.velocity_set.q):
-                    f_post_collision[l] = self.compute_dtype(self.read_field(f_0, index, l))
-
-                # Apply streaming (pull method)
-                timestep = 0
-                f_post_stream = self.stream_functional(f_0, index)
-                f_post_stream = self.no_slip_bc_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
+                # Apply one **minimal** LBM step
+                f_post_collision, f_post_stream = self.stepper_functional(index, f_0, f_1, _missing_mask)
 
                 # Compute the momentum transfer
                 for d in range(self.velocity_set.d):
@@ -184,8 +254,7 @@ class MomentumTransfer(Operator):
         self.force *= 0.0
 
         # Define the warp functionals needed for this operation
-        self.stream_functional = self.stream.warp_functional
-        self.no_slip_bc_functional = self.no_slip_bc_instance.warp_functional
+        self.stepper_functional = self.stepper.warp_functional
 
         # Launch the warp kernel
         wp.launch(
@@ -245,8 +314,7 @@ class MomentumTransfer(Operator):
         self.force *= 0.0
 
         # Define the neon functionals needed for this operation
-        self.stream_functional = self.stream.neon_functional
-        self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
+        self.stepper_functional = self.stepper.neon_functional
 
         # Launch the neon container
         c = self.neon_container(f_0, f_1, bc_mask, missing_mask, self.force)
