@@ -12,18 +12,18 @@ from xlb.operator.stream import Stream
 import neon
 
 
-class MomentumTransferLBMStepper(Operator):
+class FetchPopulations(Operator):
     """
-    This operator is used to apply the streaming and boundary conditions to the post-collision distribution function.
-    Note that for dense and single resolution simulations in XLB, f_0 represents the post-collision distribution
-    function. Therefore, we do not need to apply the collision operator here. See the MultiresStepper function in
-    the multires_momentum_transfer for the multi-resolution case.
+    This operator is used to get the post-collision and post-streaming populations
+    Note that for dense and single resolution simulations in XLB, the order of operations in the stepper is "stream-then-collide".
+    Therefore, f_0 represents the post-collision values and post_streaming values of the current time step need to be reconstructed
+    by applying the streaming and boundary conditions. These populations are readily available in XLB when using multi-resolution
+    grids because the mres stepper relies on "collide-then-stream".
     """
 
     def __init__(
         self,
         no_slip_bc_instance,
-        collision_type=None,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
@@ -113,8 +113,8 @@ class MomentumTransfer(Operator):
         # Assign the no-slip boundary condition instance
         self.no_slip_bc_instance = no_slip_bc_instance
 
-        # Define the **minimal** stepper operator needed for the momentum transfer
-        self.stepper = MomentumTransferLBMStepper(
+        # Define the needed for the momentum transfer
+        self.fetcher = FetchPopulations(
             no_slip_bc_instance,
             velocity_set=velocity_set,
             precision_policy=precision_policy,
@@ -156,7 +156,7 @@ class MomentumTransfer(Operator):
             The force exerted on the solid geometry at each boundary node.
         """
         # Give the input post-collision populations, streaming once and apply the BC the find post-stream values.
-        f_post_collision, f_post_stream = self.stepper(f_0, f_1, bc_mask, missing_mask)
+        f_post_collision, f_post_stream = self.fetcher(f_0, f_1, bc_mask, missing_mask)
 
         # Compute momentum transfer
         boundary = bc_mask == self.no_slip_bc_instance.id
@@ -207,8 +207,8 @@ class MomentumTransfer(Operator):
             # If the boundary is an edge then add the momentum transfer
             m = _u_vec()
             if is_edge:
-                # Apply one **minimal** LBM step
-                f_post_collision, f_post_stream = self.stepper_functional(index, f_0, f_1, _missing_mask)
+                # fetch the post-collision and post-streaming populations
+                f_post_collision, f_post_stream = self.fetcher_functional(index, f_0, f_1, _missing_mask)
 
                 # Compute the momentum transfer
                 for d in range(self.velocity_set.d):
@@ -254,7 +254,7 @@ class MomentumTransfer(Operator):
         self.force *= 0.0
 
         # Define the warp functionals needed for this operation
-        self.stepper_functional = self.stepper.warp_functional
+        self.fetcher_functional = self.fetcher.warp_functional
 
         # Launch the warp kernel
         wp.launch(
@@ -314,7 +314,7 @@ class MomentumTransfer(Operator):
         self.force *= 0.0
 
         # Define the neon functionals needed for this operation
-        self.stepper_functional = self.stepper.neon_functional
+        self.fetcher_functional = self.fetcher.neon_functional
 
         # Launch the neon container
         c = self.neon_container(f_0, f_1, bc_mask, missing_mask, self.force)
