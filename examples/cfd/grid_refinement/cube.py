@@ -21,11 +21,15 @@ from xlb.operator.boundary_condition import (
     HybridBC,
 )
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
-from xlb.utils.mesher import generate_mesh, make_cuboid_mesh, MultiresIO
+from xlb.utils.mesher import make_cuboid_mesh, MultiresIO
+from xlb.utils.makemesh import generate_mesh
 from xlb.operator.force import MultiresMomentumTransfer
 from xlb.helper.initializers import MultiresOutletInitializer
+from xlb.optimization_type import OptimizationType as OptimizationType
 
-def generate_makemesh_mesh(stl_filename, voxel_size):
+wp.clear_kernel_cache()
+
+def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=None, ground_voxel_height=4):
     """
     Generate a makemesh mesh based on the provided voxel size in meters, domain multipliers, and padding values.
     """
@@ -34,32 +38,25 @@ def generate_makemesh_mesh(stl_filename, voxel_size):
 
     # Domain multipliers for the full domain
     domainMultiplier = {
-        "-x": 0.75,
-        "x": 1,
-        "-y": 1.5,
-        "y": 1.5,
-        "-z": 0.1,
-        "z": 1.5,
+        "-x": 5,
+        "x": 8,
+        "-y": 8,
+        "y": 8,
+        "-z": 8,
+        "z": 8,
     }
 
     # Padding values to control voxel growth
     padding_values = {
-        0: (6, 30, 10, 10, 10, 10),
-        1: (8, 16, 8, 8, 8, 8),
-        2: (8, 16, 8, 8, 8, 8),
-        3: (8, 16, 8, 8, 8, 8),
-        4: (8, 40, 10, 10, 10, 10),
-        5: (4, 40, 4, 4, 4, 4),
+        0: (15, 30, 15, 15, 15, 15),
+        1: (10, 40, 10, 10, 10, 10),
+        2: (10, 40, 10, 10, 10, 10),
+        3: (8, 20, 8, 8, 8, 8),
+        4: (8, 20, 8, 8, 8, 8),
+        5: (4, 4, 4, 4, 4, 4),
         6: (4, 4, 4, 4, 4, 4),
         7: (4, 4, 4, 4, 4, 4),
         8: (4, 4, 4, 4, 4, 4),
-        9: (4, 4, 4, 4, 4, 4),
-        10: (4, 4, 4, 4, 4, 4),
-        11: (4, 4, 4, 4, 4, 4),
-        12: (4, 4, 4, 4, 4, 4),
-        13: (4, 4, 4, 4, 4, 4),
-        14: (4, 4, 4, 4, 4, 4),
-        15: (4, 4, 4, 4, 4, 4),
     }
 
     # Load the mesh
@@ -88,13 +85,15 @@ def generate_makemesh_mesh(stl_filename, voxel_size):
     mesh_vertices = np.asarray(mesh.vertices) / voxel_size
     mesh.export("temp.stl")
 
-    # Generate mesh using generate_mesh
+    # Generate mesh using generate_mesh with ground refinement
     level_data, _ = generate_mesh(
         num_levels,
         "temp.stl",
         voxel_size,
         padding_values,
         domainMultiplier,
+        ground_refinement_level=ground_refinement_level,
+        ground_voxel_height=ground_voxel_height,
     )
     actual_num_levels = len(level_data)
     grid_shape_finest = tuple([int(i * 2 ** (actual_num_levels - 1)) for i in level_data[-1][0].shape])
@@ -109,9 +108,10 @@ def generate_cuboid_mesh(stl_filename, voxel_size):
     """
     # Domain multipliers for each refinement level
     domainMultiplier = [
-        [0.75, 1, 1.5, 1.5, 0.1, 1.5],
-        [0.5, 0.5, 0.5, 0.5, 0.1, 0.5],
-        [0.15, 0.15, 0.15, 0.15, 0.1, 0.15],
+        [5, 8, 5, 5, 5, 5],
+        [2, 4, 2, 2, 2, 2],
+        [.6, 2, 0.6, 0.6, 0.6, 0.6],
+        [0.4, 0.9, 0.4, 0.4, 0.4, 0.4],
     ]
 
     # Load the mesh
@@ -169,20 +169,31 @@ def prepare_sparsity_pattern(level_data):
 # -------------------------- Simulation Setup --------------------------
 
 # Define physical and simulation parameters
-voxel_size = 0.0025  # Finest voxel size in meters
-u_physical = 4  # Physical inlet velocity in m/s
+voxel_size = 0.0035  # Finest voxel size in meters
+u_physical = 10  # Physical inlet velocity in m/s
 ulb = 0.05  # Lattice velocity
+flow_passes = 10 # Domain flow passes
 kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
+
+# Generate the mesh and body vertices
+stl_filename = "examples/cfd/stl-files/Cube.stl"
+script_name = "Cube 3.5mm 10passes"
+
+level_data, body_vertices, grid_shape_zip, partSize, actual_num_levels = generate_cuboid_mesh(
+    stl_filename,
+    voxel_size,
+)
+
+# I/O settings
+print_interval_percentage = 1  # Print every 1% of iterations
+file_output_crossover_percentage = 90  # Crossover at 80% of iterations
+num_file_outputs_pre_crossover = 9  # 8 outputs before crossover (e.g., every 10% up to 80%)
+num_file_outputs_post_crossover = 10  # 20 outputs in the last 20%
 
 # Other setup parameters
 compute_backend = ComputeBackend.NEON
 precision_policy = PrecisionPolicy.FP32FP32
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
-flow_passes = 5
-print_interval_percentage = 1.0  # Print every 1% of iterations
-file_output_crossover_percentage = 50.0  # Crossover at 80% of iterations
-num_file_outputs_pre_crossover = 50  # 8 outputs before crossover (e.g., every 10% up to 80%)
-num_file_outputs_post_crossover = 50  # 20 outputs in the last 20%
 
 # Initialize XLB
 xlb.init(
@@ -191,14 +202,8 @@ xlb.init(
     default_precision_policy=precision_policy,
 )
 
-# Generate the mesh and Ahmed body vertices
-stl_filename = "examples/cfd/stl-files/Ahmed_25.stl"
-level_data, ahmed_vertices, grid_shape_zip, partSize, actual_num_levels = generate_makemesh_mesh(stl_filename, voxel_size)
-
-# Characteristic length (Ahmed body length, approximately 1.044 meters)
-L = partSize[0]  # Use x-dimension (length) of the Ahmed body
-
 # Calculate Reynolds number
+L = partSize[0]  # Characteristic length. Use x-dimension (length) of the body
 Re = u_physical * L / kinematic_viscosity
 
 # Calculate lattice viscosity using coarsest voxel size
@@ -208,7 +213,6 @@ nu_lattice = kinematic_viscosity * delta_t / (delta_x_coarse ** 2)
 omega = 1.0 / (3.0 * nu_lattice + 0.5)
 
 # Create output directory based on script name
-script_name = os.path.splitext(os.path.basename(__file__))[0]
 output_dir = os.path.join("examples/cfd/grid_refinement", script_name)
 
 # Clear and recreate the output directory
@@ -220,6 +224,9 @@ os.makedirs(output_dir)
 # Define exporter object for HDF5 output
 field_name_cardinality_dict = {"velocity": 3, "density": 1}
 h5exporter = MultiresIO(field_name_cardinality_dict, level_data)
+
+# Define a separate exporter for the initial bc_mask output
+bc_mask_exporter = MultiresIO({"bc_mask": 1}, level_data)
 
 def fix_xmf_paths(xmf_filename, hdf5_basename):
     """
@@ -237,11 +244,16 @@ sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
 
 # Compute active voxels per level
 active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
+total_voxels = sum(active_voxels)
+print(f"Total active voxels: {total_voxels:,}")
 print("Active voxels per level:", active_voxels)
 
 # Compute total lattice updates per global step
 total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
-print("Total lattice updates per global step:", total_lattice_updates_per_step)
+print(f"Total lattice updates per global step: {total_lattice_updates_per_step:,}")
+
+# get the number of levels
+num_levels = len(level_data)
 
 # Create the multires grid
 grid = multires_grid_factory(
@@ -263,44 +275,104 @@ file_output_interval_pre_crossover = max(1, int(crossover_step / num_file_output
 file_output_interval_post_crossover = max(1, int((num_steps - crossover_step) / num_file_outputs_post_crossover)) if num_file_outputs_post_crossover > 0 else num_steps + 1
 
 # Define Boundary Indices
+# Get boundary indices for all sides across levels
 box = grid.bounding_box_indices(shape=grid.level_to_shape(coarsest_level))
-box_no_edge = grid.bounding_box_indices(shape=grid.level_to_shape(coarsest_level), remove_edges=True)
-inlet = box_no_edge["left"]
-outlet = box_no_edge["right"]
-ground = [box["bottom"][i] for i in range(velocity_set.d)]
-walls = [
-        box["back"][i]
-        + box["top"][i]
-        + box["front"][i]            
-        for i in range(velocity_set.d)
-     ]
-     
-#Remove overlap between walls and ground
+left_indices = grid.boundary_indices_across_levels(level_data, box_side="left", remove_edges=True)
+right_indices = grid.boundary_indices_across_levels(level_data, box_side="right", remove_edges=True)
+top_indices = grid.boundary_indices_across_levels(level_data, box_side="top", remove_edges=False)
+bottom_indices = grid.boundary_indices_across_levels(level_data, box_side="bottom", remove_edges=False)
+front_indices = grid.boundary_indices_across_levels(level_data, box_side="front", remove_edges=False)
+back_indices = grid.boundary_indices_across_levels(level_data, box_side="back", remove_edges=False)
 
-walls_x ,walls_y ,walls_z  = np.array(walls[0]), np.array(walls[1]), np.array(walls[2]) 
-walls_z_min = np.min(walls_z)
-walls_mask_zmin = walls_z == walls_z_min
-walls_filter = np.where(~walls_mask_zmin)[0]
+# Filter front and back indices to remove overlaps with top and bottom at each level
+filtered_front_indices = []
+filtered_back_indices = []
+for level in range(num_levels):
+    # Convert indices to sets of tuples (x, y, z) for set operations
+    top_set = set(zip(*top_indices[level])) if top_indices[level] else set()
+    bottom_set = set(zip(*bottom_indices[level])) if bottom_indices[level] else set()
+    front_set = set(zip(*front_indices[level])) if front_indices[level] else set()
+    back_set = set(zip(*back_indices[level])) if back_indices[level] else set()
+    
+    # Remove top and bottom indices from front and back
+    filtered_front_set = front_set - (top_set | bottom_set)
+    filtered_back_set = back_set - (top_set | bottom_set)
+    
+    # Convert back to list of lists format: [[x_coords], [y_coords], [z_coords]]
+    filtered_front_indices.append(
+        [list(coords) for coords in zip(*filtered_front_set)] if filtered_front_set else []
+    )
+    filtered_back_indices.append(
+        [list(coords) for coords in zip(*filtered_back_set)] if filtered_back_set else []
+    )
 
-walls = [
-    tuple(walls_x[walls_filter]),
-    tuple(walls_y[walls_filter]),
-    tuple(walls_z[walls_filter])
-    ]
-walls = np.unique(np.array(walls), axis=-1).tolist()
+# Turbulent Flow Profile
+def bc_profile(taper_fraction=0.05):
+    assert compute_backend == ComputeBackend.NEON
 
-# Convert bc indices to a list of lists
-inlet = [[] for _ in range(actual_num_levels - 1)] + [inlet]
-outlet = [[] for _ in range(actual_num_levels - 1)] + [outlet]
-walls = [[] for _ in range(actual_num_levels - 1)] + [walls]
+    # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
+    _, ny, nz = grid_shape_zip
+    dtype = precision_policy.compute_precision.wp_dtype
+    H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
+    H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    two = dtype(2.0)
+    ulb_wp = dtype(ulb)
+    taper_frac = dtype(taper_fraction)  # Fraction of distance from center where tapering begins
+    core_frac = dtype(1.0 - 2.0 * taper_fraction)  # Fraction of core region with max velocity
 
-# Initialize Boundary Conditions
-bc_left = RegularizedBC("velocity", prescribed_value=(ulb, 0.0, 0.0), indices=inlet)
-bc_walls = FullwayBounceBackBC(indices=walls)
-bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="bottom"))
-bc_outlet = DoNothingBC(indices=outlet)
-bc_ahmed = HybridBC(bc_method="nonequilibrium_regularized", mesh_vertices=ahmed_vertices, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=False)
-boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_ground, bc_ahmed]
+    @wp.func
+    def bc_profile_warp(index: wp.vec3i):
+        # Turbulent flow profile: constant velocity in core, linear taper near walls
+        y = dtype(index[1])
+        z = dtype(index[2])
+
+        # Calculate normalized distance from center
+        y_center = wp.abs(y - (H_y / two))  # Distance from center in y
+        z_center = wp.abs(z - (H_z / two))  # Distance from center in z
+
+        # Calculate normalized distances (0 at center, 1 at wall)
+        y_norm = two * y_center / H_y
+        z_norm = two * z_center / H_z
+
+        # Find the maximum normalized distance to determine if we're in the taper region
+        max_norm = wp.max(y_norm, z_norm)
+
+        # If within core region (within core_frac from center), use max velocity
+        # Otherwise, linearly taper to zero at the wall
+        velocity = ulb_wp
+        if max_norm > core_frac:
+            # Linear taper in the outer taper_fraction region
+            velocity = ulb_wp * (dtype(1.0) - (max_norm - core_frac) / taper_frac)
+
+        # Ensure velocity doesn't go negative
+        velocity = wp.max(dtype(0.0), velocity)
+
+        return wp.vec(velocity, length=1)
+
+    return bc_profile_warp
+
+# Initialize boundary conditions
+bc_inlet = RegularizedBC("velocity", prescribed_value=(ulb, 0.0, 0.0), indices=left_indices)
+# bc_inlet = RegularizedBC("velocity", profile=bc_profile(), indices=left_indices)
+bc_outlet = DoNothingBC(indices=right_indices)
+bc_top = FullwayBounceBackBC(indices=top_indices)
+bc_bottom = FullwayBounceBackBC(indices=bottom_indices)
+# bc_bottom = HybridBC(bc_method="nonequilibrium_regularized", indices=bottom_indices, prescribed_value= (ulb,0.0,0.0))
+bc_front = FullwayBounceBackBC(indices=filtered_front_indices)
+bc_back = FullwayBounceBackBC(indices=filtered_back_indices)
+bc_body = HybridBC(
+    bc_method="nonequilibrium_regularized",
+    mesh_vertices=body_vertices,
+    voxelization_method=MeshVoxelizationMethod.AABB,
+    use_mesh_distance=False
+)
+
+# bc_top = HybridBC(bc_method="nonequilibrium_regularized", indices=top_indices, prescribed_value= (ulb,0.0,0.0))
+# bc_front = HybridBC(bc_method="nonequilibrium_regularized", indices=filtered_front_indices, prescribed_value= (ulb,0.0,0.0))
+# bc_back = HybridBC(bc_method="nonequilibrium_regularized", indices=filtered_back_indices, prescribed_value= (ulb,0.0,0.0))
+
+# Combine all boundary conditions
+boundary_conditions = [bc_top, bc_front, bc_back, bc_inlet, bc_outlet, bc_bottom, bc_body]
 
 # Make initializer operator
 initializer = MultiresOutletInitializer(
@@ -318,26 +390,58 @@ sim = xlb.helper.MultiresSimulationManager(
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
     initializer=initializer,
+    optimization_type=OptimizationType.FUSION_AT_FINEST,
 )
 
+# Save bc_mask at initialization (step 0)
+sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
+filename = os.path.join(output_dir, f"{script_name}_initial_bc_mask")
+try:
+    bc_mask_exporter.to_hdf5(filename, {"bc_mask": sim.bc_mask}, compression="gzip", compression_opts=0)
+    xmf_filename = f"{filename}.xmf"
+    hdf5_basename = f"{script_name}_initial_bc_mask.h5"
+    fix_xmf_paths(xmf_filename, hdf5_basename)
+except Exception as e:
+    print(f"Error during initial bc_mask output: {e}")
+wp.synchronize()
+
 # Setup Momentum Transfer for Force Calculation
-bc_ahmed = boundary_conditions[-1]
-momentum_transfer = MultiresMomentumTransfer(bc_ahmed, compute_backend=compute_backend)
+momentum_transfer = MultiresMomentumTransfer(bc_body, compute_backend=compute_backend)
+
+# Compute reference area using existing bc_mask processing
+fields_data = bc_mask_exporter.get_fields_data({"bc_mask": sim.bc_mask})
+bc_mask_data = fields_data["bc_mask_0"]  # Concatenated bc_mask values for all active voxels
+level_id_field = bc_mask_exporter.level_id_field  # Level ID for each voxel
+finest_level = 0  # Finest level has ID 0 in xlb framework
+mask_finest = level_id_field == finest_level  # Boolean mask for finest level voxels
+bc_mask_finest = bc_mask_data[mask_finest]  # bc_mask values at finest level
+
+# Get 3D indices of active voxels at finest level from the level_data mask
+active_indices_finest = np.argwhere(level_data[0][0])  # level_data[0][0] is the finest level mask
+
+# Filter for solid voxels (assuming bc_body.id identifies the solid body)
+solid_voxels_indices = active_indices_finest[bc_mask_finest == bc_body.id]
+
+# Compute projected area as number of unique (y, z) pairs (j, k indices)
+# Assuming i=x, j=y, k=z in the grid
+unique_jk = np.unique(solid_voxels_indices[:, 1:3], axis=0)
+reference_area = unique_jk.shape[0]  # Area in lattice units (number of lattice sites)
+reference_area_physical = reference_area * (voxel_size ** 2)
+
+# Hard-coded reference area
+# reference_area = 0.0225 / (voxel_size**2)
 
 def print_lift_drag(sim):
     boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
-    drag = boundary_force[0]  # x-direction
+    drag = boundary_force[0]
     lift = boundary_force[2]
-    # Approximate frontal area of Ahmed body (width * height)
-    reference_area = partSize[1] * partSize[2]
-    reference_area_lattice = reference_area / voxel_size**2
-    cd = 2.0 * drag / (ulb**2 * reference_area_lattice)
-    cl = 2.0 * lift / (ulb**2 * reference_area_lattice)
+    cd = 2.0 * drag / (ulb**2 * reference_area)
+    cl = 2.0 * lift / (ulb**2 * reference_area)
     # Check for NaN values
     if np.isnan(cd) or np.isnan(cl):
         raise ValueError(f"NaN detected in coefficients at step {step}: Cd={cd}, Cl={cl}")
     drag_values.append([cd, cl])
-    print(f"CD={cd}, CL={cl}")
+    print(f"CD={cd:.3f}, CL={cl:.3f}, Drag Force (lattice units)={drag:.6f}")
 
 def plot_drag_lift(drag_values, output_dir, print_interval, percentile_range=(15, 85), use_log_scale=False):
     """
@@ -388,14 +492,17 @@ print(f"File output interval pre-crossover (0-{file_output_crossover_percentage}
 print(f"File output interval post-crossover ({file_output_crossover_percentage}-100%): {file_output_interval_post_crossover} steps")
 print(f"Finest voxel size: {voxel_size} meters")
 print(f"Coarsest voxel size: {delta_x_coarse} meters")
+print(f"Total active voxels: {total_voxels:,}")
 print(f"Actual number of refinement levels: {actual_num_levels}")
 print(f"Physical inlet velocity: {u_physical} m/s")
 print(f"Lattice velocity (ulb): {ulb}")
-print(f"Characteristic length: {L} meters")
+print(f"Characteristic length: {L: .4f} meters")
 print(f"Kinematic viscosity: {kinematic_viscosity} m^2/s")
-print(f"Reynolds number: {Re:.2f}")
+print(f"Computed reference area: {reference_area} lattice units")
+print(f"Physical reference area: {reference_area_physical:.6f} m^2")
+print(f"Reynolds number: {Re:,.2f}")
 print(f"Lattice viscosity: {nu_lattice}")
-print(f"Relaxation parameter (omega): {omega}")
+print(f"Relaxation parameter (omega): {omega: .5f}")
 print("\n" + "=" * 50 + "\n")
 
 for step in range(num_steps):
@@ -406,8 +513,8 @@ for step in range(num_steps):
     steps_since_last_print += 1
     if step % print_interval == 0 or step == num_steps - 1:
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
-        print_lift_drag(sim)
         wp.synchronize()
+        print_lift_drag(sim)
         end_time = time.time()
         elapsed = end_time - start_time
         total_lattice_updates = total_lattice_updates_per_step * steps_since_last_print
@@ -432,7 +539,7 @@ for step in range(num_steps):
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
         filename = os.path.join(output_dir, f"{script_name}_{step:04d}")
         try:
-            h5exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
+            h5exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=0)
             xmf_filename = f"{filename}.xmf"
             hdf5_basename = f"{script_name}_{step:04d}.h5"
             fix_xmf_paths(xmf_filename, hdf5_basename)
