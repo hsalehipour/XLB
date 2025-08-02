@@ -2,7 +2,7 @@
 from xlb.compute_backend import ComputeBackend as ComputeBackend
 from xlb.precision_policy import PrecisionPolicy as PrecisionPolicy, Precision as Precision
 from xlb.physics_type import PhysicsType as PhysicsType
-from xlb.optimization_type import OptimizationType as OptimizationType
+from xlb.mres_perf_ptimization_type import MresPerfOptimizationType as OptimizationType
 # Config
 from .default_config import init as init, DefaultConfig as DefaultConfig
 

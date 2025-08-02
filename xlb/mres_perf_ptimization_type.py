@@ -2,7 +2,7 @@ import argparse
 from enum import Enum
 
 
-class OptimizationType(Enum):
+class MresPerfOptimizationType(Enum):
     """
     Enumeration of available optimization strategies for the LBM solver.
 
@@ -13,7 +13,7 @@ class OptimizationType(Enum):
     FUSION_AT_FINEST = 1
 
     @staticmethod
-    def from_string(value: str) -> "OptimizationType":
+    def from_string(value: str) -> "MresPerfOptimizationType":
         """
         Parse a string to an OptimizationType.
 
@@ -30,15 +30,15 @@ class OptimizationType(Enum):
         """
         # Attempt to parse by name (case-insensitive)
         key = value.strip().upper()
-        if key in OptimizationType.__members__:
-            return OptimizationType[key]
+        if key in MresPerfOptimizationType.__members__:
+            return MresPerfOptimizationType[key]
 
         # Attempt to parse by integer value
         try:
             int_value = int(value)
-            return OptimizationType(int_value)
+            return MresPerfOptimizationType(int_value)
         except (ValueError, KeyError):
-            valid_options = ", ".join(f"{member.name}({member.value})" for member in OptimizationType)
+            valid_options = ", ".join(f"{member.name}({member.value})" for member in MresPerfOptimizationType)
             raise argparse.ArgumentTypeError(
                 f"Invalid OptimizationType {value!r}. Choose from: {valid_options}."
             )
@@ -61,11 +61,11 @@ class OptimizationType(Enum):
             description="Run the LBM multiresolution simulation with specified optimizations."
         )
         # Dynamically generate help text from enum members
-        valid_options = ", ".join(f"{member.name}({member.value})" for member in OptimizationType)
+        valid_options = ", ".join(f"{member.name}({member.value})" for member in MresPerfOptimizationType)
         parser.add_argument(
             "-o", "--optimization",
-            type=OptimizationType.from_string,
-            default=OptimizationType.NAIVE_COLLIDE_STREAM,
+            type=MresPerfOptimizationType.from_string,
+            default=MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
             help=f"Select optimization strategy: {valid_options}",
         )
         return parser
