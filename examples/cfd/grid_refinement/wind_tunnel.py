@@ -66,10 +66,6 @@ def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=2, 
     if mesh.is_empty:
         raise ValueError("Loaded mesh is empty or invalid.")
 
-    # Compute projected area in YZ plane (project along X-axis)
-    # projected_polygon = mesh.projected(normal=[1, 0, 0])  # Project along X-axis for YZ plane
-    # projected_area_physical = projected_polygon.area  # Area in physical units (m^2)
-
     # Compute original bounds
     min_bound = mesh.vertices.min(axis=0)
     max_bound = mesh.vertices.max(axis=0)
@@ -106,7 +102,7 @@ def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=2, 
     print(f"Requested levels: {num_levels}, Actual levels: {actual_num_levels}")
     print(f"Full shape based on finest voxel size is {grid_shape_finest}")
     os.remove("temp.stl")
-    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels, #projected_area_physical
+    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels
 
 def generate_cuboid_mesh(stl_filename, voxel_size):
     """
@@ -124,10 +120,6 @@ def generate_cuboid_mesh(stl_filename, voxel_size):
     mesh = trimesh.load_mesh(stl_filename, process=False)
     if mesh.is_empty:
         raise ValueError("Loaded mesh is empty or invalid.")
-
-    # Compute projected area in YZ plane (project along X-axis)
-    # projected_polygon = mesh.projected(normal=[1, 0, 0])  # Project along X-axis for YZ plane
-    # projected_area_physical = projected_polygon.area  # Area in physical units (m^2)
 
     # Compute original bounds
     min_bound = mesh.vertices.min(axis=0)
@@ -161,7 +153,7 @@ def generate_cuboid_mesh(stl_filename, voxel_size):
     print(f"Requested levels: {len(domainMultiplier)}, Actual levels: {actual_num_levels}")
     print(f"Full shape based on finest voxel size is {grid_shape_finest}")
     os.remove("temp.stl")
-    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels, #projected_area_physical
+    return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest]), partSize, actual_num_levels
 
 def prepare_sparsity_pattern(level_data):
     """
@@ -179,7 +171,7 @@ def prepare_sparsity_pattern(level_data):
 # -------------------------- Simulation Setup --------------------------
 
 # Define physical and simulation parameters
-voxel_size = 0.004  # Finest voxel size in meters
+voxel_size = 0.008  # Finest voxel size in meters
 u_physical = 10  # Physical inlet velocity in m/s
 ulb = 0.05  # Lattice velocity
 flow_passes = 10 # Domain flow passes
@@ -187,7 +179,7 @@ kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
 
 # Generate the mesh and body vertices
 stl_filename = "examples/cfd/stl-files/Ahmed_25_NoLegs.stl"
-script_name = "Ahmed 4mm"
+script_name = "Ahmed 8mm"
 
 level_data, body_vertices, grid_shape_zip, partSize, actual_num_levels = generate_makemesh_mesh(
     stl_filename,
@@ -240,16 +232,6 @@ bc_mask_exporter = MultiresIO({"bc_mask": 1}, level_data)
 
 # Prepare the sparsity pattern and origins
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
-
-# Compute active voxels per level
-active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
-total_voxels = sum(active_voxels)
-print(f"Total active voxels: {total_voxels:,}")
-print("Active voxels per level:", active_voxels)
-
-# Compute total lattice updates per global step
-total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
-print(f"Total lattice updates per global step: {total_lattice_updates_per_step:,}")
 
 # get the number of levels
 num_levels = len(level_data)
@@ -366,10 +348,6 @@ bc_body = HybridBC(
     use_mesh_distance=False
 )
 
-# bc_top = HybridBC(bc_method="nonequilibrium_regularized", indices=top_indices, prescribed_value= (ulb,0.0,0.0))
-# bc_front = HybridBC(bc_method="nonequilibrium_regularized", indices=filtered_front_indices, prescribed_value= (ulb,0.0,0.0))
-# bc_back = HybridBC(bc_method="nonequilibrium_regularized", indices=filtered_back_indices, prescribed_value= (ulb,0.0,0.0))
-
 # Combine all boundary conditions
 boundary_conditions = [bc_top, bc_front, bc_back, bc_inlet, bc_outlet, bc_bottom, bc_body]
 
@@ -391,6 +369,22 @@ sim = xlb.helper.MultiresSimulationManager(
     initializer=initializer,
     optimization_type=OptimizationType.FUSION_AT_FINEST,
 )
+
+# Compute active voxels per level and solid voxels (bc_mask == 255) per level
+active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
+sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)  # Ensure bc_mask is populated
+fields_data = bc_mask_exporter.get_fields_data({"bc_mask": sim.bc_mask})
+bc_mask_data = fields_data["bc_mask_0"]  # Concatenated bc_mask values for all active voxels
+level_id_field = bc_mask_exporter.level_id_field  # Level ID for each voxel
+solid_voxels = []
+for lvl in range(actual_num_levels):
+    # In XLB, finest level has ID 0 (maps to level_data[0]), coarsest has ID actual_num_levels-1 (maps to level_data[actual_num_levels-1])
+    level_mask = level_id_field == lvl  # Map level_id_field directly to level_data index
+    solid_voxels.append(np.sum(bc_mask_data[level_mask] == 255))
+# Adjust active voxels by subtracting solid voxels
+active_voxels = [max(0, active_voxels[lvl] - solid_voxels[lvl]) for lvl in range(actual_num_levels)]
+total_voxels = sum(active_voxels)
+total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
 
 # Save bc_mask at initialization (step 0)
 sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
@@ -490,7 +484,11 @@ print(f"File output interval pre-crossover (0-{file_output_crossover_percentage}
 print(f"File output interval post-crossover ({file_output_crossover_percentage}-100%): {file_output_interval_post_crossover} steps")
 print(f"Finest voxel size: {voxel_size} meters")
 print(f"Coarsest voxel size: {delta_x_coarse} meters")
+print(f"Total voxels: {sum(np.count_nonzero(mask) for mask in sparsity_pattern):,}")
 print(f"Total active voxels: {total_voxels:,}")
+print(f"Active voxels per level: {active_voxels}")
+print(f"Solid voxels per level: {solid_voxels}")
+print(f"Total lattice updates per global step: {total_lattice_updates_per_step:,}")
 print(f"Actual number of refinement levels: {actual_num_levels}")
 print(f"Physical inlet velocity: {u_physical} m/s")
 print(f"Lattice velocity (ulb): {ulb}")
@@ -498,7 +496,6 @@ print(f"Characteristic length: {L: .4f} meters")
 print(f"Kinematic viscosity: {kinematic_viscosity} m^2/s")
 print(f"Computed reference area (bc_mask): {reference_area} lattice units")
 print(f"Physical reference area (bc_mask): {reference_area_physical:.6f} m^2")
-#print(f"Model-based reference area (mesh projected): {projected_area_physical:.6f} m^2")
 print(f"Reynolds number: {Re:,.2f}")
 print(f"Lattice viscosity: {nu_lattice}")
 print(f"Relaxation parameter (omega): {omega: .5f}")

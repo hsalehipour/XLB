@@ -186,8 +186,8 @@ flow_passes = 5 # Domain flow passes
 kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
 
 # Generate the mesh and body vertices
-stl_filename = "examples/cfd/stl-files/cube45.stl"
-script_name = "Cube45 3mm"
+stl_filename = "examples/cfd/stl-files/sphere.stl"
+script_name = "Sphere 3mm"
 
 level_data, body_vertices, grid_shape_zip, partSize, actual_num_levels, projected_area_physical = generate_makemesh_mesh(
     stl_filename,
@@ -240,16 +240,6 @@ bc_mask_exporter = MultiresIO({"bc_mask": 1}, level_data)
 
 # Prepare the sparsity pattern and origins
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
-
-# Compute active voxels per level
-active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
-total_voxels = sum(active_voxels)
-print(f"Total active voxels: {total_voxels:,}")
-print("Active voxels per level:", active_voxels)
-
-# Compute total lattice updates per global step
-total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
-print(f"Total lattice updates per global step: {total_lattice_updates_per_step:,}")
 
 # get the number of levels
 num_levels = len(level_data)
@@ -392,6 +382,22 @@ sim = xlb.helper.MultiresSimulationManager(
     optimization_type=OptimizationType.FUSION_AT_FINEST,
 )
 
+# Compute active voxels per level and solid voxels (bc_mask == 255) per level
+active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
+sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)  # Ensure bc_mask is populated
+fields_data = bc_mask_exporter.get_fields_data({"bc_mask": sim.bc_mask})
+bc_mask_data = fields_data["bc_mask_0"]  # Concatenated bc_mask values for all active voxels
+level_id_field = bc_mask_exporter.level_id_field  # Level ID for each voxel
+solid_voxels = []
+for lvl in range(actual_num_levels):
+    # In XLB, finest level has ID 0 (maps to level_data[0]), coarsest has ID actual_num_levels-1 (maps to level_data[actual_num_levels-1])
+    level_mask = level_id_field == lvl  # Map level_id_field directly to level_data index
+    solid_voxels.append(np.sum(bc_mask_data[level_mask] == 255))
+# Adjust active voxels by subtracting solid voxels
+active_voxels = [max(0, active_voxels[lvl] - solid_voxels[lvl]) for lvl in range(actual_num_levels)]
+total_voxels = sum(active_voxels)
+total_lattice_updates_per_step = sum(active_voxels[lvl] * (2 ** (actual_num_levels - 1 - lvl)) for lvl in range(actual_num_levels))
+
 # Save bc_mask at initialization (step 0)
 sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
 filename = os.path.join(output_dir, f"{script_name}_initial_bc_mask")
@@ -491,7 +497,11 @@ print(f"File output interval pre-crossover (0-{file_output_crossover_percentage}
 print(f"File output interval post-crossover ({file_output_crossover_percentage}-100%): {file_output_interval_post_crossover} steps")
 print(f"Finest voxel size: {voxel_size} meters")
 print(f"Coarsest voxel size: {delta_x_coarse} meters")
+print(f"Total voxels: {sum(np.count_nonzero(mask) for mask in sparsity_pattern):,}")
 print(f"Total active voxels: {total_voxels:,}")
+print(f"Active voxels per level: {active_voxels}")
+print(f"Solid voxels per level: {solid_voxels}")
+print(f"Total lattice updates per global step: {total_lattice_updates_per_step:,}")
 print(f"Actual number of refinement levels: {actual_num_levels}")
 print(f"Physical inlet velocity: {u_physical} m/s")
 print(f"Lattice velocity (ulb): {ulb}")
