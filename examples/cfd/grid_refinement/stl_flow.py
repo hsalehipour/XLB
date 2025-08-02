@@ -238,17 +238,6 @@ h5exporter = MultiresIO(field_name_cardinality_dict, level_data)
 # Define a separate exporter for the initial bc_mask output
 bc_mask_exporter = MultiresIO({"bc_mask": 1}, level_data)
 
-def fix_xmf_paths(xmf_filename, hdf5_basename):
-    """
-    Modify the XMF file to use relative HDF5 paths.
-    """
-    with open(xmf_filename, 'r') as f:
-        content = f.read()
-    pattern = rf'examples/cfd/grid_refinement/[^/]+/{re.escape(hdf5_basename)}'
-    fixed_content = re.sub(pattern, hdf5_basename, content)
-    with open(xmf_filename, 'w') as f:
-        f.write(fixed_content)
-
 # Prepare the sparsity pattern and origins
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
 
@@ -410,7 +399,6 @@ try:
     bc_mask_exporter.to_hdf5(filename, {"bc_mask": sim.bc_mask}, compression="gzip", compression_opts=0)
     xmf_filename = f"{filename}.xmf"
     hdf5_basename = f"{script_name}_initial_bc_mask.h5"
-    fix_xmf_paths(xmf_filename, hdf5_basename)
 except Exception as e:
     print(f"Error during initial bc_mask output: {e}")
 wp.synchronize()
@@ -554,7 +542,6 @@ for step in range(num_steps):
             h5exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=0)
             xmf_filename = f"{filename}.xmf"
             hdf5_basename = f"{script_name}_{step:04d}.h5"
-            fix_xmf_paths(xmf_filename, hdf5_basename)
         except Exception as e:
             print(f"Error during file output at step {step}: {e}")
         wp.synchronize()
