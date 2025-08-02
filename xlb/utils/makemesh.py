@@ -1,5 +1,5 @@
 import numpy as np
-import trimesh
+import open3d as o3d
 from typing import Any
 import time
 from pathlib import Path
@@ -65,10 +65,7 @@ def generate_mesh(
             The origin coordinates (x, y, z) of the voxel grid for the level, in meters.
         - l : int
             The level number (0 to `levels - 1`).
-
-
     """
-
     if not padding_table:
         padding_table = {
             0: (2, 2, 2, 2, 2, 2),
@@ -365,10 +362,10 @@ def pad_to_even(grid):
     return padded_grid
 
 
-# Voxelize an STL file using trimesh
-def voxelize_stl_trimesh(stl_filename, length_lbm_unit):
+# Voxelize an STL file using Open3D
+def voxelize_stl_open3d(stl_filename, length_lbm_unit):
     """
-    Voxelize an STL file using trimesh.
+    Voxelize an STL file using Open3D.
 
     Args:
         stl_filename (str): Path to the STL file.
@@ -381,19 +378,19 @@ def voxelize_stl_trimesh(stl_filename, length_lbm_unit):
             - partDomain: List of [max_bound, min_bound].
     """
     tic = time.perf_counter()
-    mesh = trimesh.load_mesh(stl_filename, process=False)
-    if mesh.is_empty:
+    mesh = o3d.io.read_triangle_mesh(stl_filename)
+    if len(mesh.vertices) == 0:
         raise ValueError("The mesh is empty or invalid.")
     print(f"    Number of vertices: {len(mesh.vertices):,}")
-    print(f"    Number of triangles: {len(mesh.faces):,}")
+    print(f"    Number of triangles: {len(mesh.triangles):,}")
     toc = time.perf_counter()
     print(f"    Model read in {toc - tic:0.1f} seconds")
     
     tic = time.perf_counter()
     
     # Compute the bounds of the mesh
-    min_bound = mesh.vertices.min(axis=0)
-    max_bound = mesh.vertices.max(axis=0)
+    min_bound = np.asarray(mesh.get_min_bound())
+    max_bound = np.asarray(mesh.get_max_bound())
     
     # Snap bounds to voxel grid
     min_bound = np.floor(min_bound / length_lbm_unit) * length_lbm_unit
@@ -403,13 +400,12 @@ def voxelize_stl_trimesh(stl_filename, length_lbm_unit):
     grid_size = np.ceil((max_bound - min_bound) / length_lbm_unit).astype(int) + 1  # Add 1 for padding
     
     # Translate mesh to align min_bound with origin
-    mesh.apply_translation(-min_bound)
+    mesh.translate(-min_bound)
     
     # Voxelize the mesh
-    voxel_grid = mesh.voxelized(pitch=length_lbm_unit)
-    
-    # Extract voxel indices relative to the translated origin
-    voxel_indices = np.round(voxel_grid.points / length_lbm_unit).astype(int)
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_triangle_mesh(mesh, voxel_size=length_lbm_unit)
+    voxels = voxel_grid.get_voxels()
+    voxel_indices = np.array([v.grid_index for v in voxels], dtype=int) if voxels else np.empty((0, 3), dtype=int)
     
     # Ensure indices are within bounds
     voxel_indices = np.clip(
@@ -420,7 +416,8 @@ def voxelize_stl_trimesh(stl_filename, length_lbm_unit):
     
     # Create the voxel matrix
     voxel_matrix = np.zeros(grid_size, dtype=bool)
-    voxel_matrix[voxel_indices[:, 0], voxel_indices[:, 1], voxel_indices[:, 2]] = True
+    if voxel_indices.size > 0:
+        voxel_matrix[voxel_indices[:, 0], voxel_indices[:, 1], voxel_indices[:, 2]] = True
     
     origin = min_bound
     partDomain = [max_bound, min_bound]
@@ -443,7 +440,7 @@ def makeMesh(levels, filename, voxSize, kernel, domainMultiplier, close=True, gr
     stem = Path(filename).stem
     tic = time.perf_counter()
 
-    matrix, origin, partDomain = voxelize_stl_trimesh(filename, voxSize)
+    matrix, origin, partDomain = voxelize_stl_open3d(filename, voxSize)
     partSize = partDomain[0] - partDomain[1]
 
     domainMin = np.array([0, 0, 0], float)

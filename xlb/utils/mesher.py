@@ -288,7 +288,7 @@ class MultiresIO(object):
                 xmf.write(f'''
             <Attribute Name="{field_name}" AttributeType="Scalar" Center="Cell">
                 <DataItem Dimensions="{total_cells}" NumberType="Float" Precision="4" Format="HDF">
-                {h5_filename}:/Fields/{field_name}
+                {hdf5_rel_path}:/Fields/{field_name}
                 </DataItem>
             </Attribute>
             ''')
