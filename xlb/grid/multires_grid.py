@@ -67,6 +67,8 @@ class NeonMultiresGrid(Grid):
             sparsity_pattern_origins=self.sparsity_pattern_origins,
             stencil=self.neon_stencil,
         )
+        # Print grid stats about voxel distribution between levels.
+        self.grid.print_info()
         pass
 
     def create_field(

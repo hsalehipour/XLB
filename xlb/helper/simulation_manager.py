@@ -2,7 +2,7 @@ import neon
 import warp as wp
 from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
 from xlb.operator.macroscopic import MultiresMacroscopic
-from xlb.optimization_type import OptimizationType
+from xlb.mres_perf_ptimization_type import MresPerfOptimizationType
 
 
 class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
@@ -19,14 +19,14 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             forcing_scheme="exact_difference",
             force_vector=None,
             initializer=None,
-            optimization_type: OptimizationType = OptimizationType.NAIVE_COLLIDE_STREAM,
+            mres_perf_opt: MresPerfOptimizationType = MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
     ):
         super().__init__(grid, boundary_conditions, collision_type, forcing_scheme, force_vector)
 
         self.initializer = initializer
         self.omega = omega
         self.count_levels = grid.count_levels
-        self.optimization_type = optimization_type
+        self.mres_perf_opt = mres_perf_opt
         # Create fields
         self.rho = grid.create_field(cardinality=1, dtype=self.precision_policy.store_precision)
         self.u = grid.create_field(cardinality=3, dtype=self.precision_policy.store_precision)
@@ -186,9 +186,9 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        if self.optimization_type == OptimizationType.NAIVE_COLLIDE_STREAM:
+        if self.mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
             recursion_reference(self.count_levels - 1, app=self.app)
-        elif self.optimization_type == OptimizationType.FUSION_AT_FINEST:
+        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
             recursion_fused_finest(self.count_levels - 1,
                                    app=self.app,
                                    is_self_f1_the_coalescence_dst_field=None,

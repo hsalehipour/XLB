@@ -27,7 +27,7 @@ from xlb.utils.mesher import make_cuboid_mesh, MultiresIO
 from xlb.utils.makemesh import generate_mesh
 from xlb.operator.force import MultiresMomentumTransfer
 from xlb.helper.initializers import MultiresOutletInitializer
-from xlb.optimization_type import OptimizationType as OptimizationType
+from xlb import MresPerfOptimizationType
 
 wp.clear_kernel_cache()
 
@@ -367,7 +367,7 @@ sim = xlb.helper.MultiresSimulationManager(
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
     initializer=initializer,
-    optimization_type=OptimizationType.FUSION_AT_FINEST,
+    mres_perf_opt=xlb.MresPerfOptimizationType.FUSION_AT_FINEST,
 )
 
 # Compute active voxels per level and solid voxels (bc_mask == 255) per level
