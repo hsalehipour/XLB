@@ -63,11 +63,11 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         """
 
         f_0 = self.grid.create_field(
-            cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision, neon_memory_type=neon.MemoryType.host_device()
+            cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision, neon_memory_type=neon.MemoryType.device()
         )
 
         f_1 = self.grid.create_field(
-            cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision, neon_memory_type=neon.MemoryType.host_device()
+            cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision, neon_memory_type=neon.MemoryType.device()
         )
 
         missing_mask = self.grid.create_field(cardinality=self.velocity_set.q, dtype=Precision.UINT8)
