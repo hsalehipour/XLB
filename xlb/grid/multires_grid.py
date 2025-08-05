@@ -112,43 +112,68 @@ class NeonMultiresGrid(Grid):
         """
         num_levels = len(level_data)
         bc_indices_list = []
+        d = self.velocity_set.d  # Dimensionality (2 or 3)
+
         for level in range(num_levels):
-            # Find active indices at this level
             mask = level_data[level][0]
-            origin = level_data[level][2]
-            
-            # Get boundary indices and check which are active
-            grid_shape = self.level_to_shape(level)
-            box = self.bounding_box_indices(shape=grid_shape, remove_edges=remove_edges)
-            bc_coords = np.array([box[box_side][i] for i in range(self.velocity_set.d)])  # Shape (d, num_bc_points)
+            origin = level_data[level][2]  # Assume np.array of shape (d,)
+            grid_shape = self.level_to_shape(level)  # tuple of length d
 
-            # Shift by origin (assuming origin is added to mask positions)
-            shifted_bc_coords = bc_coords - origin[:, None]  # Now relative to mask's local coords
-
-            # Filter only those within mask bounds
-            valid_mask = ((shifted_bc_coords >= 0) & (shifted_bc_coords < np.array(mask.shape)[:, None])).all(axis=0)
-            shifted_bc_coords = shifted_bc_coords[:, valid_mask]
-
-            # Check which are active in the mask (vectorized, no large arrays)
-            if len(self.shape) == 2:
-                active_mask = mask[
-                    shifted_bc_coords[0],  # x
-                    shifted_bc_coords[1]   # y
-                ]
+            # Define side configurations (adjust if your conventions differ)
+            if d == 3:
+                side_config = {
+                    'left': {'dim': 0, 'value': 0},
+                    'right': {'dim': 0, 'value': lambda s: s[0] - 1},
+                    'front': {'dim': 1, 'value': 0},
+                    'back': {'dim': 1, 'value': lambda s: s[1] - 1},
+                    'bottom': {'dim': 2, 'value': 0},
+                    'top': {'dim': 2, 'value': lambda s: s[2] - 1},
+                }
+            elif d == 2:
+                side_config = {
+                    'left': {'dim': 0, 'value': 0},
+                    'right': {'dim': 0, 'value': lambda s: s[0] - 1},
+                    'bottom': {'dim': 1, 'value': 0},
+                    'top': {'dim': 1, 'value': lambda s: s[1] - 1},
+                }
             else:
-                active_mask = mask[
-                    shifted_bc_coords[0],  # x
-                    shifted_bc_coords[1],  # y
-                    shifted_bc_coords[2]   # z
-                ]
-            active_bc_coords = shifted_bc_coords[:, active_mask]
+                raise ValueError(f"Unsupported dimensionality: {d}")
 
-            # Convert back to global indices
-            active_bc_coords += origin[:, None]
+            if box_side not in side_config:
+                raise ValueError(f"Unsupported box_side: {box_side}")
 
-            # Append common points at this level to a list
-            if active_bc_coords.size == 0:
+            conf = side_config[box_side]
+            dim_idx = conf['dim']
+            boundary_value = conf['value'](grid_shape) if callable(conf['value']) else conf['value']
+
+            # Get local indices of active voxels
+            local_coords = np.nonzero(mask)  # Tuple of d arrays, each of length num_active
+            if not local_coords[0].size:
                 bc_indices_list.append([])
+                continue
+
+            # Compute global coords (list of d arrays)
+            global_coords = [local_coords[i] + origin[i] for i in range(d)]
+
+            # Filter: must match boundary value in fixed dim
+            cond = (global_coords[dim_idx] == boundary_value)
+
+            # Ensure within bounds for non-fixed dims (replicates intersection with valid bc_indices)
+            for i in range(d):
+                if i != dim_idx:
+                    cond &= (global_coords[i] >= 0) & (global_coords[i] < grid_shape[i])
+
+            # If remove_edges, exclude perimeter of the face
+            if remove_edges:
+                for i in range(d):
+                    if i != dim_idx:
+                        cond &= (global_coords[i] > 0) & (global_coords[i] < grid_shape[i] - 1)
+
+            # Collect filtered indices
+            if np.any(cond):
+                active_bc = [gc[cond] for gc in global_coords]
+                bc_indices_list.append([arr.tolist() for arr in active_bc])
             else:
-                bc_indices_list.append([arr.tolist() for arr in active_bc_coords])
+                bc_indices_list.append([])
+
         return bc_indices_list
