@@ -116,24 +116,39 @@ class NeonMultiresGrid(Grid):
             # Find active indices at this level
             mask = level_data[level][0]
             origin = level_data[level][2]
-            active_indices = np.nonzero(mask) + origin[:, None]
-
-            # Get bottom indices of the bounding box at this level
+            
+            # Get boundary indices and check which are active
             grid_shape = self.level_to_shape(level)
             box = self.bounding_box_indices(shape=grid_shape, remove_edges=remove_edges)
-            bc_indices = np.array([box[box_side][i] for i in range(self.velocity_set.d)])
+            bc_coords = np.array([box[box_side][i] for i in range(self.velocity_set.d)])  # Shape (d, num_bc_points)
 
-            # Convert to flat indices
-            bc_indices = np.ravel_multi_index(bc_indices, grid_shape)
-            active_indices = np.ravel_multi_index(active_indices, grid_shape)
+            # Shift by origin (assuming origin is added to mask positions)
+            shifted_bc_coords = bc_coords - origin[:, None]  # Now relative to mask's local coords
 
-            # Find common rows
-            common = np.intersect1d(active_indices, bc_indices)
+            # Filter only those within mask bounds
+            valid_mask = ((shifted_bc_coords >= 0) & (shifted_bc_coords < np.array(mask.shape)[:, None])).all(axis=0)
+            shifted_bc_coords = shifted_bc_coords[:, valid_mask]
+
+            # Check which are active in the mask (vectorized, no large arrays)
+            if len(self.shape) == 2:
+                active_mask = mask[
+                    shifted_bc_coords[0],  # x
+                    shifted_bc_coords[1]   # y
+                ]
+            else:
+                active_mask = mask[
+                    shifted_bc_coords[0],  # x
+                    shifted_bc_coords[1],  # y
+                    shifted_bc_coords[2]   # z
+                ]
+            active_bc_coords = shifted_bc_coords[:, active_mask]
+
+            # Convert back to global indices
+            active_bc_coords += origin[:, None]
 
             # Append common points at this level to a list
-            if common.size == 0:
+            if active_bc_coords.size == 0:
                 bc_indices_list.append([])
             else:
-                active_bc_indices = np.unravel_index(common, grid_shape)
-                bc_indices_list.append([arr.tolist() for arr in active_bc_indices])
+                bc_indices_list.append([arr.tolist() for arr in active_bc_coords])
         return bc_indices_list
