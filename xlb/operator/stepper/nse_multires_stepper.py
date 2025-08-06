@@ -94,7 +94,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
     def prepare_coalescence_count(self, coalescence_factor, bc_mask):
         lattice_central_index = self.velocity_set.center_index
-        num_levels = coalescence_factor.get_grid().get_num_levels()
+        num_levels = coalescence_factor.get_grid().num_levels
 
         @neon.Container.factory(name="sum_kernel_by_level")
         def sum_kernel_by_level(level):
@@ -247,7 +247,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         """Initialize auxiliary data for boundary conditions that require it."""
         for bc in boundary_conditions:
             if bc.needs_aux_init and not bc.is_initialized_with_aux_data:
-                for level in range(bc_mask.get_grid().get_num_levels()):
+                for level in range(bc_mask.get_grid().num_levels):
                     # Initialize auxiliary data for each level
                     f_1 = bc.multires_aux_data_init(f_1, bc_mask, missing_mask, level=level, stream=0)
         return f_1
@@ -354,12 +354,12 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            num_levels = f_0_fd.get_grid().get_num_levels()
+            num_levels = f_0_fd.get_grid().num_levels
 
             def ll_collide_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
-                if level + 1 < f_0_fd.get_grid().get_num_levels():
+                if level + 1 < f_0_fd.get_grid().num_levels:
                     f_0_pn = loader.get_mres_write_handle(f_0_fd, neon.Loader.Operation.stencil_up)
                     f_1_pn = loader.get_mres_write_handle(f_1_fd, neon.Loader.Operation.stencil_up)
                 else:
@@ -430,7 +430,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            num_levels = f_0_fd.get_grid().get_num_levels()
+            num_levels = f_0_fd.get_grid().num_levels
 
             # if level != 0:
             #     # throw an exception
