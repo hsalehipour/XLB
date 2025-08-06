@@ -36,34 +36,22 @@ def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=Non
     Generate a makemesh mesh based on the provided voxel size in meters, domain multipliers, and padding values.
     """
     # Number of requested refinement levels
-    num_levels = 6
+    num_levels = 5
 
     # Domain multipliers for the full domain
     domainMultiplier = {
-        "-x": 3,
-        "x": 5,
-        "-y": 3,
-        "y": 3,
-        "-z": 3,
-        "z": 3,
+        "-x": 5,
+        "x": 8,
+        "-y": 5,
+        "y": 5,
+        "-z": 5,
+        "z": 5,
     }
 
     # Padding values to control voxel growth
-    padding_values = {
-        0: (4, 4, 4, 4, 4, 4),
-        1: (4, 4, 4, 4, 4, 4),
-        2: (10, 40, 10, 10, 10, 10),
-        3: (8, 20, 8, 8, 8, 8),
-        4: (8, 20, 8, 8, 8, 8),
-        5: (4, 4, 4, 4, 4, 4),
-        6: (4, 4, 4, 4, 4, 4),
-        7: (4, 4, 4, 4, 4, 4),
-        8: (4, 4, 4, 4, 4, 4),
-    }
-
     # padding_values = {
-        # 0: (15, 30, 15, 15, 15, 15),
-        # 1: (10, 40, 10, 10, 10, 10),
+        # 0: (4, 4, 4, 4, 4, 4),
+        # 1: (4, 4, 4, 4, 4, 4),
         # 2: (10, 40, 10, 10, 10, 10),
         # 3: (8, 20, 8, 8, 8, 8),
         # 4: (8, 20, 8, 8, 8, 8),
@@ -72,6 +60,18 @@ def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=Non
         # 7: (4, 4, 4, 4, 4, 4),
         # 8: (4, 4, 4, 4, 4, 4),
     # }
+
+    padding_values = {
+        0: (15, 30, 15, 15, 15, 15),
+        1: (10, 100, 10, 10, 10, 10),
+        2: (10, 40, 10, 10, 10, 10),
+        3: (8, 20, 8, 8, 8, 8),
+        4: (8, 20, 8, 8, 8, 8),
+        5: (4, 4, 4, 4, 4, 4),
+        6: (4, 4, 4, 4, 4, 4),
+        7: (4, 4, 4, 4, 4, 4),
+        8: (4, 4, 4, 4, 4, 4),
+    }
 
     # Load the mesh
     mesh = trimesh.load_mesh(stl_filename, process=False)
@@ -199,7 +199,7 @@ kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
 
 # Generate the mesh and body vertices
 stl_filename = "examples/cfd/stl-files/sphere.stl"
-script_name = "Sphere 1mm Distance"
+script_name = "Sphere 1mm"
 
 level_data, body_vertices, grid_shape_zip, partSize, actual_num_levels, projected_area_physical = generate_makemesh_mesh(
     stl_filename,
@@ -365,7 +365,7 @@ bc_body = HybridBC(
     bc_method="nonequilibrium_regularized",
     mesh_vertices=body_vertices,
     voxelization_method=MeshVoxelizationMethod.AABB,
-    use_mesh_distance=True
+    use_mesh_distance=False
 )
 
 # bc_top = HybridBC(bc_method="nonequilibrium_regularized", indices=top_indices, prescribed_value= (ulb,0.0,0.0))
@@ -422,7 +422,7 @@ except Exception as e:
 wp.synchronize()
 
 # Setup Momentum Transfer for Force Calculation
-# momentum_transfer = MultiresMomentumTransfer(bc_body, compute_backend=compute_backend)
+momentum_transfer = MultiresMomentumTransfer(bc_body, compute_backend=compute_backend)
 
 # Compute reference area using existing bc_mask processing
 fields_data = bc_mask_exporter.get_fields_data({"bc_mask": sim.bc_mask})
@@ -536,7 +536,7 @@ for step in range(num_steps):
     if step % print_interval == 0 or step == num_steps - 1:
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
         wp.synchronize()
-        # print_lift_drag(sim)
+        print_lift_drag(sim)
         end_time = time.time()
         elapsed = end_time - start_time
         total_lattice_updates = total_lattice_updates_per_step * steps_since_last_print
@@ -568,22 +568,22 @@ for step in range(num_steps):
             print(f"Error during file output at step {step}: {e}")
         wp.synchronize()
 
-# # Save drag and lift data to CSV
-# if len(drag_values) > 0:
-    # with open(os.path.join(output_dir, "drag_lift.csv"), 'w') as fd:
-        # fd.write("Step,Cd,Cl\n")
-        # for i, (cd, cl) in enumerate(drag_values):
-            # fd.write(f"{i * print_interval},{cd},{cl}\n")
-    # plot_drag_lift(drag_values, output_dir, print_interval)
+# Save drag and lift data to CSV
+if len(drag_values) > 0:
+    with open(os.path.join(output_dir, "drag_lift.csv"), 'w') as fd:
+        fd.write("Step,Cd,Cl\n")
+        for i, (cd, cl) in enumerate(drag_values):
+            fd.write(f"{i * print_interval},{cd},{cl}\n")
+    plot_drag_lift(drag_values, output_dir, print_interval)
 
-# # Calculate and print average Cd and Cl for the last 50%
-# drag_values_array = np.array(drag_values)
-# if len(drag_values) > 0:
-    # start_index = len(drag_values) // 2
-    # last_half = drag_values_array[start_index:, :]
-    # avg_cd = np.mean(last_half[:, 0])
-    # avg_cl = np.mean(last_half[:, 1])
-    # print(f"Average Drag Coefficient (Cd) for last 50%: {avg_cd:.6f}")
-    # print(f"Average Lift Coefficient (Cl) for last 50%: {avg_cl:.6f}")
-# else:
-    # print("No drag or lift data collected.")
+# Calculate and print average Cd and Cl for the last 50%
+drag_values_array = np.array(drag_values)
+if len(drag_values) > 0:
+    start_index = len(drag_values) // 2
+    last_half = drag_values_array[start_index:, :]
+    avg_cd = np.mean(last_half[:, 0])
+    avg_cl = np.mean(last_half[:, 1])
+    print(f"Average Drag Coefficient (Cd) for last 50%: {avg_cd:.6f}")
+    print(f"Average Lift Coefficient (Cl) for last 50%: {avg_cl:.6f}")
+else:
+    print("No drag or lift data collected.")
