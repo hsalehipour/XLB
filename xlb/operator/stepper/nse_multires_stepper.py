@@ -680,15 +680,15 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
         @neon.Container.factory(name="finest_fused_pull")
         def finest_fused_pull(
-                level: int,
-                f_0_fd: Any,
-                f_1_fd: Any,
-                bc_mask_fd: Any,
-                missing_mask_fd: Any,
-                omega: Any,
-                timestep: Any,
-                is_f1_the_explosion_src_field: bool,
-                is_f1_the_coalescence_dst_field: bool,
+            level: int,
+            f_0_fd: Any,
+            f_1_fd: Any,
+            bc_mask_fd: Any,
+            missing_mask_fd: Any,
+            omega: Any,
+            timestep: Any,
+            is_f1_the_explosion_src_field: bool,
+            is_f1_the_coalescence_dst_field: bool,
         ):
             if level != 0:
                 # throw an exception
@@ -703,7 +703,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             # module op to define odd of even iteration
             # od_or_even = wp.module("odd_or_even", "even")
 
-            def ll_stream_coarse(loader: neon.Loader):
+            def finest_fused_pull_launcher(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
                 if level + 1 < f_0_fd.get_grid().get_num_levels():
@@ -720,7 +720,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 _w = self.velocity_set.w
 
                 @wp.func
-                def cl_stream_coarse(index: Any):
+                def finest_fused_pull_kernel(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
                     if _boundary_id == wp.uint8(255):
                         return
@@ -744,8 +744,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                         has_ngh_at_same_level = wp.bool(False)
-                        accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0),
-                                                       has_ngh_at_same_level)
+                        accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
 
                         # NO finer ngh. in the pull direction (opposite of l)
                         if not has_ngh_at_same_level:
@@ -773,8 +772,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                     _f_post_stream[l] = exploded_pop
 
                     # do non mres post-streaming corrections
-                    _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn,
-                                              _f_post_collision, _f_post_stream, True)
+                    _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
 
                     _rho, _u = self.macroscopic.neon_functional(_f_post_stream)
                     _feq = self.equilibrium.neon_functional(_rho, _u)
@@ -782,8 +780,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                     # Apply post-collision boundary conditions
                     _f_post_collision = apply_bc(
-                        index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_stream,
-                        _f_post_collision, False
+                        index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_stream, _f_post_collision, False
                     )
 
                     # Apply auxiliary recovery for boundary conditions (swapping) before overwriting f_1
@@ -801,9 +798,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                         wp.neon_write(f_1_pn, index, l, _f_post_collision[l])
 
-                loader.declare_kernel(cl_stream_coarse)
+                loader.declare_kernel(finest_fused_pull_kernel)
 
-            return ll_stream_coarse
+            return finest_fused_pull_launcher
 
         @neon.Container.factory(name="stream_coarse_step_C")
         def stream_coarse_step_C(
@@ -862,22 +859,37 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             "stream_coarse_step_A": stream_coarse_step_A,
             "stream_coarse_step_B": stream_coarse_step_B,
             "stream_coarse_step_C": stream_coarse_step_C,
-            "finest_fused_pull": finest_fused_pull,  # Placeholder for future use
+            "finest_fused_pull": finest_fused_pull,
         }
 
     def launch_container(self, streamId, op_name, mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep):
         self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep).run(0)
 
-    def add_to_app(self, app, op_name, mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep,
+    def add_to_app(
+        self,
+        app,
+        op_name,
+        mres_level,
+        f_0,
+        f_1,
+        bc_mask,
+        missing_mask,
+        omega,
+        timestep,
         is_f1_the_explosion_src_field: bool = None,
-        is_f1_the_coalescence_dst_field    : bool = None):
+        is_f1_the_coalescence_dst_field: bool = None,
+    ):
         nvtx.push_range(f"New Container {op_name}", color="yellow")
         if is_f1_the_explosion_src_field is None:
             app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep))
         else:
-            app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep,
-                                                    is_f1_the_explosion_src_field, is_f1_the_coalescence_dst_field))
+            app.append(
+                self.neon_container[op_name](
+                    mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep, is_f1_the_explosion_src_field, is_f1_the_coalescence_dst_field
+                )
+            )
         nvtx.pop_range()
+
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_launch(self, f_0, f_1, bc_mask, missing_mask, omega, timestep):
         c = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, timestep)

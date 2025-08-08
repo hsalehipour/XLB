@@ -9,6 +9,7 @@ class MresPerfOptimizationType(Enum):
     Supports parsing from either the enum member name (case-insensitive)
     or its integer value, and provides a method to build the CLI parser.
     """
+
     NAIVE_COLLIDE_STREAM = 0
     FUSION_AT_FINEST = 1
 
@@ -39,9 +40,7 @@ class MresPerfOptimizationType(Enum):
             return MresPerfOptimizationType(int_value)
         except (ValueError, KeyError):
             valid_options = ", ".join(f"{member.name}({member.value})" for member in MresPerfOptimizationType)
-            raise argparse.ArgumentTypeError(
-                f"Invalid OptimizationType {value!r}. Choose from: {valid_options}."
-            )
+            raise argparse.ArgumentTypeError(f"Invalid OptimizationType {value!r}. Choose from: {valid_options}.")
 
     def __str__(self) -> str:
         """
@@ -57,13 +56,12 @@ class MresPerfOptimizationType(Enum):
         Returns:
             A configured ArgumentParser instance.
         """
-        parser = argparse.ArgumentParser(
-            description="Run the LBM multiresolution simulation with specified optimizations."
-        )
+        parser = argparse.ArgumentParser(description="Run the LBM multiresolution simulation with specified optimizations.")
         # Dynamically generate help text from enum members
         valid_options = ", ".join(f"{member.name}({member.value})" for member in MresPerfOptimizationType)
         parser.add_argument(
-            "-o", "--optimization",
+            "-o",
+            "--optimization",
             type=MresPerfOptimizationType.from_string,
             default=MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
             help=f"Select optimization strategy: {valid_options}",
