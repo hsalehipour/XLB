@@ -1,5 +1,5 @@
 import argparse
-from enum import Enum
+from enum import Enum, auto
 
 
 class MresPerfOptimizationType(Enum):
@@ -10,8 +10,8 @@ class MresPerfOptimizationType(Enum):
     or its integer value, and provides a method to build the CLI parser.
     """
 
-    NAIVE_COLLIDE_STREAM = 0
-    FUSION_AT_FINEST = 1
+    NAIVE_COLLIDE_STREAM = auto()
+    FUSION_AT_FINEST = auto()
 
     @staticmethod
     def from_string(value: str) -> "MresPerfOptimizationType":

@@ -206,10 +206,10 @@ bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounc
 # bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="front"))
 # bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
-bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
-# bc_sphere = HybridBC(
-#     bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=False
-# )
+# bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB)
+bc_sphere = HybridBC(
+    bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod.AABB, use_mesh_distance=True
+)
 
 boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
@@ -235,11 +235,12 @@ sim = xlb.helper.MultiresSimulationManager(
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
     initializer=initializer,
+    mres_perf_opt=xlb.mres_perf_optimization_type.MresPerfOptimizationType.FUSION_AT_FINEST,
 )
 
 # Setup Momentum Transfer for Force Calculation
-bc_sphre = boundary_conditions[-1]
-momentum_transfer = MultiresMomentumTransfer(bc_sphere, compute_backend=compute_backend)
+bc_sphere = boundary_conditions[-1]
+momentum_transfer = MultiresMomentumTransfer(bc_sphere, mres_perf_opt=sim.mres_perf_opt, compute_backend=compute_backend)
 
 
 def print_lift_drag(sim):

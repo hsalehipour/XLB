@@ -8,52 +8,7 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.force import MomentumTransfer
-
-
-class MultiresFetchPopulations(Operator):
-    """
-    This operator is used to get the post-collision and post-streaming populations
-    Note that for dense and single resolution simulations in XLB, the order of operations in the stepper is "stream-then-collide".
-    Therefore, f_0 represents the post-collision values and post_streaming values of the current time step need to be reconstructed
-    by applying the streaming and boundary conditions. These populations are readily available in XLB when using multi-resolution
-    grids because the mres stepper relies on "collide-then-stream".
-    """
-
-    def __init__(
-        self,
-        velocity_set: VelocitySet = None,
-        precision_policy: PrecisionPolicy = None,
-        compute_backend: ComputeBackend = None,
-    ):
-        if compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
-            raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {compute_backend} backend.")
-
-        # Call the parent constructor
-        super().__init__(
-            velocity_set,
-            precision_policy,
-            compute_backend,
-        )
-
-    def _construct_neon(self):
-        _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
-
-        @wp.func
-        def functional(
-            index: Any,
-            f_0: Any,
-            f_1: Any,
-            _missing_mask: Any,
-        ):
-            # Get the distribution function
-            f_post_collision = _f_vec()
-            f_post_stream = _f_vec()
-            for l in range(self.velocity_set.q):
-                f_post_stream[l] = self.compute_dtype(self.read_field(f_0, index, l))
-                f_post_collision[l] = self.compute_dtype(self.read_field(f_1, index, l))
-            return f_post_collision, f_post_stream
-
-        return functional, None
+from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 class MultiresMomentumTransfer(MomentumTransfer):
@@ -65,22 +20,38 @@ class MultiresMomentumTransfer(MomentumTransfer):
     def __init__(
         self,
         no_slip_bc_instance,
+        mres_perf_opt=MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
+        from xlb.operator.force.momentum_transfer import LBMOperationSequence
+
         if compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {compute_backend} backend.")
 
-        # Call super
-        super().__init__(no_slip_bc_instance, velocity_set, precision_policy, compute_backend)
+        # Set the sequence of operations based on the performance optimization type
+        if mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
+            operation_sequence = LBMOperationSequence.STREAM_THEN_COLLIDE
+        elif mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
+            operation_sequence = LBMOperationSequence.COLLIDE_THEN_STREAM
+        else:
+            raise ValueError(f"Unknown performance optimization type: {mres_perf_opt}")
 
-        # Define the **minimal** stepper operator needed for the multi-res momentum transfer
-        self.fetcher = MultiresFetchPopulations(
-            velocity_set=velocity_set,
-            precision_policy=precision_policy,
-            compute_backend=compute_backend,
+        # Check if the performance optimization type is compatible with the use of mesh distance
+        if mres_perf_opt != MresPerfOptimizationType.FUSION_AT_FINEST:
+            assert not no_slip_bc_instance.needs_mesh_distance, (
+                "MultiresMomentumTransfer operator does not support mesh distance for performance optimization other than fusion at the finest level."
+            )
+
+        # Print a warning to the user about the boundary voxels
+        print(
+            "WARNING! make sure boundary voxels are all at the same level and not among the transition regions from one level to another. "
+            "Otherwise, the results of force calculation are not correct!\n"
         )
+
+        # Call super
+        super().__init__(no_slip_bc_instance, operation_sequence, velocity_set, precision_policy, compute_backend)
 
     def _construct_neon(self):
         # Use the warp functional for the NEON backend

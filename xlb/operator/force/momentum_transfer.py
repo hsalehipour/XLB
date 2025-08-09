@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import jit, lax
 import warp as wp
 from typing import Any
+from enum import Enum, auto
 
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -10,6 +11,18 @@ from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.stream import Stream
 import neon
+
+
+# Enum used to keep track of LBM operations
+class LBMOperationSequence(Enum):
+    """
+    Note that for dense and single resolution simulations in XLB, the order of operations in the stepper is "stream-then-collide".
+    For MultiRes stepper however the order of operations is always "collide-then-stream" except at the finest level when the FUSION_AT_FINEST optimization is used.
+    In that case the order of operations is "stream-then-collide" ONLY at the finest level.
+    """
+
+    STREAM_THEN_COLLIDE = auto()
+    COLLIDE_THEN_STREAM = auto()
 
 
 class FetchPopulations(Operator):
@@ -24,12 +37,14 @@ class FetchPopulations(Operator):
     def __init__(
         self,
         no_slip_bc_instance,
+        operation_sequence: LBMOperationSequence = LBMOperationSequence.STREAM_THEN_COLLIDE,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
         self.no_slip_bc_instance = no_slip_bc_instance
         self.stream = Stream(velocity_set, precision_policy, compute_backend)
+        self.operation_sequence = operation_sequence
 
         if compute_backend == ComputeBackend.WARP:
             self.stream_functional = self.stream.warp_functional
@@ -58,7 +73,7 @@ class FetchPopulations(Operator):
         _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
 
         @wp.func
-        def functional(
+        def functional_stream_then_collide(
             index: Any,
             f_0: Any,
             f_1: Any,
@@ -75,7 +90,27 @@ class FetchPopulations(Operator):
             f_post_stream = self.bc_functional(index, timestep, _missing_mask, f_0, f_1, f_post_collision, f_post_stream)
             return f_post_collision, f_post_stream
 
-        return functional, None
+        @wp.func
+        def functional_collide_then_stream(
+            index: Any,
+            f_0: Any,
+            f_1: Any,
+            _missing_mask: Any,
+        ):
+            # Get the distribution function
+            f_post_collision = _f_vec()
+            f_post_stream = _f_vec()
+            for l in range(self.velocity_set.q):
+                f_post_stream[l] = self.compute_dtype(self.read_field(f_0, index, l))
+                f_post_collision[l] = self.compute_dtype(self.read_field(f_1, index, l))
+            return f_post_collision, f_post_stream
+
+        if self.operation_sequence == LBMOperationSequence.STREAM_THEN_COLLIDE:
+            return functional_stream_then_collide, None
+        elif self.operation_sequence == LBMOperationSequence.COLLIDE_THEN_STREAM:
+            return functional_collide_then_stream, None
+        else:
+            raise ValueError(f"Unknown operation sequence: {self.operation_sequence}")
 
     def _construct_neon(self):
         # Use the warp functional for the NEON backend
@@ -106,16 +141,19 @@ class MomentumTransfer(Operator):
     def __init__(
         self,
         no_slip_bc_instance,
+        operation_sequence: LBMOperationSequence = LBMOperationSequence.STREAM_THEN_COLLIDE,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
         # Assign the no-slip boundary condition instance
         self.no_slip_bc_instance = no_slip_bc_instance
+        self.operation_sequence = operation_sequence
 
         # Define the needed for the momentum transfer
         self.fetcher = FetchPopulations(
-            no_slip_bc_instance,
+            no_slip_bc_instance=self.no_slip_bc_instance,
+            operation_sequence=self.operation_sequence,
             velocity_set=velocity_set,
             precision_policy=precision_policy,
             compute_backend=compute_backend,
