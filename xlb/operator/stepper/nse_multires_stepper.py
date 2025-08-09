@@ -488,11 +488,11 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 # COULD we have a ngh. at the courser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
-                                    has_a_courser_ngh = wp.bool(False)
+                                    has_a_coarser_ngh = wp.bool(False)
                                     exploded_pop = wp.neon_lbm_read_coarser_ngh(
-                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_courser_ngh
+                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
                                     )
-                                    if has_a_courser_ngh:
+                                    if has_a_coarser_ngh:
                                         # Full state:
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
@@ -640,11 +640,11 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 # COULD we have a ngh. at the courser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
-                                    has_a_courser_ngh = wp.bool(False)
+                                    has_a_coarser_ngh = wp.bool(False)
                                     exploded_pop = wp.neon_lbm_read_coarser_ngh(
-                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_courser_ngh
+                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
                                     )
-                                    if has_a_courser_ngh:
+                                    if has_a_coarser_ngh:
                                         # Full state:
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
@@ -688,7 +688,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: Any,
             is_f1_the_explosion_src_field: bool,
-            is_f1_the_coalescence_dst_field: bool,
         ):
             if level != 0:
                 # throw an exception
@@ -752,16 +751,16 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # COULD we have a ngh. at the courser level?
                             if wp.neon_has_parent(f_0_pn, index):
                                 # YES halo cell on top of us
-                                has_a_courser_ngh = wp.bool(False)
+                                has_a_coarser_ngh = wp.bool(False)
                                 if is_f1_the_explosion_src_field:
                                     exploded_pop = wp.neon_lbm_read_coarser_ngh(
-                                        f_1_pn, index, pull_direction, l, self.compute_dtype(0), has_a_courser_ngh
+                                        f_1_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
                                     )
                                 else:
                                     exploded_pop = wp.neon_lbm_read_coarser_ngh(
-                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_courser_ngh
+                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
                                     )
-                                if has_a_courser_ngh:
+                                if has_a_coarser_ngh:
                                     # Full state:
                                     # NO finer ngh. in the pull direction (opposite of l)
                                     # NO ngh. at the same level
@@ -877,17 +876,12 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         omega,
         timestep,
         is_f1_the_explosion_src_field: bool = None,
-        is_f1_the_coalescence_dst_field: bool = None,
     ):
         nvtx.push_range(f"New Container {op_name}", color="yellow")
         if is_f1_the_explosion_src_field is None:
             app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep))
         else:
-            app.append(
-                self.neon_container[op_name](
-                    mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep, is_f1_the_explosion_src_field, is_f1_the_coalescence_dst_field
-                )
-            )
+            app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep, is_f1_the_explosion_src_field))
         nvtx.pop_range()
 
     @Operator.register_backend(ComputeBackend.NEON)
