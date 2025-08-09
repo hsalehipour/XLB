@@ -104,17 +104,17 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
         precision_policy=precision_policy,
         velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend),
     )
-    # if compute_backend == ComputeBackend.NEON:
-    #
-    #     rho = grid.create_field(cardinality=1, dtype=precision_policy.store_precision)
-    #     u = grid.create_field(cardinality=3, dtype=precision_policy.store_precision)
-    #
-    #     macro(f_0, rho, u)
-    #
-    #     wp.synchronize()
-    #     u.update_host(0)
-    #     wp.synchronize()
-    #     u.export_vti(f"{"mlups"}{num_steps}.vti", "u")
+    if compute_backend == ComputeBackend.NEON:
+
+        rho = grid.create_field(cardinality=1, dtype=precision_policy.store_precision)
+        u = grid.create_field(cardinality=3, dtype=precision_policy.store_precision)
+
+        macro(f_0, rho, u)
+
+        wp.synchronize()
+        u.update_host(0)
+        wp.synchronize()
+        u.export_vti(f"{"mlups"}{num_steps}.vti", "u")
 
     return elapsed_time
 

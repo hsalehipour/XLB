@@ -107,8 +107,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         return f_0, f_1, bc_mask, missing_mask
 
-    @classmethod
-    def _process_boundary_conditions(cls, boundary_conditions, f_1, bc_mask, missing_mask):
+    def _process_boundary_conditions(self, boundary_conditions, f_1, bc_mask, missing_mask):
         """Process boundary conditions and update boundary masks."""
 
         # Check for boundary condition overlaps
@@ -119,6 +118,7 @@ class IncompressibleNavierStokesStepper(Stepper):
             velocity_set=DefaultConfig.velocity_set,
             precision_policy=DefaultConfig.default_precision_policy,
             compute_backend=DefaultConfig.default_backend,
+            grid=self.grid
         )
 
         # Split boundary conditions by type
@@ -127,6 +127,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         # Process indices-based boundary conditions
         if bc_with_indices:
+            grid = self.get_grid()
             bc_mask, missing_mask = indices_masker(bc_with_indices, bc_mask, missing_mask)
 
         # Process mesh-based boundary conditions for 3D
@@ -468,7 +469,7 @@ class IncompressibleNavierStokesStepper(Stepper):
             def nse_stepper_ll(loader: neon.Loader):
                 loader.set_grid(bc_mask_fd.get_grid())
 
-                f_0_pn = loader.get_read_handle(f_0_fd)
+                f_0_pn = loader.get_read_handle(f_0_fd, operation=neon.Loader.Operation.stencil)
                 bc_mask_pn = loader.get_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_read_handle(missing_mask_fd)
 
@@ -518,7 +519,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
     def prepare_skeleton(self, f_0, f_1, bc_mask, missing_mask, omega):
         grid = f_0.get_grid()
-        bk = grid.get_backend()
+        bk = grid.backend
         self.neon_skeleton = {'odd': {}, 'even': {}}
         self.neon_skeleton['odd']['container'] = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, 0)
         self.neon_skeleton['even']['container'] = self.neon_container(f_1, f_0, bc_mask, missing_mask, omega, 1)
