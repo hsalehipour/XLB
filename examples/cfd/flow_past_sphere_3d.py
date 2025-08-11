@@ -20,7 +20,7 @@ import time
 
 omega = 1.6
 grid_shape = (512 // 2, 128 // 2, 128 // 2)
-compute_backend = ComputeBackend.WARP
+compute_backend = ComputeBackend.JAX
 precision_policy = PrecisionPolicy.FP32FP32
 velocity_set = xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend)
 u_max = 0.04
@@ -127,14 +127,29 @@ macro = Macroscopic(
     velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=ComputeBackend.JAX),
 )
 
+# Setup Momentum Transfer for Force Calculation
+from xlb.operator.force.momentum_transfer import MomentumTransfer
+
+momentum_transfer = MomentumTransfer(bc_sphere, compute_backend=compute_backend)
+sphere_cross_section = np.pi * sphere_radius**2
+
 
 # Post-Processing Function
-def post_process(step, f_current):
-    # Convert to JAX array if necessary
-    if not isinstance(f_current, jnp.ndarray):
-        f_current = wp.to_jax(f_current)
+def post_process(step, f_0, f_1):
+    # Compute lift and drag
+    boundary_force = momentum_transfer(f_0, f_1, bc_mask, missing_mask)
+    drag = boundary_force[0]  # x-direction
+    lift = boundary_force[2]
+    cd = 2.0 * drag / (u_max**2 * sphere_cross_section)
+    cl = 2.0 * lift / (u_max**2 * sphere_cross_section)
+    print(f"CD={cd}, CL={cl}")
 
-    rho, u = macro(f_current)
+    # Convert to JAX array if necessary
+    if not isinstance(f_0, jnp.ndarray):
+        f_0 = wp.to_jax(f_0)
+        wp.synchronize()
+
+    rho, u = macro(f_0)
 
     # Remove boundary cells
     u = u[:, 1:-1, 1:-1, 1:-1]
@@ -164,7 +179,7 @@ for step in range(num_steps):
     if step % post_process_interval == 0 or step == num_steps - 1:
         if compute_backend == ComputeBackend.WARP:
             wp.synchronize()
-        post_process(step, f_0)
+        post_process(step, f_0, f_1)
         end_time = time.time()
         elapsed = end_time - start_time
         print(f"Completed step {step}. Time elapsed for {post_process_interval} steps: {elapsed:.6f} seconds.")

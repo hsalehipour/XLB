@@ -2,7 +2,7 @@ import neon
 import warp as wp
 from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
 from xlb.operator.macroscopic import MultiresMacroscopic
-from xlb.mres_perf_ptimization_type import MresPerfOptimizationType
+from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
@@ -11,15 +11,15 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
     """
 
     def __init__(
-            self,
-            omega,
-            grid,
-            boundary_conditions=[],
-            collision_type="BGK",
-            forcing_scheme="exact_difference",
-            force_vector=None,
-            initializer=None,
-            mres_perf_opt: MresPerfOptimizationType = MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
+        self,
+        omega,
+        grid,
+        boundary_conditions=[],
+        collision_type="BGK",
+        forcing_scheme="exact_difference",
+        force_vector=None,
+        initializer=None,
+        mres_perf_opt: MresPerfOptimizationType = MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
     ):
         super().__init__(grid, boundary_conditions, collision_type, forcing_scheme, force_vector)
 
@@ -30,8 +30,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         # Create fields
         self.rho = grid.create_field(cardinality=1, dtype=self.precision_policy.store_precision)
         self.u = grid.create_field(cardinality=3, dtype=self.precision_policy.store_precision)
-        self.coalescence_factor = grid.create_field(cardinality=self.velocity_set.q,
-                                                    dtype=self.precision_policy.store_precision)
+        self.coalescence_factor = grid.create_field(cardinality=self.velocity_set.q, dtype=self.precision_policy.store_precision)
 
         for level in range(self.count_levels):
             self.u.fill_run(level, 0.0, 0)
@@ -107,10 +106,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        def recursion_fused_finest(level,
-                                   app,
-                                   is_self_f1_the_explosion_src_field,
-                                   is_self_f1_the_coalescence_dst_field):
+        def recursion_fused_finest(level, app):
             if level < 0:
                 return
 
@@ -127,8 +123,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     missing_mask=self.missing_mask,
                     omega=self.omega,
                     timestep=0,
-                    is_f1_the_explosion_src_field=is_self_f1_the_explosion_src_field,
-                    is_f1_the_coalescence_dst_field=is_self_f1_the_coalescence_dst_field,
+                    is_f1_the_explosion_src_field=True,
                 )
                 self.add_to_app(
                     app=app,
@@ -140,8 +135,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     missing_mask=self.missing_mask,
                     omega=self.omega,
                     timestep=0,
-                    is_f1_the_explosion_src_field=not is_self_f1_the_explosion_src_field,
-                    is_f1_the_coalescence_dst_field=not is_self_f1_the_coalescence_dst_field,
+                    is_f1_the_explosion_src_field=False,
                 )
                 return
 
@@ -165,13 +159,10 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
-                recursion_fused_finest(level - 1, app, is_self_f1_the_explosion_src_field=True,
-                                       is_self_f1_the_coalescence_dst_field=True)
+                recursion_fused_finest(level - 1, app)
             else:
-                recursion_fused_finest(level - 1, app, is_self_f1_the_explosion_src_field=None,
-                                       is_self_f1_the_coalescence_dst_field=None)
-                recursion_fused_finest(level - 1, app, is_self_f1_the_explosion_src_field=None,
-                                       is_self_f1_the_coalescence_dst_field=None)
+                recursion_fused_finest(level - 1, app)
+                recursion_fused_finest(level - 1, app)
             # Important: swapping of f_0 and f_1 is done here
             print(f"RECURSION Level {level}, stream_coarse_step_ABC")
             self.add_to_app(
@@ -189,10 +180,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         if self.mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
             recursion_reference(self.count_levels - 1, app=self.app)
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
-            recursion_fused_finest(self.count_levels - 1,
-                                   app=self.app,
-                                   is_self_f1_the_coalescence_dst_field=None,
-                                   is_self_f1_the_explosion_src_field=None)
+            recursion_fused_finest(self.count_levels - 1, app=self.app)
         else:
             raise ValueError(f"Unknown optimization level: {self.opt_level}")
 
