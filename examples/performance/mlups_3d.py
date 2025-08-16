@@ -21,13 +21,20 @@ def parse_arguments():
     parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation")
     parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
     parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
+    parser.add_argument("gpu_devices",  type=int, nargs="+",  default=None, help="List of the CUDA devices to use (e.g., -gpu_devices 0 1 2). This is only used for Neon backend.")
+    # add a flat to choose between 19 or 27 velocity set
+    parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
+    # add a flat to choose between multi-gpu occ options based on the neon occ: 
+    parser.add_argument("--occ", type=str, default="standard", help="Occupancy for the simulation (standard, extended, twoWayExtended, none) (default: standard)")
+
+
     return parser.parse_args()
 
 
 def setup_simulation(args):
     if args.compute_backend == "jax":
         compute_backend = ComputeBackend.JAX
-    elif args.compute_backend == "warp":
+    elif args.compute_backend == "warp":    
         compute_backend = ComputeBackend.WARP
     elif args.compute_backend == "neon":
         compute_backend = ComputeBackend.NEON
@@ -48,7 +55,10 @@ def setup_simulation(args):
         default_backend=compute_backend,
         default_precision_policy=precision_policy,
     )
-    return compute_backend, precision_policy
+
+
+
+    return compute_backend, precision_policy, device_list
 
 
 def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
@@ -114,7 +124,7 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
         wp.synchronize()
         u.update_host(0)
         wp.synchronize()
-        u.export_vti(f"{"mlups"}{num_steps}.vti", "u")
+        u.export_vti(f"mlups_{num_steps}.vti", "u")
 
     return elapsed_time
 
