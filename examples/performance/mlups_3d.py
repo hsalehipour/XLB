@@ -21,12 +21,22 @@ def parse_arguments():
     parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation")
     parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
     parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
-    parser.add_argument("--gpu_devices",  type=int, nargs="+",  default=None, help="List of the CUDA devices to use (e.g., --gpu_devices 0 1 2). This is only used for Neon backend.")
+    parser.add_argument("--gpu_devices", type=str, default=None, help="List of the CUDA devices to use (e.g., --gpu_devices=[0,1,2]). This is only used for Neon backend.")
     # add a flat to choose between 19 or 27 velocity set
     parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
     # add a flat to choose between multi-gpu occ options based on the neon occ: 
     parser.add_argument("--occ", type=str, default="standard", help="Overlapping Communication and Computation option (standard, extended, twoWayExtended, none) (default: standard)")
     args = parser.parse_args()
+    
+    # Parse gpu_devices string to list
+    if args.gpu_devices is not None:
+        try:
+            import ast
+            args.gpu_devices = ast.literal_eval(args.gpu_devices)
+            if not isinstance(args.gpu_devices, list):
+                args.gpu_devices = [args.gpu_devices]  # Handle single integer case
+        except (ValueError, SyntaxError):
+            raise ValueError("Invalid gpu_devices format. Use format like [0,1,2] or [0]")
     
     # Checking the compute backend
     compute_backend = None
@@ -74,8 +84,31 @@ def parse_arguments():
         velocity_set = xlb.velocity_set.D3Q27(precision_policy=args.precision_policy, compute_backend=compute_backend)
     args.velocity_set = velocity_set
 
+    print_args(args)
+
     return args
 
+def print_args(args):
+    # Print simulation configuration
+    print("=" * 60)
+    print("           3D LATTICE BOLTZMANN SIMULATION CONFIG")
+    print("=" * 60)
+    print(f"Grid Size:           {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
+    print(f"Total Lattice Points: {args.cube_edge**3:,}")
+    print(f"Time Steps:          {args.num_steps:,}")
+    print(f"Compute Backend:     {args.compute_backend.name}")
+    print(f"Precision Policy:    {args.precision}")
+    print(f"Velocity Set:        {args.velocity_set.__class__.__name__}")
+
+    if args.compute_backend.name == "NEON":
+        print(f"GPU Devices:         {args.gpu_devices}")
+        # Convert the neon OCC enum back to string for display
+        occ_display = str(args.occ).split('.')[-1] if hasattr(args.occ, '__class__') else args.occ
+        print(f"OCC Strategy:        {occ_display}")
+
+    print("=" * 60)
+    print("Starting simulation...")
+    print()
 
 def init_xlb(args):
     xlb.init(
@@ -170,6 +203,8 @@ def calculate_mlups(cube_edge, num_steps, elapsed_time):
 args = parse_arguments()
 compute_backend, precision_policy, options = init_xlb(args)
 grid_shape = (args.cube_edge, args.cube_edge, args.cube_edge)
+
+
 
 elapsed_time = run_simulation(compute_backend=compute_backend, precision_policy=precision_policy, grid_shape=grid_shape, num_steps=args.num_steps, options=options)
 
