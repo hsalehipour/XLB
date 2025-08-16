@@ -25,7 +25,7 @@ def parse_arguments():
     # add a flat to choose between 19 or 27 velocity set
     parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
     # add a flat to choose between multi-gpu occ options based on the neon occ: 
-    parser.add_argument("--occ", type=str, default="standard", help="Overlapping Communication and Computation option (standard, extended, twoWayExtended, none) (default: standard)")
+    parser.add_argument("--occ", type=str, default="standard", help="Overlapping Communication and Computation option (standard, none) (default: standard)")
     parser.add_argument("--report", action="store_true", help="Generate a neon report file (default: disabled)")
     parser.add_argument("--export_final_velocity", action="store_true", help="Export the final velocity field to a vti file (default: disabled)")
     parser.add_argument("--measure_scalability", action="store_true", help="Measure scalability of the simulation (default: disabled)")
@@ -43,7 +43,7 @@ def parse_arguments():
         except (ValueError, SyntaxError):
             raise ValueError("Invalid gpu_devices format. Use format like [0,1,2] or [0]")
     
-    # Checking the compute backend
+    # Checking the compute backend and covert it to the right type
     compute_backend = None
     if args.compute_backend == "jax":
         compute_backend = ComputeBackend.JAX
@@ -53,16 +53,15 @@ def parse_arguments():
         compute_backend = ComputeBackend.NEON
     else:
         raise ValueError("Invalid compute backend specified. Use 'jax', 'warp', or 'neon'.")
-    
     args.compute_backend = compute_backend 
 
     # Checking OCC
-    if args.occ not in ["standard", "extended", "twoWayExtended", "none"]:
-        raise ValueError("Invalid occupancy option. Use 'standard', 'extended', 'twoWayExtended', or 'none'.")
-    if args.gpu_devices is None and args.compute_backend == "neon":
+    if args.occ not in ["standard", "none"]:
+        raise ValueError("Invalid occupancy option. Use 'standard', or 'none'.")
+    if args.gpu_devices is None and args.compute_backend == ComputeBackend.NEON:
         print("[Warning] No GPU devices specified. Using default device 0.")
         args.gpu_devices = [0]
-    if args.compute_backend == "neon":
+    if args.compute_backend == ComputeBackend.NEON:
         import neon
         occ = neon.SkeletonConfig.OCC.from_string(args.occ)
         args.occ = occ
@@ -442,7 +441,7 @@ def report(args, stats):
     report.add_member('elapsed_time', stats['mean_elapsed_time'])
     report.add_member('mlups', stats['mean_mlups'])
     
-    report.add_member('occ', args.occ)
+    report.add_member('occ', (args.occ.to_string() ))
     report.add_member_vector('gpu_devices', args.gpu_devices)
     report.add_member('num_devices', len(args.gpu_devices))
     report.add_member('measure_scalability', args.measure_scalability)

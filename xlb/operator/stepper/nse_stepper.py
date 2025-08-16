@@ -471,7 +471,11 @@ class IncompressibleNavierStokesStepper(Stepper):
             def nse_stepper_ll(loader: neon.Loader):
                 loader.set_grid(bc_mask_fd.get_grid())
 
-                f_0_pn = loader.get_read_handle(f_0_fd, operation=neon.Loader.Operation.stencil)
+                f_0_pn = loader.get_read_handle(
+                    f_0_fd, 
+                    operation=neon.Loader.Operation.stencil, 
+                    discretization = neon.Loader.Discretization.lattice,
+                    )
                 bc_mask_pn = loader.get_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_read_handle(missing_mask_fd)
 
@@ -525,11 +529,23 @@ class IncompressibleNavierStokesStepper(Stepper):
         self.neon_skeleton = {'odd': {}, 'even': {}}
         self.neon_skeleton['odd']['container'] = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, 0)
         self.neon_skeleton['even']['container'] = self.neon_container(f_1, f_0, bc_mask, missing_mask, omega, 1)
-
+        # check if 'occ' is a valid key
+        if 'occ' not in self.backend_config:
+            occ = neon.SkeletonConfig.none()
+        else:
+            occ = self.backend_config['occ']
+            # check that occ is of type neon.SkeletonConfig.OCC
+            if not isinstance(occ, neon.SkeletonConfig.OCC):
+                print(type(occ))
+                raise ValueError("occ must be of type neon.SkeletonConfig.OCC")
+        
         for key in self.neon_skeleton:
             self.neon_skeleton[key]['app'] = [self.neon_skeleton[key]['container']]
             self.neon_skeleton[key]['skeleton'] = neon.Skeleton(backend=bk)
-            self.neon_skeleton[key]['skeleton'].sequence("mres_nse_stepper", self.neon_skeleton[key]['app'])
+            self.neon_skeleton[key]['skeleton'].sequence(
+                name = "mres_nse_stepper", 
+                containers=self.neon_skeleton[key]['app'],
+                occ = occ)
 
         self.sk = [self.neon_skeleton['odd']['skeleton'],
                    self.neon_skeleton['even']['skeleton']]
