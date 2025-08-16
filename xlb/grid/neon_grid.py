@@ -3,14 +3,38 @@ import neon
 from .grid import Grid
 from xlb.precision_policy import Precision
 from xlb.compute_backend import ComputeBackend
-from typing import Literal
+from typing import Literal, List
 from xlb import DefaultConfig
 
 
 class NeonGrid(Grid):
-    def __init__(self, shape, velocity_set):
+    def __init__(self,
+                 shape,  # bounding box of the domain
+                 velocity_set,  # velocity set for the grid
+                 backend_config = None,
+                 ):
         from .warp_grid import WarpGrid
 
+        if backend_config is None:
+            backend_config = {
+                'device_list': [0],
+                'skeleton_config': neon.SkeletonConfig.none(),
+            }
+
+        # check that the config dictionary has the required keys
+        required_keys = ['device_list']
+        for key in required_keys:
+            if key not in backend_config:
+                raise ValueError(f"backend_config must contain a '{key}' key")
+        
+        #check that the device list is a list of integers
+        if not isinstance(backend_config['device_list'], list):
+            raise ValueError(f"backend_config['device_list'] must be a list of integers")
+        for device in backend_config['device_list']:
+            if not isinstance(device, int):
+                raise ValueError(f"backend_config['device_list'] must be a list of integers")
+
+        self.config = backend_config
         self.bk = None
         self.dim = None
         self.grid = None
@@ -22,11 +46,9 @@ class NeonGrid(Grid):
     def _get_velocity_set(self):
         return self.velocity_set
 
-    def _initialize_backend(self):
-        # FIXME@max: for now we hardcode the number of devices to 0
-        num_devs = 2
-        dev_idx_list = list(range(num_devs))
-        dev_idx_list = [0,1]
+    def _initialize_backend(self):     
+        dev_idx_list = self.config['device_list']
+        
         if len(self.shape) == 2:
             import py_neon
 
@@ -50,10 +72,10 @@ class NeonGrid(Grid):
         pass
 
     def create_field(
-        self,
-        cardinality: int,
-        dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None,
-        fill_value=None,
+            self,
+            cardinality: int,
+            dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None,
+            fill_value=None,
     ):
         dtype = dtype.wp_dtype if dtype else DefaultConfig.default_precision_policy.store_precision.wp_dtype
         field = self.grid.new_field(
@@ -68,7 +90,8 @@ class NeonGrid(Grid):
         return field
 
     def _create_warp_field(
-        self, cardinality: int, dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None, fill_value=None, ne_field=None
+            self, cardinality: int, dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None,
+            fill_value=None, ne_field=None
     ):
         warp_field = self.warp_grid.create_field(cardinality, dtype, fill_value)
         if ne_field is None:

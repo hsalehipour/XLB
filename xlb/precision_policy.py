@@ -1,8 +1,7 @@
 # Enum for precision policy
 
 from enum import Enum, auto
-import jax.numpy as jnp
-import warp as wp
+
 
 
 class Precision(Enum):
@@ -14,6 +13,7 @@ class Precision(Enum):
 
     @property
     def wp_dtype(self):
+        import warp as wp
         if self == Precision.FP64:
             return wp.float64
         elif self == Precision.FP32:
@@ -29,6 +29,8 @@ class Precision(Enum):
 
     @property
     def jax_dtype(self):
+        import jax.numpy as jnp
+
         if self == Precision.FP64:
             return jnp.float64
         elif self == Precision.FP32:
@@ -81,9 +83,11 @@ class PrecisionPolicy(Enum):
             raise ValueError("Invalid precision policy")
 
     def cast_to_compute_jax(self, array):
+        import jax.numpy as jnp
         compute_precision = self.compute_precision
         return jnp.array(array, dtype=compute_precision.jax_dtype)
 
     def cast_to_store_jax(self, array):
+        import jax.numpy as jnp
         store_precision = self.store_precision
         return jnp.array(array, dtype=store_precision.jax_dtype)
