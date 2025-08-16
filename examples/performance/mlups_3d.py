@@ -25,13 +25,11 @@ def parse_arguments():
     # add a flat to choose between 19 or 27 velocity set
     parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
     # add a flat to choose between multi-gpu occ options based on the neon occ: 
-    parser.add_argument("--occ", type=str, default="standard", help="Occupancy for the simulation (standard, extended, twoWayExtended, none) (default: standard)")
-
-
-    return parser.parse_args()
-
-
-def setup_simulation(args):
+    parser.add_argument("--occ", type=str, default="standard", help="Overlapping Communication and Computation option (standard, extended, twoWayExtended, none) (default: standard)")
+    args = parser.parse_args()
+    
+    # Checking the compute backend
+    compute_backend = None
     if args.compute_backend == "jax":
         compute_backend = ComputeBackend.JAX
     elif args.compute_backend == "warp":    
@@ -40,6 +38,19 @@ def setup_simulation(args):
         compute_backend = ComputeBackend.NEON
     else:
         raise ValueError("Invalid compute backend specified. Use 'jax', 'warp', or 'neon'.")
+    
+    args.compute_backend = compute_backend 
+    if args.occ not in ["standard", "extended", "twoWayExtended", "none"]:
+        raise ValueError("Invalid occupancy option. Use 'standard', 'extended', 'twoWayExtended', or 'none'.")
+    
+    # Checking OCC
+    occ = neon.SkeletonConfig.OCC.from_string(args.occ)
+    args.occ = occ
+    if args.gpu_devices is None and args.compute_backend == "neon":
+        print("[Warning] No GPU devices specified. Using default device 0.")
+        args.gpu_devices = [0]
+
+    # Checking precision policy
     precision_policy_map = {
         "fp32/fp32": PrecisionPolicy.FP32FP32,
         "fp64/fp64": PrecisionPolicy.FP64FP64,
@@ -49,6 +60,24 @@ def setup_simulation(args):
     precision_policy = precision_policy_map.get(args.precision)
     if precision_policy is None:
         raise ValueError("Invalid precision specified.")
+    args.precision_policy = precision_policy
+
+    # Checking velocity set
+    if args.velocity_set not in ["D3Q19", "D3Q27"]:
+        raise ValueError("Invalid velocity set. Use 'D3Q19' or 'D3Q27'.")
+    
+    if args.velocity_set == "D3Q19":
+        velocity_set = xlb.velocity_set.D3Q19(precision_policy=args.precision_policy, compute_backend=compute_backend)
+    elif args.velocity_set == "D3Q27":
+        velocity_set = xlb.velocity_set.D3Q27(precision_policy=args.precision_policy, compute_backend=compute_backend)
+    args.velocity_set = velocity_set
+
+    return args
+
+
+def setup_simulation(args):
+
+
 
     xlb.init(
         velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend),
