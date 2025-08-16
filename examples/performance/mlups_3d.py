@@ -21,7 +21,7 @@ def parse_arguments():
     parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation")
     parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
     parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
-    parser.add_argument("gpu_devices",  type=int, nargs="+",  default=None, help="List of the CUDA devices to use (e.g., -gpu_devices 0 1 2). This is only used for Neon backend.")
+    parser.add_argument("--gpu_devices",  type=int, nargs="+",  default=None, help="List of the CUDA devices to use (e.g., --gpu_devices 0 1 2). This is only used for Neon backend.")
     # add a flat to choose between 19 or 27 velocity set
     parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
     # add a flat to choose between multi-gpu occ options based on the neon occ: 
@@ -40,15 +40,17 @@ def parse_arguments():
         raise ValueError("Invalid compute backend specified. Use 'jax', 'warp', or 'neon'.")
     
     args.compute_backend = compute_backend 
+
+    # Checking OCC
     if args.occ not in ["standard", "extended", "twoWayExtended", "none"]:
         raise ValueError("Invalid occupancy option. Use 'standard', 'extended', 'twoWayExtended', or 'none'.")
-    
-    # Checking OCC
-    occ = neon.SkeletonConfig.OCC.from_string(args.occ)
-    args.occ = occ
     if args.gpu_devices is None and args.compute_backend == "neon":
         print("[Warning] No GPU devices specified. Using default device 0.")
         args.gpu_devices = [0]
+    if args.compute_backend == "neon":
+        import neon
+        occ = neon.SkeletonConfig.OCC.from_string(args.occ)
+        args.occ = occ
 
     # Checking precision policy
     precision_policy_map = {
@@ -75,23 +77,21 @@ def parse_arguments():
     return args
 
 
-def setup_simulation(args):
-
-
-
+def init_xlb(args):
     xlb.init(
-        velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend),
-        default_backend=compute_backend,
-        default_precision_policy=precision_policy,
+        velocity_set=args.velocity_set,
+        default_backend=args.compute_backend,
+        default_precision_policy=args.precision_policy,
     )
+    options = None
+    if args.compute_backend == ComputeBackend.NEON:
+        neon_options = {'occ': args.occ, 'device_list': args.gpu_devices}
+        options = neon_options
+    return args.compute_backend, args.precision_policy, options
 
 
-
-    return compute_backend, precision_policy, device_list
-
-
-def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
-    grid = grid_factory(grid_shape)
+def run_simulation(compute_backend, precision_policy, grid_shape, num_steps, options):
+    grid = grid_factory(grid_shape, options=options)
     box = grid.bounding_box_indices()
     box_no_edge = grid.bounding_box_indices(remove_edges=True)
 
@@ -108,6 +108,7 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps):
         grid=grid,
         boundary_conditions=boundary_conditions,
         collision_type="BGK",
+        options=options,
     )
 
     # Distribute if using JAX
@@ -167,10 +168,10 @@ def calculate_mlups(cube_edge, num_steps, elapsed_time):
 # -------------------------- Simulation Loop --------------------------
 
 args = parse_arguments()
-compute_backend, precision_policy = setup_simulation(args)
+compute_backend, precision_policy, options = init_xlb(args)
 grid_shape = (args.cube_edge, args.cube_edge, args.cube_edge)
 
-elapsed_time = run_simulation(compute_backend=compute_backend, precision_policy=precision_policy, grid_shape=grid_shape, num_steps=args.num_steps)
+elapsed_time = run_simulation(compute_backend=compute_backend, precision_policy=precision_policy, grid_shape=grid_shape, num_steps=args.num_steps, options=options)
 
 mlups = calculate_mlups(args.cube_edge, args.num_steps, elapsed_time)
 
