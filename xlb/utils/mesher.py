@@ -162,6 +162,7 @@ class MultiresIO(object):
         self.connectivity = connectivity
         self.level_id_field = level_id_field
         self.total_cells = total_cells
+        self.centroids = np.mean(coordinates[connectivity], axis=1)
 
         # Set the default precision policy if not provided
         from xlb import DefaultConfig
@@ -531,6 +532,8 @@ class MultiresIO(object):
         grid_res=512,
         cmap=None,
         component=None,
+        show_axes=False,
+        show_colorbar=False,
         **kwargs,
     ):
         """
@@ -585,6 +588,8 @@ class MultiresIO(object):
             bounds=bounds,
             grid_res=grid_res,
             cmap=cmap,
+            show_axes=show_axes,
+            show_colorbar=show_colorbar,
             **kwargs,
         )
         print(f"\tSlice image for field {field_name} saved as {output_filename}.png")
@@ -599,6 +604,8 @@ class MultiresIO(object):
         bounds,
         grid_res,
         cmap,
+        show_axes,
+        show_colorbar,
         **kwargs,
     ):
         """
@@ -607,8 +614,8 @@ class MultiresIO(object):
         from matplotlib import cm
         import numpy as np
         import matplotlib.pyplot as plt
-        from scipy.interpolate import griddata
-
+        from scipy.spatial import cKDTree    
+        
         # field data are associated with the cells centers
         cell_values = field_data
 
@@ -616,13 +623,9 @@ class MultiresIO(object):
         plane_normal = np.asarray(np.abs(plane_normal))
         n = plane_normal / np.linalg.norm(plane_normal)
 
-        # Compute centroids (K = 8 for hexahedral cells)
-        cell_points = self.coordinates[self.connectivity]  # shape (M, K, 3)
-        centroids = np.mean(cell_points, axis=1)  # (M, 3)
-
         # Compute signed distances of each cell center to the plane
         plane_point *= plane_normal
-        sdf = np.dot(centroids - plane_point, n)
+        sdf = np.dot(self.centroids - plane_point, n)
 
         # Filter: cells with centroid near plane
         mask = np.abs(sdf) <= slice_thickness / 2
@@ -630,7 +633,7 @@ class MultiresIO(object):
             raise ValueError("No cells intersect the plane within thickness.")
 
         # Project centroids to plane
-        centroids_slice = centroids[mask]
+        centroids_slice = self.centroids[mask]
         sdf_slice = sdf[mask]
         proj = centroids_slice - np.outer(sdf_slice, n)
 
@@ -656,23 +659,203 @@ class MultiresIO(object):
         if cmap is None:
             cmap = cm.nipy_spectral
 
-        # Rasterize: scatter cell centers to 2D grid
-        grid_x = np.linspace(local_x[mask_bounds].min(), local_x[mask_bounds].max(), grid_res)
-        grid_y = np.linspace(local_y[mask_bounds].min(), local_y[mask_bounds].max(), grid_res)
+        # Adjust vertical resolution based on bounds
+        bounded_x_min = local_x[mask_bounds].min()
+        bounded_x_max = local_x[mask_bounds].max()
+        bounded_y_min = local_y[mask_bounds].min()
+        bounded_y_max = local_y[mask_bounds].max()
+        width_x = bounded_x_max - bounded_x_min
+        height_y = bounded_y_max - bounded_y_min        
+        aspect_ratio = height_y / width_x        
+        grid_resY = max(1, int(np.round(grid_res*aspect_ratio)))
+        
+        # Create grid
+        grid_x = np.linspace(bounded_x_min, bounded_x_max, grid_res)
+        grid_y = np.linspace(bounded_y_min, bounded_y_max, grid_resY)
         xv, yv = np.meshgrid(grid_x, grid_y, indexing="xy")
-
-        # Linear interpolation for each grid point
-        grid_field = griddata(points=(local_x, local_y), values=values, xi=(xv, yv), method="linear", fill_value=np.nan)
-
+        
+        # Fast KDTree-based interpolation
+        points = np.column_stack((local_x[mask_bounds], local_y[mask_bounds]))
+        tree = cKDTree(points)
+        
+        # Query points
+        query_points = np.column_stack((xv.ravel(), yv.ravel()))
+        
+        # Find k nearest neighbors for smoother interpolation
+        k = min(4, len(points))  # Use 4 neighbors or less if not enough points
+        distances, indices = tree.query(query_points, k=k, workers=-1) #-1 uses all cores
+        
+        # Inverse distance weighting
+        epsilon = 1e-10
+        weights = 1.0 / (distances + epsilon)
+        weights /= weights.sum(axis=1, keepdims=True)
+        
+        # Interpolate values
+        neighbor_values = values[mask_bounds][indices]
+        grid_field = (neighbor_values * weights).sum(axis=1).reshape(grid_resY, grid_res)
+        
         # Plot
-        plt.imshow(
-            grid_field,
-            extent=[xmin, xmax, ymin, ymax],
-            cmap=cmap,
-            origin="lower",
-            aspect="equal",
+        if show_colorbar or show_axes:
+            dpi = 300
+            plt.imshow(
+                grid_field,
+                extent=[bounded_x_min, bounded_x_max, bounded_y_min, bounded_y_max],
+                cmap=cmap,
+                origin="lower",
+                aspect="equal",
+                **kwargs,
+            )        
+            if show_colorbar:
+                plt.colorbar()
+            if not show_axes:
+                plt.axis('off')
+            plt.savefig(output_filename + ".png", dpi=dpi, bbox_inches="tight", pad_inches=0)
+            plt.close()
+        else:
+            plt.imsave(output_filename + ".png", grid_field, cmap=cmap, origin="lower")
+
+    def to_line(self, 
+        output_filename, 
+        field_neon_dict, 
+        start_point, 
+        end_point, 
+        resolution, 
+        component=None,
+        radius=1.0,
+        **kwargs,):
+        """
+        Extract field data along a line between start_point and end_point and save to a CSV file.
+
+        This function performs two main steps:
+        1. Extracts field data from field_neon_dict, handling components or computing magnitude.
+        2. Interpolates the field values along a line defined by start_point and end_point,
+        then saves the results (coordinates and field values) to a CSV file.
+
+        Parameters
+        ----------
+        output_filename : str
+            The name of the output CSV file (without extension). Example: "velocity_profile".
+        field_neon_dict : dict
+            A dictionary containing the field data to extract, with a single key-value pair.
+            The key is the field name (e.g., "velocity"), and the value is the NEON data object
+            containing the field values. Example: {"velocity": velocity_neon}.
+        start_point : array_like
+            The starting point of the line in 3D space (e.g., [x0, y0, z0]).
+            Units must match the coordinate system used in the class (voxel units if untransformed,
+            or model units if scale/offset are applied).
+        end_point : array_like
+            The ending point of the line in 3D space (e.g., [x1, y1, z1]).
+            Units must match the coordinate system used in the class.
+        resolution : int
+            The number of points along the line where the field will be interpolated.
+            Example: 100 for 100 evenly spaced points.
+        component : int, optional
+            The specific component of the field to extract (e.g., 0 for x-component, 1 for y-component).
+            If None, the magnitude of the field is computed. Default is None.
+        radius : int
+            The specified distance (in units of the coordinate system) to prefilter and query for line plot 
+
+        Returns
+        -------
+        None
+            The function writes the output to a CSV file and prints a confirmation message.
+
+        Notes
+        -----
+        - The output CSV file will contain columns: 'x', 'y', 'z', and the value of the field name (e.g., 'velocity_x' or 'velocity_magnitude').
+        """
+        
+    
+        # Get the fields data from the NEON fields
+        assert len(field_neon_dict.keys()) == 1, "Error: This function is designed to plot a single field at a time."
+        fields_data = self.get_fields_data(field_neon_dict)
+        
+        # Check if the component is within the valid range
+        if component is None:
+            print("\tCreating csv plot of the field magnitude!")
+            cell_data = list(fields_data.values())
+            squared = [comp**2 for comp in cell_data]
+            cell_data = np.sqrt(sum(squared))
+            field_name = list(fields_data.keys())[0].split("_")[0] + "_magnitude"
+            
+        else:
+            assert component < max(self.field_name_cardinality_dict.values()), (
+                f"Error: Component {component} is out of range for the provided fields."
+            )
+            print(f"\tCreating csv plot for component {component} of the input field!")
+            field_name = list(fields_data.keys())[component]
+            cell_data = fields_data[field_name]
+        
+        if "velocity" in field_name.lower():
+            cell_data = cell_data * self.conversion
+    
+        # Plot each field in the dictionary
+        self._to_line_field(
+            f"{output_filename}_{field_name}",
+            cell_data,
+            start_point,
+            end_point,
+            resolution,
+            radius=radius,
             **kwargs,
         )
-        plt.colorbar()
-        plt.savefig(output_filename + ".png", dpi=300, bbox_inches="tight")
-        plt.close()
+        print(f"\tLine Plot for field {field_name} saved as {output_filename}.csv")
+    
+    def _to_line_field(
+        self, 
+        output_filename, 
+        cell_data, 
+        start_point, 
+        end_point, 
+        resolution,
+        radius,
+        **kwargs,
+        ):
+        """
+        Helper function to create a line plot for a single field.
+        """
+        import numpy as np
+        
+        #cell_points = self.coordinates[self.connectivity]  # Shape: (M, K, 3), where M is num cells, K is nodes per cell
+        #centroids = np.mean(cell_points, axis=1)  # Shape: (M, 3)
+        centroids = self.centroids
+        p0 = np.array(start_point, dtype=np.float32)
+        p1 = np.array(end_point, dtype=np.float32)
+        
+        # direction and parameter t for each centroid
+        d = (p1 - p0)
+        L = np.linalg.norm(d)
+        d_unit = d / L
+        v = centroids - p0
+        t = v.dot(d_unit)
+        closest = p0 + np.outer(t, d_unit)
+        perp_dist = np.linalg.norm(centroids-closest, axis=1)
+
+        # optionally mask to [0,L] or a small perp-radius
+        mask = (t >= 0) & (t <= L) & (perp_dist <= radius)
+        t, data = t[mask], cell_data[mask]
+
+        # sort by t
+        idx = np.argsort(t)
+        t_sorted = t[idx]
+        data_sorted = data[idx]
+
+        # target samples
+        t_line = np.linspace(0, L, resolution)
+
+        # 1D linear interpolation
+        vals_line = np.interp(t_line, t_sorted, data_sorted, left=np.nan, right=np.nan)
+
+        # reconstruct (x,y,z)
+        line_xyz = p0[None,:] + t_line[:,None]*d_unit[None,:]
+
+        # vectorized CSV dump
+        out = np.hstack([line_xyz, vals_line[:,None]])
+        np.savetxt(
+            output_filename + '.csv',
+            out,
+            delimiter=',',
+            header='x,y,z,value',
+            comments=''
+        )
+
