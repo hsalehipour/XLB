@@ -18,7 +18,7 @@ from xlb.operator.boundary_condition.boundary_condition_registry import boundary
 from xlb.operator.collision import ForcedCollision
 from xlb.helper import check_bc_overlaps
 from xlb.operator.boundary_masker import MeshVoxelizationMethod, MultiresMeshMaskerAABB, MultiresIndicesBoundaryMasker
-from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeInitialAuxiliaryData
+from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeAuxiliaryData
 
 
 class MultiresIncompressibleNavierStokesStepper(Stepper):
@@ -249,7 +249,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         for bc in boundary_conditions:
             if bc.needs_aux_init and not bc.is_initialized_with_aux_data:
                 # Create the encoder operator for storing the auxiliary data
-                encode_auxiliary_data = MultiresEncodeInitialAuxiliaryData(
+                encode_auxiliary_data = MultiresEncodeAuxiliaryData(
                     bc.id,
                     bc.num_of_aux_data,
                     bc.profile,
@@ -258,7 +258,10 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     compute_backend=bc.compute_backend,
                 )
 
-                # Store the auxiliary data in f_1
+                # Assign the object to the BC for its "decoding" tasks
+                bc.encode_auxiliary_data = encode_auxiliary_data
+
+                # Encode the auxiliary data in f_1
                 f_1 = encode_auxiliary_data(f_1, bc_mask, missing_mask, stream=0)
                 bc.is_initialized_with_aux_data = True
         return f_1

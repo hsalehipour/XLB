@@ -343,7 +343,7 @@ class HelperFunctionsBC(object):
         self.neon_index_to_warp = neon_index_to_warp
 
 
-class EncodeInitialAuxiliaryData(Operator):
+class EncodeAuxiliaryData(Operator):
     """
     Operator for encoding boundary auxiliary data during initialization.
     """
@@ -389,12 +389,16 @@ class EncodeInitialAuxiliaryData(Operator):
         _num_of_aux_data = self.num_of_aux_data
 
         @wp.func
-        def functional(
+        def encoder_functional(
             index: Any,
             _missing_mask: Any,
             field_storage: Any,
             prescribed_values: Any,
         ):
+            if len(prescribed_values) != _num_of_aux_data:
+                wp.printf("Error: User-defined profile must return a vector of size %d\n", _num_of_aux_data)
+                return
+
             # Write the result for all q directions, but only store up to num_of_aux_data
             counter = wp.int32(0)
             for l in range(self.velocity_set.q):
@@ -403,7 +407,7 @@ class EncodeInitialAuxiliaryData(Operator):
                     # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
                     self.write_field(field_storage, index, l, self.store_dtype(prescribed_values[l]))
                     counter += 1
-                elif _missing_mask[l] == wp.uint8(1):
+                elif _missing_mask[l] == wp.uint8(1) and counter <= _num_of_aux_data:
                     # The other remaining BC auxiliary data are stored in missing directions of f_1.
                     # Only store up to num_of_aux_data
                     self.write_field(field_storage, index, _opp_indices[l], self.store_dtype(prescribed_values[l]))
@@ -411,6 +415,38 @@ class EncodeInitialAuxiliaryData(Operator):
                 if counter > _num_of_aux_data:
                     # Only store up to num_of_aux_data
                     return
+
+        @wp.func
+        def decoder_functional(
+            index: Any,
+            _missing_mask: Any,
+            field_storage: Any,
+        ):
+            """
+            Decode the encoded values needed for the boundary condition treatment from the center location in field_storage.
+            """
+
+            # Define a vector to hold prescribed_values
+            prescribed_values = wp.vec(_num_of_aux_data, dtype=self.compute_dtype)
+
+            # Read all q directions, but only retrieve up to num_of_aux_data
+            counter = wp.int32(0)
+            for l in range(self.velocity_set.q):
+                # wp.neon_write(f_pn, index, l, self.store_dtype(feq[l]))
+                if l == lattice_central_index:
+                    # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
+                    value = self.read_field(field_storage, index, l)
+                    prescribed_values[counter] = self.compute_dtype(value)
+                    counter += 1
+                elif _missing_mask[l] == wp.uint8(1) and counter <= _num_of_aux_data:
+                    # The other remaining BC auxiliary data are stored in missing directions of f_1.
+                    # Only store up to num_of_aux_data
+                    value = self.read_field(field_storage, index, _opp_indices[l])
+                    prescribed_values[counter] = self.compute_dtype(value)
+                    counter += 1
+                if counter > _num_of_aux_data:
+                    # Only retrieve up to num_of_aux_data
+                    return prescribed_values
 
         # Construct the warp kernel
         @wp.kernel
@@ -433,16 +469,18 @@ class EncodeInitialAuxiliaryData(Operator):
                 prescribed_values = self.user_defined_functional(index)
 
                 # call the functional
-                functional(index, _missing_mask, f_1, prescribed_values)
+                encoder_functional(index, _missing_mask, f_1, prescribed_values)
 
-        return functional, kernel
+        functional_dict = {"encoder": encoder_functional, "decoder": decoder_functional}
+        return functional_dict, kernel
 
-    def _construct_neon(self, functional):
+    def _construct_neon(self):
         """
         Constructs the Neon container for encoding auxilary data recovery.
         """
         # Use the warp functional for the Neon backend
-        functional, _ = self._construct_warp()
+        functional_dict, _ = self._construct_warp()
+        encoder_functional = functional_dict["encoder"]
         _id = self.boundary_id
 
         # Construct the Neon container
@@ -470,14 +508,14 @@ class EncodeInitialAuxiliaryData(Operator):
                         prescribed_values = self.user_defined_functional(warp_index)
 
                         # Call the functional
-                        functional(index, _missing_mask, f_1_pn, prescribed_values)
+                        encoder_functional(index, _missing_mask, f_1_pn, prescribed_values)
 
                 # Declare the kernel in the Neon loader
                 loader.declare_kernel(aux_data_init_cl)
 
             return aux_data_init_ll
 
-        return aux_data_init_container
+        return functional_dict, aux_data_init_container
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, f_1, bc_mask, missing_mask):
@@ -496,7 +534,7 @@ class EncodeInitialAuxiliaryData(Operator):
         return f_1
 
 
-class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
+class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
     """
     Operator for encoding boundary auxiliary data during initialization.
     """
@@ -527,7 +565,8 @@ class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
         """
 
         # Borrow the functional from the warp implementation
-        functional, _ = self._construct_warp()
+        functional_dict, _ = self._construct_warp()
+        encoder_functional = functional_dict["encoder"]
         _id = self.boundary_id
 
         # Construct the Neon container
@@ -560,14 +599,14 @@ class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
                         prescribed_values = self.user_defined_functional(warp_index)
 
                         # Call the functional
-                        functional(index, _missing_mask, f_1_pn, prescribed_values)
+                        encoder_functional(index, _missing_mask, f_1_pn, prescribed_values)
 
                 # Declare the kernel in the Neon loader
                 loader.declare_kernel(aux_data_init_cl)
 
             return aux_data_init_ll
 
-        return functional, aux_data_init_container
+        return functional_dict, aux_data_init_container
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask, stream):

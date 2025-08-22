@@ -114,6 +114,9 @@ class ZouHeBC(BoundaryCondition):
             # This BC needs one auxiliary data for the density or normal velocity
             self.num_of_aux_data = 1
 
+            # A placeholder for encoder-decoder object
+            self.encode_auxiliary_data = None
+
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior
         self.needs_padding = True
 
@@ -279,9 +282,11 @@ class ZouHeBC(BoundaryCondition):
         # load helper functions. Always use warp backend for helper functions as it may also be called by the Neon backend.
         bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=ComputeBackend.WARP)
 
+        # get decoder functional
+        decoder_functional = self.encode_auxiliary_data.warp_functional["decode"]
+
         # Set local constants
         _d = self.velocity_set.d
-        lattice_central_index = self.velocity_set.center_index
 
         @wp.func
         def functional_velocity(
@@ -306,7 +311,7 @@ class ZouHeBC(BoundaryCondition):
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = decode_lattice_center_value(index, f_1)
+            prescribed_value = decoder_functional(index, _missing_mask, f_1)
             _u = -prescribed_value * normals
 
             for d in range(_d):
@@ -337,7 +342,7 @@ class ZouHeBC(BoundaryCondition):
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = decode_lattice_center_value(index, f_1)
+            _rho = decoder_functional(index, _missing_mask, f_1)
 
             # calculate velocity
             fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
@@ -348,18 +353,6 @@ class ZouHeBC(BoundaryCondition):
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
             _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
             return _f
-
-        @wp.func
-        def decode_lattice_center_value(index: Any, f_1: Any):
-            """
-            Decode the encoded values needed for the boundary condition treatment from the center location in f_1.
-            """
-            if wp.static(self.compute_backend == ComputeBackend.WARP):
-                value = f_1[lattice_central_index, index[0], index[1], index[2]]
-            else:
-                # Note: in Neon case, f_1 is a pointer to the field not the actual data.
-                value = wp.neon_read(f_1, index, lattice_central_index)
-            return self.compute_dtype(value)
 
         if self.bc_type == "velocity":
             functional = functional_velocity
