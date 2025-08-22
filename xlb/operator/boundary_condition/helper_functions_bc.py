@@ -418,9 +418,9 @@ class EncodeAuxiliaryData(Operator):
 
         @wp.func
         def decoder_functional(
+            field_storage: Any,
             index: Any,
             _missing_mask: Any,
-            field_storage: Any,
         ):
             """
             Decode the encoded values needed for the boundary condition treatment from the center location in field_storage.

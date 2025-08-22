@@ -15,6 +15,12 @@ class MultiresMeshMaskerAABB(MeshMaskerAABB):
     This implementation uses warp.mesh_query_aabb for efficient mesh-voxel intersection testing,
     providing approximate 1-voxel thick surface detection around the mesh geometry.
     Suitable for scenarios where fast, approximate boundary detection is sufficient.
+    TODO:
+    We cannot properly mask a mesh file if it lives on any level other than the finest. This issue can be easily solved by adding
+           gx = wp.neon_get_x(cIdx) // 2 ** level
+           gy = wp.neon_get_y(cIdx) // 2 ** level
+           gz = wp.neon_get_z(cIdx) // 2 ** level
+    to the "neon_index_to_warp" and subsequently add "level" to the arguments of "index_to_position_neon", "get_pull_index_neon" and "is_in_bc_indices_neon"
     """
 
     def __init__(

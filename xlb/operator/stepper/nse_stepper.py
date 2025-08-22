@@ -29,7 +29,6 @@ from xlb.operator.boundary_masker import (
 )
 from xlb.helper import check_bc_overlaps
 from xlb.helper.nse_fields import create_nse_fields
-from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
 
 
 class IncompressibleNavierStokesStepper(Stepper):
@@ -169,21 +168,8 @@ class IncompressibleNavierStokesStepper(Stepper):
         """Initialize auxiliary data for boundary conditions that require it."""
         for bc in boundary_conditions:
             if bc.needs_aux_init and not bc.is_initialized_with_aux_data:
-                # Create the encoder operator for storing the auxiliary data
-                encode_auxiliary_data = EncodeAuxiliaryData(
-                    bc.id,
-                    bc.num_of_aux_data,
-                    bc.profile,
-                    velocity_set=bc.velocity_set,
-                    precision_policy=bc.precision_policy,
-                    compute_backend=bc.compute_backend,
-                )
-
-                # Assign the object to the BC for its "decoding" tasks
-                bc.encode_auxiliary_data = encode_auxiliary_data
-
                 # Encode the auxiliary data in f_1
-                f_1 = encode_auxiliary_data(f_1, bc_mask, missing_mask)
+                f_1 = bc.encode_auxiliary_data(f_1, bc_mask, missing_mask)
                 bc.is_initialized_with_aux_data = True
         return f_1
 

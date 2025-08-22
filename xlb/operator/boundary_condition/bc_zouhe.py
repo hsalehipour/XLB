@@ -21,6 +21,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
 from xlb.operator.boundary_condition import HelperFunctionsBC
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
+from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
 
 
 class ZouHeBC(BoundaryCondition):
@@ -114,8 +115,15 @@ class ZouHeBC(BoundaryCondition):
             # This BC needs one auxiliary data for the density or normal velocity
             self.num_of_aux_data = 1
 
-            # A placeholder for encoder-decoder object
-            self.encode_auxiliary_data = None
+            # Create the encoder operator for storing the auxiliary data
+            self.encode_auxiliary_data = EncodeAuxiliaryData(
+                self.id,
+                self.num_of_aux_data,
+                self.profile,
+                velocity_set=self.velocity_set,
+                precision_policy=self.precision_policy,
+                compute_backend=self.compute_backend,
+            )
 
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior
         self.needs_padding = True
@@ -311,7 +319,7 @@ class ZouHeBC(BoundaryCondition):
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = decoder_functional(index, _missing_mask, f_1)
+            prescribed_value = decoder_functional(f_1, index, _missing_mask)
             _u = -prescribed_value * normals
 
             for d in range(_d):
@@ -342,7 +350,7 @@ class ZouHeBC(BoundaryCondition):
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = decoder_functional(index, _missing_mask, f_1)
+            _rho = decoder_functional(f_1, index, _missing_mask)
 
             # calculate velocity
             fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
