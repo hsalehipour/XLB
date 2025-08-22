@@ -479,20 +479,20 @@ class EncodeInitialAuxiliaryData(Operator):
 
         return aux_data_init_container
 
-    # Initialize auxiliary data for the boundary condition.
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, f_1, bc_mask, missing_mask):
-        if self.compute_backend == ComputeBackend.WARP:
-            # Launch the warp kernel
-            wp.launch(
-                self.warp_kernel,
-                inputs=[f_1, bc_mask, missing_mask],
-                dim=f_1.shape[1:],
-            )
+        # Launch the warp kernel
+        wp.launch(
+            self.warp_kernel,
+            inputs=[f_1, bc_mask, missing_mask],
+            dim=f_1.shape[1:],
+        )
+        return f_1
 
-        elif self.compute_backend == ComputeBackend.NEON:
-            c = self.neon_container(f_1, bc_mask, missing_mask)
-            c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_1, bc_mask, missing_mask):
+        c = self.neon_container(f_1, bc_mask, missing_mask)
+        c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
         return f_1
 
 
