@@ -102,14 +102,17 @@ class ZouHeBC(BoundaryCondition):
             self.prescribed_value = prescribed_value
             self.profile = self._create_constant_prescribed_profile()
 
-        # This BC needs auxiliary data initialization before streaming
-        self.needs_aux_init = True
+        if self.compute_backend == ComputeBackend.JAX:
+            self.prescribed_values = self.profile()
+        else:
+            # This BC needs auxiliary data initialization before streaming
+            self.needs_aux_init = True
 
-        # This BC needs auxiliary data recovery after streaming
-        self.needs_aux_recovery = True
+            # This BC needs auxiliary data recovery after streaming
+            self.needs_aux_recovery = True
 
-        # This BC needs one auxiliary data for the density or normal velocity
-        self.num_of_aux_data = 1
+            # This BC needs one auxiliary data for the density or normal velocity
+            self.num_of_aux_data = 1
 
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior
         self.needs_padding = True

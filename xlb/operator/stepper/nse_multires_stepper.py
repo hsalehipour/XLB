@@ -18,6 +18,7 @@ from xlb.operator.boundary_condition.boundary_condition_registry import boundary
 from xlb.operator.collision import ForcedCollision
 from xlb.helper import check_bc_overlaps
 from xlb.operator.boundary_masker import MeshVoxelizationMethod, MultiresMeshMaskerAABB, MultiresIndicesBoundaryMasker
+from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeInitialAuxiliaryData
 
 
 class MultiresIncompressibleNavierStokesStepper(Stepper):
@@ -247,9 +248,19 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         """Initialize auxiliary data for boundary conditions that require it."""
         for bc in boundary_conditions:
             if bc.needs_aux_init and not bc.is_initialized_with_aux_data:
-                for level in range(bc_mask.get_grid().get_num_levels()):
-                    # Initialize auxiliary data for each level
-                    f_1 = bc.multires_aux_data_init(f_1, bc_mask, missing_mask, level=level, stream=0)
+                # Create the encoder operator for storing the auxiliary data
+                encode_auxiliary_data = MultiresEncodeInitialAuxiliaryData(
+                    bc.id,
+                    bc.num_of_aux_data,
+                    bc.profile,
+                    velocity_set=bc.velocity_set,
+                    precision_policy=bc.precision_policy,
+                    compute_backend=bc.compute_backend,
+                )
+
+                # Store the auxiliary data in f_1
+                f_1 = encode_auxiliary_data(f_1, bc_mask, missing_mask, stream=0)
+                bc.is_initialized_with_aux_data = True
         return f_1
 
     def _construct_neon(self):
