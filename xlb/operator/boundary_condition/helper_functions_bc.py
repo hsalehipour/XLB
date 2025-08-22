@@ -507,9 +507,9 @@ class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
             compute_backend=compute_backend,
         )
 
-        assert self.compute_backend == ComputeBackend.Neon, f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend."
+        assert self.compute_backend == ComputeBackend.NEON, f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend."
 
-    def _construct_neon(self, functional):
+    def _construct_neon(self):
         """
         Constructs the Neon container for encoding auxilary data recovery.
         """
@@ -559,12 +559,12 @@ class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
 
             return aux_data_init_ll
 
-        return aux_data_init_container
+        return functional, aux_data_init_container
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask, stream):
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):
-            c = self._construct_multires_aux_data_init_container(self.profile)(f_1, bc_mask, missing_mask, level)
+            c = self.neon_container(f_1, bc_mask, missing_mask, level)
             c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
         return f_1
