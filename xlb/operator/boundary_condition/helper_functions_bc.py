@@ -314,6 +314,22 @@ class HelperFunctionsBC(object):
 
             return f_post
 
+        @wp.func
+        def neon_index_to_warp(neon_field_hdl: Any, index: Any):
+            # Unpack the global index in Neon
+            cIdx = wp.neon_global_idx(neon_field_hdl, index)
+            gx = wp.neon_get_x(cIdx)
+            gy = wp.neon_get_y(cIdx)
+            gz = wp.neon_get_z(cIdx)
+
+            # TODO@Max - XLB is flattening the z dimension in 3D, while neon uses the y dimension
+            if _d == 2:
+                gy, gz = gz, gy
+
+            # Get warp indices
+            index_wp = wp.vec3i(gx, gy, gz)
+            return index_wp
+
         self.get_bc_thread_data = get_bc_thread_data
         self.get_bc_fsum = get_bc_fsum
         self.get_normal_vectors = get_normal_vectors
@@ -324,6 +340,7 @@ class HelperFunctionsBC(object):
         self.interpolated_bounceback = interpolated_bounceback
         self.interpolated_nonequilibrium_bounceback = interpolated_nonequilibrium_bounceback
         self.neon_get_bc_thread_data = neon_get_bc_thread_data
+        self.neon_index_to_warp = neon_index_to_warp
 
 
 class EncodeInitialAuxiliaryData(Operator):
@@ -449,12 +466,7 @@ class EncodeInitialAuxiliaryData(Operator):
 
                     # Apply the functional
                     if _boundary_id == _id:
-                        # prescribed_values is a q-sized vector of type wp.vec
-                        warp_index = wp.vec3i()
-                        gloabl_index = wp.neon_global_idx(f_1_pn, index)
-                        warp_index[0] = wp.neon_get_x(gloabl_index)
-                        warp_index[1] = wp.neon_get_y(gloabl_index)
-                        warp_index[2] = wp.neon_get_z(gloabl_index)
+                        warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
                         prescribed_values = self.user_defined_functional(warp_index)
 
                         # Call the functional
@@ -543,12 +555,8 @@ class MultiresEncodeInitialAuxiliaryData(EncodeInitialAuxiliaryData):
 
                     # Apply the functional
                     if _boundary_id == _id:
-                        # prescribed_values is a q-sized vector of type wp.vec
-                        warp_index = wp.vec3i()
-                        gloabl_index = wp.neon_global_idx(f_1_pn, index)
-                        warp_index[0] = wp.neon_get_x(gloabl_index) // refinement
-                        warp_index[1] = wp.neon_get_y(gloabl_index) // refinement
-                        warp_index[2] = wp.neon_get_z(gloabl_index) // refinement
+                        warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
+                        warp_index /= refinement
                         prescribed_values = self.user_defined_functional(warp_index)
 
                         # Call the functional
