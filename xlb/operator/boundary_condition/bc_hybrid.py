@@ -81,6 +81,9 @@ class HybridBC(BoundaryCondition):
             distance_decoder_function=self._construct_distance_decoder_function(),
         )
 
+        # A flag to track if available space in "f_1" for storing auxiliary data is full
+        self.auxiliary_storage_space_full = False
+
         # A flag to enable moving wall treatment when either "prescribed_value" or "profile" are provided.
         self.needs_moving_wall_treatment = False
 
@@ -126,6 +129,9 @@ class HybridBC(BoundaryCondition):
             # a wrapper function that also accepts time as a parameter.
             self.is_time_dependent = True
 
+            # For time dependent prescribed values, we cannot store at initialization
+            self.auxiliary_storage_space_full = True
+
         # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
         # velocity profiles given by keyword "profile" which must be a callable function.
         self.profile = profile
@@ -137,6 +143,7 @@ class HybridBC(BoundaryCondition):
         if self.needs_mesh_distance:
             # This BC needs auxiliary data recovery after streaming
             self.needs_aux_recovery = True
+            self.auxiliary_storage_space_full = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions
         # when imposed on a geometry that is in the domain interior
@@ -148,7 +155,7 @@ class HybridBC(BoundaryCondition):
         else:
             assert self.indices is None, "Cannot use indices with mesh vertices! Please provide mesh vertices only."
 
-        if not (self.needs_mesh_distance or self.is_time_dependent):
+        if not self.auxiliary_storage_space_full:
             # In the following two cases we simply call the user-defined profile warp function
             # (i)  mesh distance data are already stored in f_1
             # (ii) the user-defined functional is time-dependent and cannot be stored only once during initialization
@@ -214,12 +221,12 @@ class HybridBC(BoundaryCondition):
         # Get decoder functional
         @wp.func
         def decoder_functional(f_1: Any, index: Any, timestep: Any, _missing_mask: Any):
-            if wp.static(self.is_time_dependent):
-                return self.profile(index, timestep)
-            elif wp.static(self.needs_mesh_distance and not self.is_time_dependent):
-                return self.profile(index)
-            else:
+            if wp.static(not self.auxiliary_storage_space_full):
                 return self.decoder_functional(f_1, index, _missing_mask)
+            elif wp.static(self.is_time_dependent):
+                return self.profile(index, timestep)
+            else:
+                return self.profile(index)
 
         return decoder_functional
 
