@@ -125,6 +125,10 @@ class ZouHeBC(BoundaryCondition):
                 compute_backend=self.compute_backend,
             )
 
+            # get decoder functional
+            functional_dict, _ = self.encode_auxiliary_data._construct_warp()
+            self.decoder_functional = functional_dict["decoder"]
+
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior
         self.needs_padding = True
 
@@ -290,9 +294,6 @@ class ZouHeBC(BoundaryCondition):
         # load helper functions. Always use warp backend for helper functions as it may also be called by the Neon backend.
         bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=ComputeBackend.WARP)
 
-        # get decoder functional
-        decoder_functional = self.encode_auxiliary_data.warp_functional["decode"]
-
         # Set local constants
         _d = self.velocity_set.d
 
@@ -319,7 +320,7 @@ class ZouHeBC(BoundaryCondition):
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = decoder_functional(f_1, index, _missing_mask)
+            prescribed_value = self.decoder_functional(f_1, index, _missing_mask)[0]
             _u = -prescribed_value * normals
 
             for d in range(_d):
@@ -350,7 +351,7 @@ class ZouHeBC(BoundaryCondition):
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = decoder_functional(f_1, index, _missing_mask)
+            _rho = self.decoder_functional(f_1, index, _missing_mask)[0]
 
             # calculate velocity
             fsum = bc_helper.get_bc_fsum(_f, _missing_mask)

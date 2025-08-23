@@ -367,7 +367,7 @@ class EncodeAuxiliaryData(Operator):
         # We assume the profile function takes only the index as input and is hence time-independent.
         sig = inspect.signature(user_defined_functional)
         assert self.compute_backend != ComputeBackend.JAX, "Encoding/decoding of auxiliary data are not required for boundary conditions in JAX"
-        assert len(sig.parameters) == 1, "User-defined functional must take exactly one argument (the index)."
+        assert len(sig.parameters) == 1, f"User-defined functional must take exactly one argument (the index), it received {len(sig.parameters)}."
 
         # Define a HelperFunctionsBC instance
         self.bc_helper = HelperFunctionsBC(
@@ -387,6 +387,7 @@ class EncodeAuxiliaryData(Operator):
         _opp_indices = self.velocity_set.opp_indices
         _id = self.boundary_id
         _num_of_aux_data = self.num_of_aux_data
+        _aux_vec = wp.vec(_num_of_aux_data, dtype=self.compute_dtype)
 
         @wp.func
         def encoder_functional(
@@ -427,7 +428,7 @@ class EncodeAuxiliaryData(Operator):
             """
 
             # Define a vector to hold prescribed_values
-            prescribed_values = wp.vec(_num_of_aux_data, dtype=self.compute_dtype)
+            prescribed_values = _aux_vec()
 
             # Read all q directions, but only retrieve up to num_of_aux_data
             counter = wp.int32(0)
