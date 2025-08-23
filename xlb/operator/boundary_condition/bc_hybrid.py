@@ -19,6 +19,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
 from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
 
+
 class HybridBC(BoundaryCondition):
     """
     The hybrid BC methods in this boundary condition have been originally developed by H. Salehipour and are inspired from
@@ -127,7 +128,7 @@ class HybridBC(BoundaryCondition):
 
         # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
         # velocity profiles given by keyword "profile" which must be a callable function.
-        self.profile = self._construct_profile(profile)
+        self.profile = profile
 
         # Set whether this BC needs mesh distance
         self.needs_mesh_distance = use_mesh_distance
@@ -171,39 +172,12 @@ class HybridBC(BoundaryCondition):
                 compute_backend=self.compute_backend,
             )
 
+            # Get auxiliary decoder functional
+            functional_dict, _ = self.encode_auxiliary_data._construct_warp()
+            self.decoder_functional = functional_dict["decoder"]
+
         # Define the profile decoder functional
         self.profile_decoder_functional = self._construct_profile_decoder_functional()
-
-    def _construct_profile(self, profile):
-        """
-        This function wraps the user-specified profile which is a warp function with required input arguments.
-        TODO:
-        We ONLY impose a profile on a boundary which requires mesh-distance if that boundary lives on the finest level.
-        This is because I don't know how to extract "level" from the
-        "neon_field_hdl" to do:
-               cIdx = wp.neon_global_idx(field_neon_hdl, index)
-               gx = wp.neon_get_x(cIdx) // 2 ** level
-               gy = wp.neon_get_y(cIdx) // 2 ** level
-               gz = wp.neon_get_z(cIdx) // 2 ** level
-        """
-
-        # The following wrappers are simply to enable "decoder_functional" calls to have the same signature (see below)
-        @wp.func
-        def wrapped_profile_warp(field: Any, index: Any, timestep: Any, _missing_mask: Any):
-            if wp.static(self.is_time_dependent):
-                return profile(index, timestep)
-            else:
-                return profile(index)
-
-        @wp.func
-        def wrapped_profile_neon(field: Any, index: Any, timestep: Any, _missing_mask: Any):
-            index_wp = self.bc_helper.neon_index_to_warp(field, index)
-            if wp.static(self.is_time_dependent):
-                return profile(index_wp, timestep)
-            else:
-                return profile(index_wp)
-
-        return wrapped_profile_neon if self.compute_backend == ComputeBackend.NEON else wrapped_profile_warp
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
@@ -227,22 +201,29 @@ class HybridBC(BoundaryCondition):
     def _construct_profile_decoder_functional(self):
         """
         Get the profile decoder functional for this BC.
+        Note:
+        We can impose a profile on a boundary which requires mesh-distance only if that boundary lives on the finest level.
+        This is because I don't know how to extract "level" from the
+        "neon_field_hdl" to do:
+               cIdx = wp.neon_global_idx(field_neon_hdl, index)
+               gx = wp.neon_get_x(cIdx) // 2 ** level
+               gy = wp.neon_get_y(cIdx) // 2 ** level
+               gz = wp.neon_get_z(cIdx) // 2 ** level
         """
-        # Get decoder functional
-        if self.needs_mesh_distance or self.is_time_dependent:
-            # In the following two cases we simply call the user-defined profile warp function
-            # (i)  mesh distance data are already stored in f_1
-            # (ii) the user-defined functional is time-dependent and cannot be stored only once during initialization
-            decoder_functional = self.profile
-        else:
 
-            @wp.func
-            def decoder_functional(f_1: Any, index: Any, timestep: Any, _missing_mask: Any):
-                return self.encode_auxiliary_data.warp_functional["decode"](f_1, index, _missing_mask)
+        # Get decoder functional
+        @wp.func
+        def decoder_functional(f_1: Any, index: Any, timestep: Any, _missing_mask: Any):
+            if wp.static(self.is_time_dependent):
+                return self.profile(index, timestep)
+            elif wp.static(self.needs_mesh_distance and not self.is_time_dependent):
+                return self.profile(index)
+            else:
+                return self.decoder_functional(f_1, index, _missing_mask)
+
         return decoder_functional
 
     def _construct_warp(self):
-
         # Construct the functionals for this BC
         @wp.func
         def hybrid_bounceback_regularized(
