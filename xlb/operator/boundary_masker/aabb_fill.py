@@ -60,13 +60,52 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
             max_val = wp.tile_max(t)
             f_field_out[i, j, k] = max_val[0]
 
+        # Erode the solid mask in f_field, removing a layer of outer solid voxels, storing output in f_field_out
+        @wp.func
+        def functional_erode(index: Any, f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any)):
+            # self.helper_masker.read_field_neighbor()
+            min_val = self.store_dtype(255)
+            for direction_idx in range(1, _q):
+                if (self.helper_masker.is_in_bounds(index, wp.vec3i(f_field.shape[0], f_field.shape[1], f_field.shape[2]), 1)):
+                    # Take the min value of all neighbors in bounds
+                    ngh_val = self.helper_masker.read_field_neighbor(f_field, index, 0, direction_idx)
+                    min_val = wp.min(min_val, ngh_val)
+            
+            self.write_field(f_field_out, index, 0, min_val)
+
+        # Dilate the solid mask in f_field, adding a layer of outer solid voxels, storing output in f_field_out
+        @wp.func
+        def functional_dilate(index: Any, f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any)):
+            max_val = self.store_dtype(0)
+            for direction_idx in range(1, _q):
+                if (self.helper_masker.is_in_bounds(index, wp.vec3i(f_field.shape[0], f_field.shape[1], f_field.shape[2]), 1)):
+                    # Take the max value of all neighbors in bounds
+                    ngh_val = self.helper_masker.read_field_neighbor(f_field, index, 0, direction_idx)
+                    max_val = wp.max(min_val, ngh_val)
+
+            self.write_field(f_field_out, index, 0, max_val)
+
         # Construct the warp kernel
         # Find solid voxels that intersect the mesh
+        @wp.func
+        def functional_solid(
+            index: Any,
+            mesh_id: wp.uint64,
+            solid_mask: wp.array3d(dtype=wp.int32),
+            offset: wp.vec3f,
+        ):
+            # position of the point
+            cell_center_pos = self.helper_masker.index_to_position(solid_mask, index)
+            half = wp.vec3(0.5, 0.5, 0.5)
+
+            if self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - half):
+                # Make solid voxel
+                self.write_field(solid_mask, index, 0, wp.int32(255))
+
         @wp.kernel
         def kernel_solid(
             mesh_id: wp.uint64,
             solid_mask: wp.array3d(dtype=wp.int32),
-            offset: wp.vec3f,
         ):
             # get index
             i, j, k = wp.tid()
@@ -74,13 +113,64 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
             # Get local indices
             index = wp.vec3i(i, j, k)
 
-            # position of the point
-            cell_center_pos = self.helper_masker.index_to_position(solid_mask, index) + offset
-            half = wp.vec3(0.5, 0.5, 0.5)
+            functional_solid(index, mesh_id, solid_mask)
 
-            if self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - half):
+            return
+
+        @wp.func
+        def functional_aabb(
+            index: Any,
+            mesh_id: wp.uint64,
+            distances: wp.array4d(dtype=Any),
+            bc_mask: wp.array4d(dtype=wp.uint8),
+            missing_mask: wp.array4d(dtype=wp.uint8),
+            solid_mask: wp.array3d(dtype=wp.uint8),
+            needs_mesh_distance: bool,
+        ):
+            # position of the point
+            cell_center_pos = self.helper_masker.index_to_position(bc_mask, index)
+            HALF_VOXEL = wp.vec3(0.5, 0.5, 0.5)
+
+            if self.read_field(solid_mask, index, 0) == wp.uint8(255) or self.read_field(bc_mask, index, 0) == wp.uint8(255):
                 # Make solid voxel
-                solid_mask[index[0], index[1], index[2]] = wp.int32(255)
+                self.write_field(bc_mask, index, 0, wp.uint8(255))
+            else:
+                # Find the boundary voxels and their missing directions
+                for direction_idx in range(_q):
+                    if direction_idx == lattice_central_index:
+                        # Skip the central index as it is not relevant for boundary masking
+                        continue
+
+                    # Get the lattice direction vector
+                    direction_vec = wp.vec3f(wp.float32(_c[0, direction_idx]), wp.float32(_c[1, direction_idx]), wp.float32(_c[2, direction_idx]))
+
+                    # Check to see if this neighbor is solid
+                    if self.helper_masker.is_in_bounds(index, wp.vec3i(solid_mask.shape[0], solid_mask.shape[1], solid_mask.shape[2]), 1):
+                        if self.read_field(solid_mask, index + direction_idx, 0) == wp.uint8(255):
+                            # We know we have a solid neighbor
+                            # Set the boundary id and missing_mask
+                            self.write_field(bc_mask, index, 0, wp.uint8(id_number))
+                            self.write_field(missing_mask, index, _opp_indices[direction_idx], wp.uint8(True))
+
+                            # If we don't need the mesh distance, we can return early
+                            if not needs_mesh_distance:
+                                continue
+
+                            # Find the fractional distance to the mesh in each direction
+                            # We increase max_length to find intersections in neighboring cells
+                            max_length = wp.length(direction_vec)
+                            query = wp.mesh_query_ray(mesh_id, cell_center_pos, direction_vec / max_length, 1.5 * max_length)
+                            if query.result:
+                                # get position of the mesh triangle that intersects with the ray
+                                pos_mesh = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
+                                # We reduce the distance to give some wall thickness
+                                dist = wp.length(pos_mesh - cell_center_pos) - 0.5 * max_length
+                                weight = dist / max_length
+                                self.write_field(distances, index, direction_idx, self.store_dtype(weight))
+                            else:
+                                # Expected an intersection in this direction but none was found.
+                                # Assume the solid extends one lattice unit beyond the BC voxel leading to a distance fraction of 1.
+                                self.write_field(distances, index, direction_idx, self.store_dtype(1.0))
 
         # Assign the bc_mask and distances based on the solid_mask we already computed
         @wp.kernel
@@ -138,13 +228,19 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
                             # and one lattice direction away from the BC voxel
                             distances[direction_idx, index[0], index[1], index[2]] = self.store_dtype(1.0)
 
+        functional_dict = {
+            "functional_erode": functional_erode,
+            "functional_dilate": functional_dilate,
+            "functional_solid": functional_solid,
+            "functional_aabb": functional_aabb,
+        }
         kernel_dict = {
             "kernel": kernel,
             "kernel_solid": kernel_solid,
             "erode_tile": erode_tile,
             "dilate_tile": dilate_tile,
         }
-        return None, kernel_dict
+        return functional_dict, kernel_dict
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(
