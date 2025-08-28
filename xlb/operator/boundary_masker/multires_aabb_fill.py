@@ -98,7 +98,8 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                     functional_solid(
                         index,
                         mesh_id,
-                        solid_mask_pn
+                        solid_mask_pn,
+                        wp.vec3f(0.0, 0.0, 0.0)
                     )
 
                 loader.declare_kernel(solid_kernel)

@@ -95,7 +95,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
             offset: wp.vec3f,
         ):
             # position of the point
-            cell_center_pos = self.helper_masker.index_to_position(solid_mask, index)
+            cell_center_pos = self.helper_masker.index_to_position(solid_mask, index) + offset
             half = wp.vec3(0.5, 0.5, 0.5)
 
             if self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - half):
@@ -106,6 +106,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         def kernel_solid(
             mesh_id: wp.uint64,
             solid_mask: wp.array3d(dtype=wp.int32),
+            offset: wp.vec3f,
         ):
             # get index
             i, j, k = wp.tid()
@@ -113,7 +114,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
             # Get local indices
             index = wp.vec3i(i, j, k)
 
-            functional_solid(index, mesh_id, solid_mask)
+            functional_solid(index, mesh_id, solid_mask, offset)
 
             return
 
