@@ -170,7 +170,7 @@ class HybridBC(BoundaryCondition):
             self.num_of_aux_data = 3
 
             # Create the encoder operator for storing the auxiliary data
-            self.encode_auxiliary_data = EncodeAuxiliaryData(
+            encode_auxiliary_data = EncodeAuxiliaryData(
                 self.id,
                 self.num_of_aux_data,
                 self.profile,
@@ -180,7 +180,7 @@ class HybridBC(BoundaryCondition):
             )
 
             # Get auxiliary decoder functional
-            functional_dict, _ = self.encode_auxiliary_data._construct_warp()
+            functional_dict, _ = encode_auxiliary_data._construct_warp()
             self.decoder_functional = functional_dict["decoder"]
 
         # Define the profile decoder functional

@@ -116,7 +116,7 @@ class ZouHeBC(BoundaryCondition):
             self.num_of_aux_data = 1
 
             # Create the encoder operator for storing the auxiliary data
-            self.encode_auxiliary_data = EncodeAuxiliaryData(
+            encode_auxiliary_data = EncodeAuxiliaryData(
                 self.id,
                 self.num_of_aux_data,
                 self.profile,
@@ -126,7 +126,7 @@ class ZouHeBC(BoundaryCondition):
             )
 
             # get decoder functional
-            functional_dict, _ = self.encode_auxiliary_data._construct_warp()
+            functional_dict, _ = encode_auxiliary_data._construct_warp()
             self.decoder_functional = functional_dict["decoder"]
 
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior

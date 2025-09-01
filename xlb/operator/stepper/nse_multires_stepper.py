@@ -258,9 +258,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     compute_backend=bc.compute_backend,
                 )
 
-                # Assign the object to the BC for its "decoding" tasks
-                bc.encode_auxiliary_data = encode_auxiliary_data
-
                 # Encode the auxiliary data in f_1
                 f_1 = encode_auxiliary_data(f_1, bc_mask, missing_mask, stream=0)
                 bc.is_initialized_with_aux_data = True
