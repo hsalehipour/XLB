@@ -331,7 +331,10 @@ class IndicesBoundaryMasker(Operator):
         # Convert to Warp arrays
         if self.compute_backend == ComputeBackend.NEON:
             grid = self.grid
-            ndevice = grid.bk.get_num_devices()
+            if grid is None:
+                ndevice = 1
+            else:
+                ndevice = grid.bk.get_num_devices()
             if ndevice == 1:
                 wp_bc_indices = wp.array(indices, dtype=wp.int32)
                 wp_id_numbers = wp.array(id_numbers, dtype=wp.uint8)

@@ -692,8 +692,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             if level != 0:
                 # throw an exception
                 raise Exception("Only the finest level is supported for now")
-
-            num_levels = f_0_fd.get_grid().get_num_levels()
+            grid = f_0_fd.get_grid()
+            num_levels =grid.num_levels
 
             # if level != 0:
             #     # throw an exception
@@ -705,7 +705,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             def finest_fused_pull_launcher(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
-                if level + 1 < f_0_fd.get_grid().get_num_levels():
+                if level + 1 < f_0_fd.get_grid().num_levels:
                     f_0_pn = loader.get_mres_write_handle(f_0_fd, neon.Loader.Operation.stencil_up)
                     f_1_pn = loader.get_mres_write_handle(f_1_fd, neon.Loader.Operation.stencil_up)
                 else:
