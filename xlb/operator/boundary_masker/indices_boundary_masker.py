@@ -433,6 +433,7 @@ class IndicesBoundaryMasker(Operator):
                     wp_bc_indices = wp_bc_indices_[dev_idx]
                     wp_id_numbers = wp_id_numbers_[dev_idx]
                     wp_is_interior = wp_is_interior_[dev_idx]
+
                 @wp.func
                 def domain_bounds_kernel(index: Any):
                     # apply the functional

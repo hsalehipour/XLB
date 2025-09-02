@@ -693,7 +693,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 # throw an exception
                 raise Exception("Only the finest level is supported for now")
             grid = f_0_fd.get_grid()
-            num_levels =grid.num_levels
+            num_levels = grid.num_levels
 
             # if level != 0:
             #     # throw an exception

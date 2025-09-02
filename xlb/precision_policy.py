@@ -3,7 +3,6 @@
 from enum import Enum, auto
 
 
-
 class Precision(Enum):
     FP64 = auto()
     FP32 = auto()
@@ -14,6 +13,7 @@ class Precision(Enum):
     @property
     def wp_dtype(self):
         import warp as wp
+
         if self == Precision.FP64:
             return wp.float64
         elif self == Precision.FP32:
@@ -84,10 +84,12 @@ class PrecisionPolicy(Enum):
 
     def cast_to_compute_jax(self, array):
         import jax.numpy as jnp
+
         compute_precision = self.compute_precision
         return jnp.array(array, dtype=compute_precision.jax_dtype)
 
     def cast_to_store_jax(self, array):
         import jax.numpy as jnp
+
         store_precision = self.store_precision
         return jnp.array(array, dtype=store_precision.jax_dtype)

@@ -445,7 +445,7 @@ class MultiresIO(object):
 
         # Ensure that this operator is called on multires grids
         grid_mres = next(iter(field_neon_dict.values())).get_grid()
-        assert grid_mres.name== "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
+        assert grid_mres.name == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
 
         for field_name in field_neon_dict.keys():
             assert field_name in self.field_name_cardinality_dict.keys(), (

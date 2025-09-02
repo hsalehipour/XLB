@@ -48,6 +48,7 @@ def default_backend() -> ComputeBackend:
 
 def check_backend_support():
     import jax
+
     if jax.devices()[0].platform == "gpu":
         gpus = jax.devices("gpu")
         if len(gpus) > 1:
