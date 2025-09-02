@@ -174,7 +174,10 @@ def bc_profile():
     H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
     H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
     two = dtype(2.0)
+    one = dtype(1.0)
+    zero = dtype(0.0)
     u_max_wp = dtype(u_max)
+    _u_vec = wp.vec(velocity_set.d, dtype=dtype)
 
     @wp.func
     def bc_profile_warp(index: wp.vec3i):
@@ -188,7 +191,9 @@ def bc_profile():
         r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
         # Parabolic profile: u = u_max * (1 - r²)
-        return wp.vec(u_max_wp * wp.max(dtype(0.0), dtype(1.0) - r_squared), length=1)
+        # Note that unlike RegularizedBC and ZouHeBC which only accept normal velocity, hybridBC accepts the full velocity vector
+        # return _u_vec(u_max_wp * wp.max(zero, one - r_squared), zero, zero)
+        return wp.vec(u_max_wp * wp.max(zero, one - r_squared), length=1)
 
     return bc_profile_warp
 
@@ -200,6 +205,7 @@ walls = [[] for _ in range(num_levels - 1)] + [walls]
 
 # Initialize Boundary Conditions
 bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
+# bc_left = HybridBC(bc_method="bounceback_regularized", profile=bc_profile(), indices=inlet)
 # Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!
