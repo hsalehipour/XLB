@@ -533,11 +533,11 @@ class IndicesBoundaryMasker(Operator):
 
         # If there are no interior boundary conditions, skip the rest and retun early
         if not bc_interior:
-            wp.synchronize()
-            bc_mask.update_host(0)
-            wp.synchronize()
-            bc_mask.export_vti("bc_mask.vti", "m")
-            wp.synchronize()
+            # wp.synchronize()
+            # bc_mask.update_host(0)
+            # wp.synchronize()
+            # bc_mask.export_vti("bc_mask.vti", "m")
+            # wp.synchronize()
             return bc_mask, missing_mask
 
         # Prepare the second and third kernel inputs for only a subset of boundary conditions associated with the interior
@@ -555,9 +555,9 @@ class IndicesBoundaryMasker(Operator):
         )
         container_interior_bc_mask.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
-        wp.synchronize()
-        bc_mask.update_host(0)
-        wp.synchronize()
-        bc_mask.export_vti(f"{"bc_mask"}.vti", "u")
+        # wp.synchronize()
+        # bc_mask.update_host(0)
+        # wp.synchronize()
+        # bc_mask.export_vti(f"{"bc_mask"}.vti", "u")
 
         return bc_mask, missing_mask
