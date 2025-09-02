@@ -8,6 +8,7 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.force import MomentumTransfer
+from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 class MultiresMomentumTransfer(MomentumTransfer):
@@ -19,23 +20,38 @@ class MultiresMomentumTransfer(MomentumTransfer):
     def __init__(
         self,
         no_slip_bc_instance,
+        mres_perf_opt=MresPerfOptimizationType.NAIVE_COLLIDE_STREAM,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
-        # Call super
-        super().__init__(no_slip_bc_instance, velocity_set, precision_policy, compute_backend)
-        if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
-            raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
+        from xlb.operator.force.momentum_transfer import LBMOperationSequence
 
-        # TODO! The current implementation does not support encoding and decoding of mesh distance in f_1!
-        assert not self.no_slip_bc_instance.needs_mesh_distance, "Mesh distance is not supported for Force Calculation!"
+        if compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
+            raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {compute_backend} backend.")
+
+        # Set the sequence of operations based on the performance optimization type
+        if mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
+            operation_sequence = LBMOperationSequence.STREAM_THEN_COLLIDE
+        elif mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
+            operation_sequence = LBMOperationSequence.COLLIDE_THEN_STREAM
+        else:
+            raise ValueError(f"Unknown performance optimization type: {mres_perf_opt}")
+
+        # Check if the performance optimization type is compatible with the use of mesh distance
+        if mres_perf_opt != MresPerfOptimizationType.FUSION_AT_FINEST:
+            assert not no_slip_bc_instance.needs_mesh_distance, (
+                "MultiresMomentumTransfer operator does not support mesh distance for performance optimization other than fusion at the finest level."
+            )
 
         # Print a warning to the user about the boundary voxels
         print(
             "WARNING! make sure boundary voxels are all at the same level and not among the transition regions from one level to another. "
             "Otherwise, the results of force calculation are not correct!\n"
         )
+
+        # Call super
+        super().__init__(no_slip_bc_instance, operation_sequence, velocity_set, precision_policy, compute_backend)
 
     def _construct_neon(self):
         # Use the warp functional for the NEON backend
@@ -57,19 +73,13 @@ class MultiresMomentumTransfer(MomentumTransfer):
                 f_0_pn = loader.get_mres_write_handle(f_0)
                 f_1_pn = loader.get_mres_write_handle(f_1)
 
-                # Important: Note the swap to the order of f_0 and f_1 in the functional call.
-                # This is because the multiresolution simulation first performs collision and then streaming and hence
-                # f_0 refers to the post-streaming distribution function and f_1 refers to the pre-collision distribution function.
-                # This is in contrast to our dense implementations (all backends) where streaming occurs first and is followed by
-                # collision which makes. As a workaround, we can simply swap f_0 and f_1 in the functional call.
-
                 @wp.func
                 def container_kernel(index: Any):
                     # apply the functional
                     functional(
                         index,
-                        f_1_pn,
                         f_0_pn,
+                        f_1_pn,
                         bc_mask_pn,
                         missing_mask_pn,
                         force,
@@ -94,8 +104,7 @@ class MultiresMomentumTransfer(MomentumTransfer):
         self.force *= self.compute_dtype(0.0)
 
         # Define the neon functionals needed for this operation
-        self.stream_functional = self.stream.neon_functional
-        self.no_slip_bc_functional = self.no_slip_bc_instance.neon_functional
+        self.fetcher_functional = self.fetcher.neon_functional
 
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):

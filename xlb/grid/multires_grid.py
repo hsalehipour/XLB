@@ -112,28 +112,63 @@ class NeonMultiresGrid(Grid):
         """
         num_levels = len(level_data)
         bc_indices_list = []
+        d = self.velocity_set.d  # Dimensionality (2 or 3)
+
+        # Define side configurations (adjust if your conventions differ)
+        if d == 3:
+            side_config = {
+                "left": {"dim": 0, "value": 0},
+                "right": {"dim": 0, "value": lambda s: s[0] - 1},
+                "front": {"dim": 1, "value": 0},
+                "back": {"dim": 1, "value": lambda s: s[1] - 1},
+                "bottom": {"dim": 2, "value": 0},
+                "top": {"dim": 2, "value": lambda s: s[2] - 1},
+            }
+        elif d == 2:
+            side_config = {
+                "left": {"dim": 0, "value": 0},
+                "right": {"dim": 0, "value": lambda s: s[0] - 1},
+                "bottom": {"dim": 1, "value": 0},
+                "top": {"dim": 1, "value": lambda s: s[1] - 1},
+            }
+        else:
+            raise ValueError(f"Unsupported dimensionality: {d}")
+
+        if box_side not in side_config:
+            raise ValueError(f"Unsupported box_side: {box_side}")
+
         for level in range(num_levels):
-            # Find active indices at this level
             mask = level_data[level][0]
-            origin = level_data[level][2]
-            active_indices = np.nonzero(mask) + origin[:, None]
+            origin = level_data[level][2]  # Assume np.array of shape (d,)
+            grid_shape = self.level_to_shape(level)  # tuple of length d
 
-            # Get bottom indices of the bounding box at this level
-            grid_shape = self.level_to_shape(level)
-            box = self.bounding_box_indices(shape=grid_shape, remove_edges=remove_edges)
-            bc_indices = np.array([box[box_side][i] for i in range(self.velocity_set.d)])
+            conf = side_config[box_side]
+            dim_idx = conf["dim"]
+            grid_bounds = conf["value"](grid_shape) if callable(conf["value"]) else conf["value"]
 
-            # Convert to flat indices
-            bc_indices = np.ravel_multi_index(bc_indices, grid_shape)
-            active_indices = np.ravel_multi_index(active_indices, grid_shape)
-
-            # Find common rows
-            common = np.intersect1d(active_indices, bc_indices)
-
-            # Append common points at this level to a list
-            if common.size == 0:
+            # Get local indices of active voxels
+            local_coords = np.nonzero(mask)  # Tuple of d arrays, each of length num_active
+            if not local_coords[0].size:
                 bc_indices_list.append([])
+                continue
+
+            # Compute global coords (list of d arrays)
+            global_coords = [local_coords[i] + origin[i] for i in range(d)]
+
+            # Filter: must match grid_bounds along the dimension associated with the selected box_side
+            cond = global_coords[dim_idx] == grid_bounds
+
+            # If remove_edges, exclude perimeter of the face
+            if remove_edges:
+                for i in range(d):
+                    if i != dim_idx:
+                        cond &= (global_coords[i] > 0) & (global_coords[i] < grid_shape[i] - 1)
+
+            # Collect filtered indices
+            if np.any(cond):
+                active_bc = [gc[cond] for gc in global_coords]
+                bc_indices_list.append([arr.tolist() for arr in active_bc])
             else:
-                active_bc_indices = np.unravel_index(common, grid_shape)
-                bc_indices_list.append([arr.tolist() for arr in active_bc_indices])
+                bc_indices_list.append([])
+
         return bc_indices_list
