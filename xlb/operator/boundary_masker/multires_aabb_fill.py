@@ -3,18 +3,20 @@ from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
-from xlb.operator.boundary_masker import MeshMaskerAABB
+from xlb.operator.boundary_masker import MeshMaskerAABBFill
 from xlb.operator.operator import Operator
 import neon
+
+# Ensure NEON multires builtins are registered before containers compile
+import neon.multires.mPartition as mpart
+mpart.register_builtins()
 
 
 class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
     """
-    Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization in multiresolution simulations.
+    Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization in multiresolution simulations (NEON backend).
 
-    This implementation uses warp.mesh_query_aabb for efficient mesh-voxel intersection testing,
-    providing approximate 1-voxel thick surface detection around the mesh geometry.
-    Suitable for scenarios where fast, approximate boundary detection is sufficient.
+    This version provides NEON-specific functionals working on multires partitions (mPartition) and bIndex.
     """
 
     def __init__(
@@ -23,23 +25,158 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
-        # Call super
         super().__init__(velocity_set, precision_policy, compute_backend)
         if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
-            
+
+        # Build and store NEON dicts
+        self.neon_functional_dict, self.neon_container_dict = self._construct_neon()
 
     def _construct_neon(self):
-        # Use the warp functional for the NEON backend
-        functional_dict, _ = self._construct_warp()
-        functional_erode = functional_dict.get("functional_erode")
-        functional_dilate = functional_dict.get("functional_dilate")
-        functional_solid = functional_dict.get("functional_solid")
-        functional_aabb = functional_dict.get("functional_aabb")
+        # Use the warp functionals from the base (for reference), but implement NEON variants here
+        functional_dict_warp, _ = self._construct_warp()
+        functional_erode_warp = functional_dict_warp.get("functional_erode")
+        functional_dilate_warp = functional_dict_warp.get("functional_dilate")
+        functional_solid = functional_dict_warp.get("functional_solid")
+        # We will not directly reuse functional_solid / functional_aabb from warp; we write NEON-specific ones.
 
-        # Erode the solid mask in f_field, removing a layer of outer solid voxels, storing output in f_field_out
+        # Short-hands to NEON builtins (these names are registered by mPartition.register_builtins)
+        # Warp resolves these names at codegen time
+        # neon_read(partition, idx, card) -> Type
+        # neon_write(partition, idx, card, value) -> None
+        # neon_is_valid(partition, idx, ngh_idx) -> bool
+        # neon_ngh_idx(partition, idx, ngh_idx) -> neon.block.bIndex
+        # neon_global_idx(partition, idx) -> neon.Index_3d
+        # neon_cardinality(partition) -> int
+
+        # We also need lattice info for neighbor iteration
+        _c = self.velocity_set.c
+        _q = self.velocity_set.q
+        _opp_indices = self.velocity_set.opp_indices
+
+        # Note: all NEON kernels operate over neon.block.bIndex (provided by container) and
+        # multires partitions obtained from loader.get_mres_read_handle/write_handle.
+
+        # Erode: take min over neighbors (binary mask: 0/255)
+        # @wp.func
+        # def mres_functional_erode(index: Any,
+        #                           f_field_pn: Any,    # mPartition_uint8
+        #                           f_field_out_pn: Any # mPartition_uint8
+        #                           ):
+        #     # start with 255
+        #     min_val = wp.uint8(255)
+        #     # iterate neighbors; skip center (direction 0)
+        #     for direction_idx in range(1, _q):
+        #         # Check neighbor validity
+        #         if neon_is_valid(f_field_pn, index, direction_idx):
+        #             nidx = neon_ngh_idx(f_field_pn, index, direction_idx)
+        #             ngh_val = neon_read(f_field_pn, nidx, 0)
+        #             # min for uint8
+        #             min_val = wp.min(min_val, ngh_val)
+        #     neon_write(f_field_out_pn, index, 0, min_val)
+
+        # # Dilate: take max over neighbors (binary mask: 0/255)
+        # @wp.func
+        # def mres_functional_dilate(index: Any,
+        #                            f_field_pn: Any,    # mPartition_uint8
+        #                            f_field_out_pn: Any # mPartition_uint8
+        #                            ):
+        #     max_val = wp.uint8(0)
+        #     for direction_idx in range(1, _q):
+        #         if neon_is_valid(f_field_pn, index, direction_idx):
+        #             nidx = neon_ngh_idx(f_field_pn, index, direction_idx)
+        #             ngh_val = neon_read(f_field_pn, nidx, 0)
+        #             max_val = wp.max(max_val, ngh_val)
+        #     neon_write(f_field_out_pn, index, 0, max_val)
+
+        # Solid voxelization (AABB around cell center)
+        # @wp.func
+        # def mres_functional_solid(index: Any,
+        #                          mesh_id: wp.uint64,
+        #                          solid_mask_pn: Any,  # mPartition_uint8
+        #                          offset: wp.vec3f):
+        #     # Obtain integer global coords for this index
+        #     g = neon_global_idx(solid_mask_pn, index)
+        #     # Use NEON builtins to extract components as wp.int32, then cast to wp.float32
+        #     cell_center = wp.vec3f(
+        #         wp.float32(neon_get_x(g)),
+        #         wp.float32(neon_get_y(g)),
+        #         wp.float32(neon_get_z(g))
+        #     ) + offset
+        #     half = wp.vec3f(0.5, 0.5, 0.5)
+
+        #     if wp.mesh_query_aabb(mesh_id, cell_center - half, cell_center + half):
+        #         neon_write(solid_mask_pn, index, 0, wp.uint8(255))
+
+        # Main AABB fill: sets bc_mask, missing_mask, distances based on solid_mask
+        # bc_mask: wp.uint8, missing_mask: wp.uint8, distances: dtype from precision policy (float)
+        @wp.func
+        def mres_functional_aabb(index: Any,
+                                 mesh_id: wp.uint64,
+                                 id_number: wp.int32,
+                                 distances_pn: Any,     # mPartition(dtype=distance type), cardinality=_q
+                                 bc_mask_pn: Any,       # mPartition_uint8, cardinality=1
+                                 missing_mask_pn: Any,  # mPartition_uint8, cardinality=_q
+                                 solid_mask_pn: Any,    # mPartition_uint8, cardinality=1
+                                 needs_mesh_distance: bool):
+            # Cell center from bc_mask partition
+            g = wp.neon_global_idx(bc_mask_pn, index)
+            cell_center = wp.vec3f(
+                wp.float32(wp.neon_get_x(g)),
+                wp.float32(wp.neon_get_y(g)),
+                wp.float32(wp.neon_get_z(g))
+            )
+            # If already solid or bc, mark solid
+            solid_val = wp.neon_read(solid_mask_pn, index, 0)
+            bc_val = wp.neon_read(bc_mask_pn, index, 0)
+            if solid_val == wp.uint8(255) or bc_val == wp.uint8(255):
+                wp.neon_write(bc_mask_pn, index, 0, wp.uint8(255))
+                return
+
+            # loop lattice directions
+            for direction_idx in range(_q):
+                # skip central if provided by velocity set as 0 (typical)
+                # we’ll assume center is index 0
+                if direction_idx == 0:
+                    continue
+
+                # If neighbor index is valid at this resolution level
+                nidx = wp.neon_ngh_idx(wp.int8(-_c[0, direction_idx]), wp.int8(-_c[1, direction_idx]), wp.int8(-_c[2, direction_idx]))
+                is_valid = wp.bool(False)
+                nval = wp.neon_read_ngh(solid_mask_pn, index, nidx, direction_idx, wp.uint8(0), is_valid)
+                if is_valid:
+                    if nval == wp.uint8(255):
+                        # Found solid neighbor -> boundary cell
+                        wp.neon_write(bc_mask_pn, index, 0, wp.uint8(id_number))
+                        wp.neon_write(missing_mask_pn, index, _opp_indices[direction_idx], wp.uint8(1))
+
+                        if not needs_mesh_distance:
+                            # No distance needed; continue to next direction
+                            continue
+
+                        # Compute mesh distance along lattice direction
+                        dir_vec = wp.vec3f(
+                            wp.float32(_c[0, direction_idx]),
+                            wp.float32(_c[1, direction_idx]),
+                            wp.float32(_c[2, direction_idx]),
+                        )
+                        max_length = wp.length(dir_vec)
+                        # Avoid division by zero for any pathological dir (shouldn't happen)
+                        norm_dir = dir_vec / (max_length if max_length > 0.0 else 1.0)
+                        query = wp.mesh_query_ray(mesh_id, cell_center, norm_dir, 1.5 * max_length)
+                        if query.result:
+                            pos_mesh = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
+                            dist = wp.length(pos_mesh - cell_center) - 0.5 * max_length
+                            weight = dist / (max_length if max_length > 0.0 else 1.0)
+                            # distances has cardinality _q; store into this channel
+                            wp.neon_write(distances_pn, index, direction_idx, wp.float32(weight))
+                        else:
+                            wp.neon_write(distances_pn, index, direction_idx, wp.float32(1.0))
+
+        # Containers
+
+        # Erode: f_field -> f_field_out
         @neon.Container.factory(name="Erode")
-        # TODO: check parameters
         def container_erode(f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any), level: int):
             def erode_launcher(loader: neon.Loader):
                 loader.set_mres_grid(f_field.get_grid(), level)
@@ -48,19 +185,13 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
                 @wp.func
                 def erode_kernel(index: Any):
-                    # apply the functional
-                    functional_erode(
-                        index,
-                        f_field_pn,
-                        f_field_out_pn,
-                    )
+                    functional_erode_warp(index, f_field_pn, f_field_out_pn)
 
                 loader.declare_kernel(erode_kernel)
             return erode_launcher
 
-        # Dilate the solid mask in f_field, adding a layer of outer solid voxels, storing output in f_field_out
+        # Dilate: f_field -> f_field_out
         @neon.Container.factory(name="Dilate")
-        # TODO: check parameters
         def container_dilate(f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any), level: int):
             def dilate_launcher(loader: neon.Loader):
                 loader.set_mres_grid(f_field.get_grid(), level)
@@ -69,23 +200,16 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
                 @wp.func
                 def dilate_kernel(index: Any):
-                    # apply the functional
-                    functional_dilate(
-                        index,
-                        f_field_pn,
-                        f_field_out_pn,
-                    )
+                    functional_dilate_warp(index, f_field_pn, f_field_out_pn)
 
                 loader.declare_kernel(dilate_kernel)
             return dilate_launcher
 
-        # Construct the warp kernel
-        # Find solid voxels that intersect the mesh
+        # Solid mask: voxelize mesh into solid_mask
         @neon.Container.factory(name="Solid")
-        # TODO: check parameters
         def container_solid(
             mesh_id: wp.uint64,
-            solid_mask: wp.array3d(dtype=wp.int32),
+            solid_mask: wp.array3d(dtype=wp.uint8),
             level: int
         ):
             def solid_launcher(loader: neon.Loader):
@@ -94,6 +218,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
                 @wp.func
                 def solid_kernel(index: Any):
+                    # mres_functional_solid(index, mesh_id, solid_mask_pn, wp.vec3f(0.0, 0.0, 0.0))
                     # apply the functional
                     functional_solid(
                         index,
@@ -106,6 +231,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
             return solid_launcher
 
+        # Main AABB container
         @neon.Container.factory(name="MeshMaskerAABBFill")
         def container(
             mesh_id: Any,
@@ -126,11 +252,10 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
                 @wp.func
                 def aabb_kernel(index: Any):
-                    # apply the functional
-                    functional_aabb(
+                    mres_functional_aabb(
                         index,
                         mesh_id,
-                        id_number,
+                        wp.int32(id_number),
                         distances_pn,
                         bc_mask_pn,
                         missing_mask_pn,
@@ -149,6 +274,14 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             "container_aabb": container,
         }
 
+        # Expose NEON functionals too (in case callers want to reuse)
+        functional_dict = {
+            # "mres_functional_erode": mres_functional_erode,
+            # "mres_functional_dilate": mres_functional_dilate,
+            # "mres_functional_solid": mres_functional_solid,
+            "mres_functional_aabb": mres_functional_aabb,
+        }
+
         return functional_dict, container_dict
 
     @Operator.register_backend(ComputeBackend.NEON)
@@ -164,15 +297,25 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
 
         grid = bc_mask.get_grid()
-        # Is this right?
-        solid_mask = grid.create_field(cardinality=1, dtype=Precision.UINT8, fill_value=0)
-        solid_mask_out = grid.create_field(cardinality=1, dtype=Precision.UINT8, fill_value=0)
+        # Create fields using new_field
+        solid_mask = grid.new_field(
+            cardinality=1,
+            dtype=wp.uint8,
+            memory_type=neon.MemoryType.device()
+        )
+        solid_mask_out = grid.new_field(
+            cardinality=1,
+            dtype=wp.uint8,
+            memory_type=neon.MemoryType.device()
+            # memory_type=neon.MemoryType.host_device() 
+        )
+
         for level in range(grid.num_levels):
+            # Initialize to 0
+            solid_mask.fill_run(level=level, value=wp.uint8(0), stream_idx=stream)
+            solid_mask_out.fill_run(level=level, value=wp.uint8(0), stream_idx=stream)
 
-            # TODO: Prepare kernel inputs?
-
-            # Launch the neon container
-            # c = self.neon_container(mesh_id, bc_id, distances, bc_mask, missing_mask, wp.static(bc.needs_mesh_distance), level)
+            # Launch the neon containers
             container_solid = self.neon_container_dict["container_solid"](mesh_id, solid_mask, level)
             container_solid.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
@@ -182,7 +325,9 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             container_erode = self.neon_container_dict["container_erode"](solid_mask_out, solid_mask, level)
             container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
-            container_aabb = self.neon_container_dict["container_aabb"](mesh_id, bc_id, distances, bc_mask, missing_mask, solid_mask, wp.static(bc.needs_mesh_distance), level)
+            container_aabb = self.neon_container_dict["container_aabb"](
+                mesh_id, bc_id, distances, bc_mask, missing_mask, solid_mask, wp.static(bc.needs_mesh_distance), level
+            )
             container_aabb.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
         return distances, bc_mask, missing_mask

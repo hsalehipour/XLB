@@ -62,27 +62,31 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
 
         # Erode the solid mask in f_field, removing a layer of outer solid voxels, storing output in f_field_out
         @wp.func
-        def functional_erode(index: Any, f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any)):
+        def functional_erode(index: Any, f_field: Any, f_field_out: Any):
             # self.helper_masker.read_field_neighbor()
-            min_val = self.store_dtype(255)
-            for direction_idx in range(1, _q):
-                if (self.helper_masker.is_in_bounds(index, wp.vec3i(f_field.shape[0], f_field.shape[1], f_field.shape[2]), 1)):
+            min_val = wp.uint8(255)
+            for l in range(1, _q):
+                is_valid = wp.bool(False)
+                # ngh_val = self.helper_masker.read_field_neighbor_valid(f_field, index, 0, direction_idx, is_valid)
+                ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
+                ngh_val = wp.neon_read_ngh(f_field, index, ngh, l, wp.uint8(0), is_valid)
+                if is_valid:
                     # Take the min value of all neighbors in bounds
-                    ngh_val = self.helper_masker.read_field_neighbor(f_field, index, 0, direction_idx)
                     min_val = wp.min(min_val, ngh_val)
-            
             self.write_field(f_field_out, index, 0, min_val)
 
         # Dilate the solid mask in f_field, adding a layer of outer solid voxels, storing output in f_field_out
         @wp.func
-        def functional_dilate(index: Any, f_field: wp.array3d(dtype=Any), f_field_out: wp.array3d(dtype=Any)):
-            max_val = self.store_dtype(0)
-            for direction_idx in range(1, _q):
-                if (self.helper_masker.is_in_bounds(index, wp.vec3i(f_field.shape[0], f_field.shape[1], f_field.shape[2]), 1)):
-                    # Take the max value of all neighbors in bounds
-                    ngh_val = self.helper_masker.read_field_neighbor(f_field, index, 0, direction_idx)
-                    max_val = wp.max(min_val, ngh_val)
-
+        def functional_dilate(index: Any, f_field: Any, f_field_out: Any):
+            max_val = wp.uint8(0)
+            offset = wp.vec3i(0, 0, 0)
+            for l in range(1, _q):
+                is_valid = wp.bool(False)
+                # ngh_val = self.helper_masker.read_field_neighbor_valid(f_field, index, 0, direction_idx, is_valid)
+                ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
+                ngh_val = wp.neon_read_ngh(f_field, index, ngh, l, wp.uint8(0), is_valid)
+                if is_valid:
+                    max_val = wp.max(max_val, ngh_val)
             self.write_field(f_field_out, index, 0, max_val)
 
         # Construct the warp kernel
@@ -90,9 +94,9 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         @wp.func
         def functional_solid(
             index: Any,
-            mesh_id: wp.uint64,
-            solid_mask: wp.array3d(dtype=wp.int32),
-            offset: wp.vec3f,
+            mesh_id: Any,
+            solid_mask: Any,
+            offset: Any
         ):
             # position of the point
             cell_center_pos = self.helper_masker.index_to_position(solid_mask, index) + offset
@@ -100,7 +104,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
 
             if self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - half):
                 # Make solid voxel
-                self.write_field(solid_mask, index, 0, wp.int32(255))
+                self.write_field(solid_mask, index, 0, wp.uint8(255))
 
         @wp.kernel
         def kernel_solid(
