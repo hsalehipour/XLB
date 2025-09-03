@@ -23,6 +23,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         compute_backend: ComputeBackend = None,
         fill_in_voxels: int = 3,
     ):
+        self.fill_in_voxels = fill_in_voxels
         # Call super
         self.tile_half = fill_in_voxels
         self.tile_size = self.tile_half * 2 + 1

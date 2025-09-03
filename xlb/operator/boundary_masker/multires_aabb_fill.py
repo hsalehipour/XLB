@@ -24,8 +24,9 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
+        fill_in_voxels: int = 4,
     ):
-        super().__init__(velocity_set, precision_policy, compute_backend)
+        super().__init__(velocity_set, precision_policy, compute_backend, fill_in_voxels)
         if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
 
@@ -254,12 +255,21 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             container_solid = self.neon_container_dict["container_solid"](mesh_id, solid_mask, level)
             container_solid.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
-            # for fill in range(fill_in_voxels):
-            container_dilate = self.neon_container_dict["container_dilate"](solid_mask, solid_mask_out, level)
-            container_dilate.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+            for fill in range(self.fill_in_voxels):
+                container_dilate = self.neon_container_dict["container_dilate"](solid_mask, solid_mask_out, level)
+                container_dilate.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+                solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            container_erode = self.neon_container_dict["container_erode"](solid_mask_out, solid_mask, level)
-            container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+            if self.fill_in_voxels%2 > 0:
+                solid_mask, solid_mask_out = solid_mask_out, solid_mask
+
+            for fill in range(self.fill_in_voxels):
+                container_erode = self.neon_container_dict["container_erode"](solid_mask_out, solid_mask, level)
+                container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+                solid_mask, solid_mask_out = solid_mask_out, solid_mask
+
+            if self.fill_in_voxels%2 > 0:
+                solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
             container_aabb = self.neon_container_dict["container_aabb"](
                 mesh_id, bc_id, distances, bc_mask, missing_mask, solid_mask, wp.static(bc.needs_mesh_distance), level
