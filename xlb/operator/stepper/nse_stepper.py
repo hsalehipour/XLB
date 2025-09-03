@@ -129,7 +129,6 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         # Process indices-based boundary conditions
         if bc_with_indices:
-            grid = self.get_grid()
             bc_mask, missing_mask = indices_masker(bc_with_indices, bc_mask, missing_mask)
 
         # Process mesh-based boundary conditions for 3D

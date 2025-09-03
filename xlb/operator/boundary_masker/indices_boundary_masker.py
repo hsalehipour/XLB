@@ -329,17 +329,19 @@ class IndicesBoundaryMasker(Operator):
         is_interior = is_interior[:total_index]
 
         # Convert to Warp arrays
+        def _to_wp_arrays(indices, id_numbers, is_interior, device=None):
+            return (
+                wp.array(indices, dtype=wp.int32, device=device),
+                wp.array(id_numbers, dtype=wp.uint8, device=device),
+                wp.array(is_interior, dtype=wp.uint8, device=device),
+            )
+
         if self.compute_backend == ComputeBackend.NEON:
             grid = self.grid
-            if grid is None:
-                ndevice = 1
-            else:
-                ndevice = grid.bk.get_num_devices()
+            ndevice = 1 if grid is None else grid.bk.get_num_devices()
+
             if ndevice == 1:
-                wp_bc_indices = wp.array(indices, dtype=wp.int32)
-                wp_id_numbers = wp.array(id_numbers, dtype=wp.uint8)
-                wp_is_interior = wp.array(is_interior, dtype=wp.uint8)
-                return wp_bc_indices, wp_id_numbers, wp_is_interior
+                return _to_wp_arrays(indices, id_numbers, is_interior)
             else:
                 # For multi-device, we need to split the indices across devices
                 wp_bc_indices = []
@@ -352,11 +354,7 @@ class IndicesBoundaryMasker(Operator):
                     wp_is_interior.append(wp.array(is_interior, dtype=wp.uint8, device=device_name))
                 return wp_bc_indices, wp_id_numbers, wp_is_interior
         else:
-            # Convert to Warp arrays
-            wp_bc_indices = wp.array(indices, dtype=wp.int32)
-            wp_id_numbers = wp.array(id_numbers, dtype=wp.uint8)
-            wp_is_interior = wp.array(is_interior, dtype=wp.uint8)
-            return wp_bc_indices, wp_id_numbers, wp_is_interior
+            return _to_wp_arrays(indices, id_numbers, is_interior)
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, bclist, bc_mask, missing_mask, start_index=None):
@@ -429,10 +427,10 @@ class IndicesBoundaryMasker(Operator):
                     wp_id_numbers = wp_id_numbers_
                     wp_is_interior = wp_is_interior_
                 else:
-                    dev_idx = loader.get_device_id()
-                    wp_bc_indices = wp_bc_indices_[dev_idx]
-                    wp_id_numbers = wp_id_numbers_[dev_idx]
-                    wp_is_interior = wp_is_interior_[dev_idx]
+                    device_id = loader.get_device_id()
+                    wp_bc_indices = wp_bc_indices_[device_id]
+                    wp_id_numbers = wp_id_numbers_[device_id]
+                    wp_is_interior = wp_is_interior_[device_id]
 
                 @wp.func
                 def domain_bounds_kernel(index: Any):
@@ -534,11 +532,6 @@ class IndicesBoundaryMasker(Operator):
 
         # If there are no interior boundary conditions, skip the rest and retun early
         if not bc_interior:
-            # wp.synchronize()
-            # bc_mask.update_host(0)
-            # wp.synchronize()
-            # bc_mask.export_vti("bc_mask.vti", "m")
-            # wp.synchronize()
             return bc_mask, missing_mask
 
         # Prepare the second and third kernel inputs for only a subset of boundary conditions associated with the interior
@@ -555,10 +548,5 @@ class IndicesBoundaryMasker(Operator):
             bc_mask,
         )
         container_interior_bc_mask.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
-
-        # wp.synchronize()
-        # bc_mask.update_host(0)
-        # wp.synchronize()
-        # bc_mask.export_vti(f"{"bc_mask"}.vti", "u")
 
         return bc_mask, missing_mask

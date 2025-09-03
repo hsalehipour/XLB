@@ -102,6 +102,12 @@ def parse_arguments():
         velocity_set = xlb.velocity_set.D3Q27(precision_policy=args.precision_policy, compute_backend=compute_backend)
     args.velocity_set = velocity_set
 
+    if args.gpu_devices is not None and args.compute_backend != ComputeBackend.NEON:
+        raise ValueError("--gpu_devices can be used only with the Neon backend.")
+
+    if args.gpu_devices is None:
+        args.gpu_devices = [0]
+
     print_args(args)
 
     return args
@@ -120,12 +126,13 @@ def print_args(args):
     print(f"Velocity Set:         {args.velocity_set.__class__.__name__}")
     print(f"Generate Report:      {'Yes' if args.report else 'No'}")
     print(f"Measure Scalability:  {'Yes' if args.measure_scalability else 'No'}")
+    print(f"Export Velocity:      {'Yes' if args.export_final_velocity else 'No'}")
     print(f"Repetitions:          {args.repetitions}")
 
     if args.compute_backend.name == "NEON":
         print(f"GPU Devices:          {args.gpu_devices}")
         # Convert the neon OCC enum back to string for display
-        occ_display = str(args.occ).split(".")[-1] if hasattr(args.occ, "__class__") else args.occ
+        occ_display = args.occ.to_string() if hasattr(args.occ, "__class__") else args.occ
         print(f"OCC Strategy:         {occ_display}")
 
     print("=" * 60)
