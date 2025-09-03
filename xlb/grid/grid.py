@@ -11,6 +11,7 @@ def grid_factory(
     shape: Tuple[int, ...],
     compute_backend: ComputeBackend = None,
     velocity_set=None,
+    backend_config=None,
 ):
     compute_backend = compute_backend or DefaultConfig.default_backend
     velocity_set = velocity_set or DefaultConfig.velocity_set
@@ -21,7 +22,7 @@ def grid_factory(
     elif compute_backend == ComputeBackend.NEON:
         from xlb.grid.neon_grid import NeonGrid
 
-        return NeonGrid(shape=shape, velocity_set=velocity_set)
+        return NeonGrid(shape=shape, velocity_set=velocity_set, backend_config=backend_config)
     elif compute_backend == ComputeBackend.JAX:
         from xlb.grid.jax_grid import JaxGrid
 
