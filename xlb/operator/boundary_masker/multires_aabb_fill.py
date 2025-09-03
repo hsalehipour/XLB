@@ -141,9 +141,9 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                     continue
 
                 # If neighbor index is valid at this resolution level
-                nidx = wp.neon_ngh_idx(wp.int8(-_c[0, direction_idx]), wp.int8(-_c[1, direction_idx]), wp.int8(-_c[2, direction_idx]))
+                ngh = wp.neon_ngh_idx(wp.int8(-_c[0, direction_idx]), wp.int8(-_c[1, direction_idx]), wp.int8(-_c[2, direction_idx]))
                 is_valid = wp.bool(False)
-                nval = wp.neon_read_ngh(solid_mask_pn, index, nidx, direction_idx, wp.uint8(0), is_valid)
+                nval = wp.neon_read_ngh(solid_mask_pn, index, ngh, 0, wp.uint8(0), is_valid)
                 if is_valid:
                     if nval == wp.uint8(255):
                         # Found solid neighbor -> boundary cell

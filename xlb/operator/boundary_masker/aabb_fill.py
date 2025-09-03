@@ -69,7 +69,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
                 is_valid = wp.bool(False)
                 # ngh_val = self.helper_masker.read_field_neighbor_valid(f_field, index, 0, direction_idx, is_valid)
                 ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
-                ngh_val = wp.neon_read_ngh(f_field, index, ngh, l, wp.uint8(0), is_valid)
+                ngh_val = wp.neon_read_ngh(f_field, index, ngh, 0, wp.uint8(0), is_valid)
                 if is_valid:
                     # Take the min value of all neighbors in bounds
                     min_val = wp.min(min_val, ngh_val)
@@ -84,7 +84,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
                 is_valid = wp.bool(False)
                 # ngh_val = self.helper_masker.read_field_neighbor_valid(f_field, index, 0, direction_idx, is_valid)
                 ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
-                ngh_val = wp.neon_read_ngh(f_field, index, ngh, l, wp.uint8(0), is_valid)
+                ngh_val = wp.neon_read_ngh(f_field, index, ngh, 0, wp.uint8(0), is_valid)
                 if is_valid:
                     max_val = wp.max(max_val, ngh_val)
             self.write_field(f_field_out, index, 0, max_val)
