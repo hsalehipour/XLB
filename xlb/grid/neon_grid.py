@@ -3,14 +3,39 @@ import neon
 from .grid import Grid
 from xlb.precision_policy import Precision
 from xlb.compute_backend import ComputeBackend
-from typing import Literal
+from typing import Literal, List
 from xlb import DefaultConfig
 
 
 class NeonGrid(Grid):
-    def __init__(self, shape, velocity_set):
+    def __init__(
+        self,
+        shape,  # bounding box of the domain
+        velocity_set,  # velocity set for the grid
+        backend_config=None,
+    ):
         from .warp_grid import WarpGrid
 
+        if backend_config is None:
+            backend_config = {
+                "device_list": [0],
+                "skeleton_config": neon.SkeletonConfig.none(),
+            }
+
+        # check that the config dictionary has the required keys
+        required_keys = ["device_list"]
+        for key in required_keys:
+            if key not in backend_config:
+                raise ValueError(f"backend_config must contain a '{key}' key")
+
+        # check that the device list is a list of integers
+        if not isinstance(backend_config["device_list"], list):
+            raise ValueError(f"backend_config['device_list'] must be a list of integers")
+        for device in backend_config["device_list"]:
+            if not isinstance(device, int):
+                raise ValueError(f"backend_config['device_list'] must be a list of integers")
+
+        self.config = backend_config
         self.bk = None
         self.dim = None
         self.grid = None
@@ -23,9 +48,7 @@ class NeonGrid(Grid):
         return self.velocity_set
 
     def _initialize_backend(self):
-        # FIXME@max: for now we hardcode the number of devices to 0
-        num_devs = 1
-        dev_idx_list = list(range(num_devs))
+        dev_idx_list = self.config["device_list"]
 
         if len(self.shape) == 2:
             import py_neon
@@ -45,7 +68,7 @@ class NeonGrid(Grid):
                 self.neon_stencil.append([xval, yval, zval])
 
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
-
+        self.bk.info_print()
         self.grid = neon.dense.dGrid(backend=self.bk, dim=self.dim, sparsity=None, stencil=self.neon_stencil)
         pass
 
