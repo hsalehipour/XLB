@@ -192,7 +192,11 @@ def bc_profile():
 
         # Parabolic profile: u = u_max * (1 - r²)
         # Note that unlike RegularizedBC and ZouHeBC which only accept normal velocity, hybridBC accepts the full velocity vector
+
+        # For hybridBC
         # return _u_vec(u_max_wp * wp.max(zero, one - r_squared), zero, zero)
+
+        # For Regularized and ZouHe
         return wp.vec(u_max_wp * wp.max(zero, one - r_squared), length=1)
 
     return bc_profile_warp

@@ -401,22 +401,21 @@ class EncodeAuxiliaryData(Operator):
                 wp.printf("Error: User-defined profile must return a vector of size %d\n", _num_of_aux_data)
                 return
 
-            # Write the result for all q directions, but only store up to num_of_aux_data
+            # Write the result for all q directions, but only store up to _num_of_aux_data
             counter = wp.int32(0)
             for l in range(self.velocity_set.q):
-                # wp.neon_write(f_pn, index, l, self.store_dtype(feq[l]))
+                # Only store up to _num_of_aux_data
+                if counter == _num_of_aux_data:
+                    return
+
                 if l == lattice_central_index:
                     # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
                     self.write_field(field_storage, index, l, self.store_dtype(prescribed_values[l]))
                     counter += 1
-                elif _missing_mask[l] == wp.uint8(1) and counter <= _num_of_aux_data:
+                elif _missing_mask[l] == wp.uint8(1):
                     # The other remaining BC auxiliary data are stored in missing directions of f_1.
-                    # Only store up to num_of_aux_data
                     self.write_field(field_storage, index, _opp_indices[l], self.store_dtype(prescribed_values[l]))
                     counter += 1
-                if counter > _num_of_aux_data:
-                    # Only store up to num_of_aux_data
-                    return
 
         @wp.func
         def decoder_functional(
@@ -431,24 +430,23 @@ class EncodeAuxiliaryData(Operator):
             # Define a vector to hold prescribed_values
             prescribed_values = _aux_vec()
 
-            # Read all q directions, but only retrieve up to num_of_aux_data
+            # Read all q directions, but only retrieve up to _num_of_aux_data
             counter = wp.int32(0)
             for l in range(self.velocity_set.q):
-                # wp.neon_write(f_pn, index, l, self.store_dtype(feq[l]))
+                # Only retrieve up to _num_of_aux_data
+                if counter == _num_of_aux_data:
+                    return prescribed_values
+
                 if l == lattice_central_index:
                     # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
                     value = self.read_field(field_storage, index, l)
                     prescribed_values[counter] = self.compute_dtype(value)
                     counter += 1
-                elif _missing_mask[l] == wp.uint8(1) and counter <= _num_of_aux_data:
+                elif _missing_mask[l] == wp.uint8(1):
                     # The other remaining BC auxiliary data are stored in missing directions of f_1.
-                    # Only store up to num_of_aux_data
                     value = self.read_field(field_storage, index, _opp_indices[l])
                     prescribed_values[counter] = self.compute_dtype(value)
                     counter += 1
-                if counter > _num_of_aux_data:
-                    # Only retrieve up to num_of_aux_data
-                    return prescribed_values
 
         # Construct the warp kernel
         @wp.kernel
