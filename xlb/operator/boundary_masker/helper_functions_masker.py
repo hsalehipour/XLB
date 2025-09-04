@@ -23,7 +23,7 @@ class HelperFunctionsMasker(object):
 
         @wp.func
         def neon_index_to_warp(neon_field_hdl: Any, index: Any):
-            # Unpack the global index in Neon
+            # Unpack the global index in Neon at the finest level and convert it to a warp vector
             cIdx = wp.neon_global_idx(neon_field_hdl, index)
             gx = wp.neon_get_x(cIdx)
             gy = wp.neon_get_y(cIdx)

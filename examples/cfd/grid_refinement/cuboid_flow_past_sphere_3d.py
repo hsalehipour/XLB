@@ -167,12 +167,11 @@ walls = np.unique(np.array(walls), axis=-1).tolist()
 # Define Boundary Conditions
 def bc_profile():
     assert compute_backend == ComputeBackend.NEON
-
-    # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
+    # IMPORTANT NOTE: the user defined functional must be defined in terms of the indices at the finest level
     _, ny, nz = grid_shape_finest
     dtype = precision_policy.compute_precision.wp_dtype
-    H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
-    H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    H_y = dtype(ny)  # Length in y direction (finest level)
+    H_z = dtype(nz)  # Length in z direction (finest level)
     two = dtype(2.0)
     one = dtype(1.0)
     zero = dtype(0.0)
