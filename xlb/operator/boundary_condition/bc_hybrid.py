@@ -81,9 +81,6 @@ class HybridBC(BoundaryCondition):
             distance_decoder_function=self._construct_distance_decoder_function(),
         )
 
-        # A flag to track if available space in "f_1" for storing auxiliary data is full
-        self.auxiliary_storage_space_full = False
-
         # A flag to enable moving wall treatment when either "prescribed_value" or "profile" are provided.
         self.needs_moving_wall_treatment = False
 
@@ -129,9 +126,6 @@ class HybridBC(BoundaryCondition):
             # a wrapper function that also accepts time as a parameter.
             self.is_time_dependent = True
 
-            # For time dependent prescribed values, we cannot store at initialization
-            self.auxiliary_storage_space_full = True
-
         # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
         # velocity profiles given by keyword "profile" which must be a callable function.
         self.profile = profile
@@ -143,7 +137,6 @@ class HybridBC(BoundaryCondition):
         if self.needs_mesh_distance:
             # This BC needs auxiliary data recovery after streaming
             self.needs_aux_recovery = True
-            self.auxiliary_storage_space_full = True
 
         # If this BC is defined using indices, it would need padding in order to find missing directions
         # when imposed on a geometry that is in the domain interior
@@ -155,36 +148,8 @@ class HybridBC(BoundaryCondition):
         else:
             assert self.indices is None, "Cannot use indices with mesh vertices! Please provide mesh vertices only."
 
-        if not self.auxiliary_storage_space_full:
-            # In the following two cases we simply call the user-defined profile warp function
-            # (i)  mesh distance data are already stored in f_1
-            # (ii) the user-defined functional is time-dependent and cannot be stored only once during initialization
-            # This BC needs auxiliary data initialization before streaming
-            self.needs_aux_init = True
-
-            # This BC needs auxiliary data recovery after streaming
-            self.needs_aux_recovery = True
-
-            # This BC needs one auxiliary data for the density or normal velocity
-            # The user prescribed function for velocity profile (eg. rotating velocity) can be stored and retrived using f_1
-            self.num_of_aux_data = 3
-
-            # Create the encoder operator for storing the auxiliary data
-            encode_auxiliary_data = EncodeAuxiliaryData(
-                self.id,
-                self.num_of_aux_data,
-                self.profile,
-                velocity_set=self.velocity_set,
-                precision_policy=self.precision_policy,
-                compute_backend=self.compute_backend,
-            )
-
-            # Get auxiliary decoder functional
-            functional_dict, _ = encode_auxiliary_data._construct_warp()
-            self.decoder_functional = functional_dict["decoder"]
-
-        # Define the profile decoder functional
-        self.profile_decoder_functional = self._construct_profile_decoder_functional()
+        # Define the profile functional
+        self.profile_functional = self._construct_profile_functional()
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
@@ -205,9 +170,9 @@ class HybridBC(BoundaryCondition):
 
         return distance_decoder_function
 
-    def _construct_profile_decoder_functional(self):
+    def _construct_profile_functional(self):
         """
-        Get the profile decoder functional for this BC.
+        Get the profile functional for this BC.
         Note:
         We can impose a profile on a boundary which requires mesh-distance only if that boundary lives on the finest level.
         This is because I don't know how to extract "level" from the
@@ -218,17 +183,16 @@ class HybridBC(BoundaryCondition):
                gz = wp.neon_get_z(cIdx) // 2 ** level
         """
 
-        # Get decoder functional
         @wp.func
-        def decoder_functional(f_1: Any, index: Any, timestep: Any, _missing_mask: Any):
-            if wp.static(not self.auxiliary_storage_space_full):
-                return self.decoder_functional(f_1, index, _missing_mask)
-            elif wp.static(self.is_time_dependent):
-                return self.profile(index, timestep)
+        def profile_functional(f_1: Any, index: Any, timestep: Any):
+            # Convert neon index to warp index
+            warp_index = self.bc_helper.neon_index_to_warp(f_1, index)
+            if wp.static(self.is_time_dependent):
+                return self.profile(warp_index, timestep)
             else:
-                return self.profile(index)
+                return self.profile(warp_index)
 
-        return decoder_functional
+        return profile_functional
 
     def _construct_warp(self):
         # Construct the functionals for this BC
@@ -250,7 +214,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile_decoder_functional(f_1, index, timestep, _missing_mask)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -289,7 +253,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile_decoder_functional(f_1, index, timestep, _missing_mask)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -327,7 +291,7 @@ class HybridBC(BoundaryCondition):
             #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile_decoder_functional(f_1, index, timestep, _missing_mask)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_nonequilibrium_bounceback(
                 index,
                 _missing_mask,
