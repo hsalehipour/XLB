@@ -323,7 +323,7 @@ class HelperFunctionsBC(object):
             gy = wp.neon_get_y(cIdx)
             gz = wp.neon_get_z(cIdx)
 
-            # TODO@Max - XLB is flattening the z dimension in 3D, while neon uses the y dimension
+            # XLB is flattening the z dimension in 3D, while neon uses the y dimension
             if _d == 2:
                 gy, gz = gz, gy
 

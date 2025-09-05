@@ -17,7 +17,6 @@ from xlb.operator.boundary_condition.boundary_condition import (
     HelperFunctionsBC,
 )
 from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
-from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
 
 
 class HybridBC(BoundaryCondition):
@@ -173,10 +172,10 @@ class HybridBC(BoundaryCondition):
     def _construct_profile_functional(self):
         """
         Get the profile functional for this BC.
-        Note:
-        We can impose a profile on a boundary which requires mesh-distance only if that boundary lives on the finest level.
-        This is because I don't know how to extract "level" from the
-        "neon_field_hdl" to do:
+        TODO@Hesam:
+        Right now, we can impose a profile on a boundary which requires mesh-distance only if that boundary lives on the finest level.
+        In order to extract "level" from the "neon_field_hdl" we can use the function wp.neon_level(neon_field_hdl). This will allow us
+        to do the following and get rid of the above limitation.
                cIdx = wp.neon_global_idx(field_neon_hdl, index)
                gx = wp.neon_get_x(cIdx) // 2 ** level
                gy = wp.neon_get_y(cIdx) // 2 ** level
