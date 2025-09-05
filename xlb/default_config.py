@@ -1,4 +1,3 @@
-import jax
 from xlb.compute_backend import ComputeBackend
 from dataclasses import dataclass
 from xlb.precision_policy import PrecisionPolicy
@@ -48,6 +47,8 @@ def default_backend() -> ComputeBackend:
 
 
 def check_backend_support():
+    import jax
+
     if jax.devices()[0].platform == "gpu":
         gpus = jax.devices("gpu")
         if len(gpus) > 1:
