@@ -137,7 +137,7 @@ class RegularizedBC(ZouHeBC):
         def functional_velocity(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -147,16 +147,16 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = bc_helper.get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = decode_lattice_center_value(index, f_1)
+            prescribed_value = self.decoder_functional(f_1, index, _missing_mask)[0]
             _u = -prescribed_value * normals
 
             # calculate rho
-            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = self.compute_dtype(0.0)
             for d in range(_d):
                 unormal += _u[d] * normals[d]
@@ -164,7 +164,7 @@ class RegularizedBC(ZouHeBC):
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
 
             # Regularize the boundary fpop
             _f = bc_helper.regularize_fpop(_f, feq)
@@ -174,7 +174,7 @@ class RegularizedBC(ZouHeBC):
         def functional_pressure(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -184,36 +184,24 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = bc_helper.get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = decode_lattice_center_value(index, f_1)
+            _rho = self.decoder_functional(f_1, index, _missing_mask)[0]
 
             # calculate velocity
-            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = -self.compute_dtype(1.0) + fsum / _rho
             _u = unormal * normals
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
 
             # Regularize the boundary fpop
             _f = bc_helper.regularize_fpop(_f, feq)
             return _f
-
-        @wp.func
-        def decode_lattice_center_value(index: Any, f_1: Any):
-            """
-            Decode the encoded values needed for the boundary condition treatment from the center location in f_1.
-            """
-            if wp.static(self.compute_backend == ComputeBackend.WARP):
-                value = f_1[lattice_central_index, index[0], index[1], index[2]]
-            else:
-                # Note: in Neon case, f_1 is a pointer to the field not the actual data.
-                value = wp.neon_read(f_1, index, lattice_central_index)
-            return self.compute_dtype(value)
 
         if self.bc_type == "velocity":
             functional = functional_velocity

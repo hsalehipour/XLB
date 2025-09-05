@@ -21,6 +21,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
 from xlb.operator.boundary_condition import HelperFunctionsBC
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
+from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
 
 
 class ZouHeBC(BoundaryCondition):
@@ -102,14 +103,31 @@ class ZouHeBC(BoundaryCondition):
             self.prescribed_value = prescribed_value
             self.profile = self._create_constant_prescribed_profile()
 
-        # This BC needs auxiliary data initialization before streaming
-        self.needs_aux_init = True
+        if self.compute_backend == ComputeBackend.JAX:
+            self.prescribed_values = self.profile()
+        else:
+            # This BC needs auxiliary data initialization before streaming
+            self.needs_aux_init = True
 
-        # This BC needs auxiliary data recovery after streaming
-        self.needs_aux_recovery = True
+            # This BC needs auxiliary data recovery after streaming
+            self.needs_aux_recovery = True
 
-        # This BC needs one auxiliary data for the density or normal velocity
-        self.num_of_aux_data = 1
+            # This BC needs one auxiliary data for the density or normal velocity
+            self.num_of_aux_data = 1
+
+            # Create the encoder operator for storing the auxiliary data
+            encode_auxiliary_data = EncodeAuxiliaryData(
+                self.id,
+                self.num_of_aux_data,
+                self.profile,
+                velocity_set=self.velocity_set,
+                precision_policy=self.precision_policy,
+                compute_backend=self.compute_backend,
+            )
+
+            # get decoder functional
+            functional_dict, _ = encode_auxiliary_data._construct_warp()
+            self.decoder_functional = functional_dict["decoder"]
 
         # This BC needs padding for finding missing directions when imposed on a geometry that is in the domain interior
         self.needs_padding = True
@@ -278,7 +296,6 @@ class ZouHeBC(BoundaryCondition):
 
         # Set local constants
         _d = self.velocity_set.d
-        lattice_central_index = self.velocity_set.center_index
 
         @wp.func
         def functional_velocity(
@@ -303,7 +320,7 @@ class ZouHeBC(BoundaryCondition):
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = decode_lattice_center_value(index, f_1)
+            prescribed_value = self.decoder_functional(f_1, index, _missing_mask)[0]
             _u = -prescribed_value * normals
 
             for d in range(_d):
@@ -334,7 +351,7 @@ class ZouHeBC(BoundaryCondition):
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = decode_lattice_center_value(index, f_1)
+            _rho = self.decoder_functional(f_1, index, _missing_mask)[0]
 
             # calculate velocity
             fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
@@ -345,18 +362,6 @@ class ZouHeBC(BoundaryCondition):
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
             _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
             return _f
-
-        @wp.func
-        def decode_lattice_center_value(index: Any, f_1: Any):
-            """
-            Decode the encoded values needed for the boundary condition treatment from the center location in f_1.
-            """
-            if wp.static(self.compute_backend == ComputeBackend.WARP):
-                value = f_1[lattice_central_index, index[0], index[1], index[2]]
-            else:
-                # Note: in Neon case, f_1 is a pointer to the field not the actual data.
-                value = wp.neon_read(f_1, index, lattice_central_index)
-            return self.compute_dtype(value)
 
         if self.bc_type == "velocity":
             functional = functional_velocity
