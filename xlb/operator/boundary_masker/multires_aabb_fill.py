@@ -14,7 +14,8 @@ mpart.register_builtins()
 
 class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
     """
-    Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization in multiresolution simulations (NEON backend).
+    Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization
+    in multiresolution simulations (NEON backend).
 
     This version provides NEON-specific functionals working on multires partitions (mPartition) and bIndex.
     """
@@ -47,7 +48,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         _opp_indices = self.velocity_set.opp_indices
 
         # Set local constants
-        lattice_central_index = self.velocity_set.center_index
+        # self.lattice_central_index = self.velocity_set.center_index
 
         # Main AABB fill: sets bc_mask, missing_mask, distances based on solid_mask
         # bc_mask: wp.uint8, missing_mask: wp.uint8, distances: dtype from precision policy (float)
@@ -73,7 +74,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             # loop lattice directions
             for direction_idx in range(_q):
                 # skip central if provided by velocity set
-                if direction_idx == lattice_central_index:
+                if direction_idx == self.lattice_central_index:
                     continue
 
                 # If neighbor index is valid at this resolution level
@@ -243,7 +244,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             cardinality=1,
             dtype=wp.uint8,
             memory_type=neon.MemoryType.device()
-            # memory_type=neon.MemoryType.host_device() 
+            # memory_type=neon.MemoryType.host_device()
         )
 
         for level in range(grid.num_levels):

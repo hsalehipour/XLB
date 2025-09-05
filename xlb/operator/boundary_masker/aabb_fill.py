@@ -24,6 +24,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         fill_in_voxels: int = 3,
     ):
         self.fill_in_voxels = fill_in_voxels
+        self.lattice_central_index = velocity_set.center_index
         # Call super
         self.tile_half = fill_in_voxels
         self.tile_size = self.tile_half * 2 + 1
@@ -127,6 +128,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         def functional_aabb(
             index: Any,
             mesh_id: wp.uint64,
+            id_number: wp.int32,
             distances: wp.array4d(dtype=Any),
             bc_mask: wp.array4d(dtype=wp.uint8),
             missing_mask: wp.array4d(dtype=wp.uint8),
@@ -143,7 +145,7 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
             else:
                 # Find the boundary voxels and their missing directions
                 for direction_idx in range(_q):
-                    if direction_idx == lattice_central_index:
+                    if direction_idx == self.lattice_central_index:
                         # Skip the central index as it is not relevant for boundary masking
                         continue
 
