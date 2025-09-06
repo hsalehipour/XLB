@@ -211,7 +211,7 @@ bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
 # bc_left = HybridBC(bc_method="bounceback_regularized", profile=bc_profile(), indices=inlet)
 # Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
-bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!
+bc_walls = HalfwayBounceBackBC(indices=walls)
 # bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="front"))
 # bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
