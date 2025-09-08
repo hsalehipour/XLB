@@ -112,7 +112,7 @@ def bc_profile():
     origin_wp = _u_vec(origin_np[0], origin_np[1], origin_np[2])
 
     @wp.func
-    def bc_profile_warp(index: wp.vec3i, time: Any):
+    def bc_profile_warp(index: wp.vec3i):
         x = dtype(index[0])
         y = dtype(index[1])
         z = dtype(index[2])

@@ -167,14 +167,16 @@ walls = np.unique(np.array(walls), axis=-1).tolist()
 # Define Boundary Conditions
 def bc_profile():
     assert compute_backend == ComputeBackend.NEON
-
-    # Note nx, ny, nz are the dimensions of the grid at the finest level while the inlet is defined at the coarsest level
+    # IMPORTANT NOTE: the user defined functional must be defined in terms of the indices at the finest level
     _, ny, nz = grid_shape_finest
     dtype = precision_policy.compute_precision.wp_dtype
-    H_y = dtype(ny // 2 ** (num_levels - 1) - 1)  # Height in y direction
-    H_z = dtype(nz // 2 ** (num_levels - 1) - 1)  # Height in z direction
+    H_y = dtype(ny)  # Length in y direction (finest level)
+    H_z = dtype(nz)  # Length in z direction (finest level)
     two = dtype(2.0)
+    one = dtype(1.0)
+    zero = dtype(0.0)
     u_max_wp = dtype(u_max)
+    _u_vec = wp.vec(velocity_set.d, dtype=dtype)
 
     @wp.func
     def bc_profile_warp(index: wp.vec3i):
@@ -188,7 +190,13 @@ def bc_profile():
         r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
         # Parabolic profile: u = u_max * (1 - r²)
-        return wp.vec(u_max_wp * wp.max(dtype(0.0), dtype(1.0) - r_squared), length=1)
+        # Note that unlike RegularizedBC and ZouHeBC which only accept normal velocity, hybridBC accepts the full velocity vector
+
+        # For hybridBC
+        # return _u_vec(u_max_wp * wp.max(zero, one - r_squared), zero, zero)
+
+        # For Regularized and ZouHe
+        return wp.vec(u_max_wp * wp.max(zero, one - r_squared), length=1)
 
     return bc_profile_warp
 
@@ -200,6 +208,7 @@ walls = [[] for _ in range(num_levels - 1)] + [walls]
 
 # Initialize Boundary Conditions
 bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
+# bc_left = HybridBC(bc_method="bounceback_regularized", profile=bc_profile(), indices=inlet)
 # Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!

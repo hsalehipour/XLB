@@ -1,3 +1,4 @@
+import inspect
 from jax import jit
 from functools import partial
 import warp as wp
@@ -59,6 +60,10 @@ class HybridBC(BoundaryCondition):
             voxelization_method,
         )
 
+        # Raise error if used for 2d examples:
+        if self.velocity_set.d == 2:
+            raise NotImplementedError("This BC is not implemented in 2D!")
+
         # Check if the compute backend is Warp
         assert self.compute_backend == ComputeBackend.WARP or ComputeBackend.NEON, "This BC is currently not supported by JAX backend!"
 
@@ -67,9 +72,13 @@ class HybridBC(BoundaryCondition):
         self.macroscopic = Macroscopic(compute_backend=ComputeBackend.WARP)
         self.equilibrium = QuadraticEquilibrium(compute_backend=ComputeBackend.WARP)
 
-        # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
-        # velocity profiles given by keyword "profile" which must be a callable function.
-        self.profile = profile
+        # Define BC helper functions. Explicitly using the WARP backend for helper functions as it may also be called by the Neon backend.
+        self.bc_helper = HelperFunctionsBC(
+            velocity_set=self.velocity_set,
+            precision_policy=self.precision_policy,
+            compute_backend=ComputeBackend.WARP,
+            distance_decoder_function=self._construct_distance_decoder_function(),
+        )
 
         # A flag to enable moving wall treatment when either "prescribed_value" or "profile" are provided.
         self.needs_moving_wall_treatment = False
@@ -84,8 +93,7 @@ class HybridBC(BoundaryCondition):
 
         # Handle prescribed value if provided
         if prescribed_value is not None:
-            if profile is not None:
-                raise ValueError("Cannot specify both profile and prescribed_value")
+            assert profile is None, "Cannot specify both profile and prescribed_value"
 
             # Ensure prescribed_value is a NumPy array of floats
             if isinstance(prescribed_value, (tuple, list, np.ndarray)):
@@ -103,10 +111,23 @@ class HybridBC(BoundaryCondition):
             prescribed_value = _u_vec(prescribed_value)
 
             @wp.func
-            def prescribed_profile_warp(index: Any, time: Any):
+            def prescribed_profile_warp(index: Any):
                 return _u_vec(prescribed_value[0], prescribed_value[1], prescribed_value[2])
 
-            self.profile = prescribed_profile_warp
+            profile = prescribed_profile_warp
+
+        # Inspect the function signature and add time parameter if needed
+        self.is_time_dependent = False
+        sig = inspect.signature(profile)
+        if len(sig.parameters) > 1:
+            # We assume the profile function takes only the index as input and is hence time-independent.
+            # In case it is defined with more than 1 input, we assume the second input is time and create
+            # a wrapper function that also accepts time as a parameter.
+            self.is_time_dependent = True
+
+        # This BC class accepts both constant prescribed values of velocity with keyword "prescribed_value" or
+        # velocity profiles given by keyword "profile" which must be a callable function.
+        self.profile = profile
 
         # Set whether this BC needs mesh distance
         self.needs_mesh_distance = use_mesh_distance
@@ -126,17 +147,8 @@ class HybridBC(BoundaryCondition):
         else:
             assert self.indices is None, "Cannot use indices with mesh vertices! Please provide mesh vertices only."
 
-        # Define BC helper functions. Explicitly using the WARP backend for helper functions as it may also be called by the Neon backend.
-        self.bc_helper = HelperFunctionsBC(
-            velocity_set=self.velocity_set,
-            precision_policy=self.precision_policy,
-            compute_backend=ComputeBackend.WARP,
-            distance_decoder_function=self._construct_distance_decoder_function(),
-        )
-
-        # Raise error if used for 2d examples:
-        if self.velocity_set.d == 2:
-            raise NotImplementedError("This BC is not implemented in 2D!")
+        # Define the profile functional
+        self.profile_functional = self._construct_profile_functional()
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
@@ -151,19 +163,35 @@ class HybridBC(BoundaryCondition):
         _opp_indices = self.velocity_set.opp_indices
 
         # Define the distance decoder function for this BC
-        if self.compute_backend == ComputeBackend.WARP:
-
-            @wp.func
-            def distance_decoder_function(f_1: Any, index: Any, direction: Any):
-                return f_1[_opp_indices[direction], index[0], index[1], index[2]]
-
-        elif self.compute_backend == ComputeBackend.NEON:
-
-            @wp.func
-            def distance_decoder_function(f_1_pn: Any, index: Any, direction: Any):
-                return wp.neon_read(f_1_pn, index, _opp_indices[direction])
+        @wp.func
+        def distance_decoder_function(f_1: Any, index: Any, direction: Any):
+            return self.read_field(f_1, index, _opp_indices[direction])
 
         return distance_decoder_function
+
+    def _construct_profile_functional(self):
+        """
+        Get the profile functional for this BC.
+        TODO@Hesam:
+        Right now, we can impose a profile on a boundary which requires mesh-distance only if that boundary lives on the finest level.
+        In order to extract "level" from the "neon_field_hdl" we can use the function wp.neon_level(neon_field_hdl). This will allow us
+        to do the following and get rid of the above limitation.
+               cIdx = wp.neon_global_idx(field_neon_hdl, index)
+               gx = wp.neon_get_x(cIdx) // 2 ** level
+               gy = wp.neon_get_y(cIdx) // 2 ** level
+               gz = wp.neon_get_z(cIdx) // 2 ** level
+        """
+
+        @wp.func
+        def profile_functional(f_1: Any, index: Any, timestep: Any):
+            # Convert neon index to warp index
+            warp_index = self.bc_helper.neon_index_to_warp(f_1, index)
+            if wp.static(self.is_time_dependent):
+                return self.profile(warp_index, timestep)
+            else:
+                return self.profile(warp_index)
+
+        return profile_functional
 
     def _construct_warp(self):
         # Construct the functionals for this BC
@@ -185,7 +213,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index, timestep)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -224,7 +252,7 @@ class HybridBC(BoundaryCondition):
             #     in: 41st aerospace sciences meeting and exhibit, p. 953.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index, timestep)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_bounceback(
                 index,
                 _missing_mask,
@@ -262,7 +290,7 @@ class HybridBC(BoundaryCondition):
             #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile(index, timestep)
+            u_wall = self.profile_functional(f_1, index, timestep)
             f_post = self.bc_helper.interpolated_nonequilibrium_bounceback(
                 index,
                 _missing_mask,

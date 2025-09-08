@@ -1,6 +1,13 @@
+import inspect
+from typing import Any, Callable
+
 import warp as wp
-from typing import Any
+import neon
+
+from xlb.velocity_set.velocity_set import VelocitySet
+from xlb.precision_policy import PrecisionPolicy
 from xlb import DefaultConfig, ComputeBackend
+from xlb.operator.operator import Operator
 from xlb.operator.macroscopic import SecondMoment as MomentumFlux
 from xlb.operator.macroscopic import Macroscopic
 from xlb.operator.equilibrium import QuadraticEquilibrium
@@ -244,13 +251,14 @@ class HelperFunctionsBC(object):
                     if needs_mesh_distance:
                         # use weights associated with curved boundaries that are properly stored in f_1.
                         weight = compute_dtype(self.distance_decoder_function(f_1, index, l))
-                    else:
-                        weight = compute_dtype(0.5)
 
-                    if _missing_mask[_opp_indices[l]] == wp.uint8(0):
                         # Use differentiable interpolated BB to find f_missing:
                         f_post[l] = ((one - weight) * f_post[_opp_indices[l]] + weight * (f_pre[l] + f_pre[_opp_indices[l]])) / (one + weight)
                     else:
+                        # Use regular halfway bounceback
+                        f_post[l] = f_pre[_opp_indices[l]]
+
+                    if _missing_mask[_opp_indices[l]] == wp.uint8(1):
                         # These are cases where the boundary is sandwiched between 2 solid cells and so both opposite directions are missing.
                         f_post[l] = f_pre[_opp_indices[l]]
 
@@ -307,6 +315,22 @@ class HelperFunctionsBC(object):
 
             return f_post
 
+        @wp.func
+        def neon_index_to_warp(neon_field_hdl: Any, index: Any):
+            # Unpack the global index in Neon at the finest level and convert it to a warp vector
+            cIdx = wp.neon_global_idx(neon_field_hdl, index)
+            gx = wp.neon_get_x(cIdx)
+            gy = wp.neon_get_y(cIdx)
+            gz = wp.neon_get_z(cIdx)
+
+            # XLB is flattening the z dimension in 3D, while neon uses the y dimension
+            if _d == 2:
+                gy, gz = gz, gy
+
+            # Get warp indices
+            index_wp = wp.vec3i(gx, gy, gz)
+            return index_wp
+
         self.get_bc_thread_data = get_bc_thread_data
         self.get_bc_fsum = get_bc_fsum
         self.get_normal_vectors = get_normal_vectors
@@ -317,3 +341,276 @@ class HelperFunctionsBC(object):
         self.interpolated_bounceback = interpolated_bounceback
         self.interpolated_nonequilibrium_bounceback = interpolated_nonequilibrium_bounceback
         self.neon_get_bc_thread_data = neon_get_bc_thread_data
+        self.neon_index_to_warp = neon_index_to_warp
+
+
+class EncodeAuxiliaryData(Operator):
+    """
+    Operator for encoding boundary auxiliary data during initialization.
+    """
+
+    def __init__(
+        self,
+        boundary_id: int,
+        num_of_aux_data: int,
+        user_defined_functional: Callable,
+        velocity_set: VelocitySet = None,
+        precision_policy: PrecisionPolicy = None,
+        compute_backend: ComputeBackend = None,
+    ):
+        self.user_defined_functional = user_defined_functional
+        self.boundary_id = wp.uint8(boundary_id)
+        self.num_of_aux_data = num_of_aux_data
+
+        super().__init__(velocity_set, precision_policy, compute_backend)
+
+        # Inspect the signature of the user-defined functional.
+        # We assume the profile function takes only the index as input and is hence time-independent.
+        sig = inspect.signature(user_defined_functional)
+        assert self.compute_backend != ComputeBackend.JAX, "Encoding/decoding of auxiliary data are not required for boundary conditions in JAX"
+        assert len(sig.parameters) == 1, f"User-defined functional must take exactly one argument (the index), it received {len(sig.parameters)}."
+
+        # Define a HelperFunctionsBC instance
+        self.bc_helper = HelperFunctionsBC(
+            velocity_set=self.velocity_set,
+            precision_policy=self.precision_policy,
+            compute_backend=self.compute_backend,
+        )
+
+        # TODO: Somehow raise an error if the number of prescribed values does not match the number of missing directions
+
+    def _construct_warp(self):
+        """
+        Constructs the warp kernel for the auxiliary data recovery.
+        """
+        # Find velocity index for (0, 0, 0)
+        lattice_central_index = self.velocity_set.center_index
+        _opp_indices = self.velocity_set.opp_indices
+        _id = self.boundary_id
+        _num_of_aux_data = self.num_of_aux_data
+        _aux_vec = wp.vec(_num_of_aux_data, dtype=self.compute_dtype)
+
+        @wp.func
+        def encoder_functional(
+            index: Any,
+            _missing_mask: Any,
+            field_storage: Any,
+            prescribed_values: Any,
+        ):
+            if len(prescribed_values) != _num_of_aux_data:
+                wp.printf("Error: User-defined profile must return a vector of size %d\n", _num_of_aux_data)
+                return
+
+            # Write the result for all q directions, but only store up to _num_of_aux_data
+            counter = wp.int32(0)
+            for l in range(self.velocity_set.q):
+                # Only store up to _num_of_aux_data
+                if counter == _num_of_aux_data:
+                    return
+
+                if l == lattice_central_index:
+                    # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
+                    self.write_field(field_storage, index, l, self.store_dtype(prescribed_values[l]))
+                    counter += 1
+                elif _missing_mask[l] == wp.uint8(1):
+                    # The other remaining BC auxiliary data are stored in missing directions of f_1.
+                    self.write_field(field_storage, index, _opp_indices[l], self.store_dtype(prescribed_values[l]))
+                    counter += 1
+
+        @wp.func
+        def decoder_functional(
+            field_storage: Any,
+            index: Any,
+            _missing_mask: Any,
+        ):
+            """
+            Decode the encoded values needed for the boundary condition treatment from the center location in field_storage.
+            """
+
+            # Define a vector to hold prescribed_values
+            prescribed_values = _aux_vec()
+
+            # Read all q directions, but only retrieve up to _num_of_aux_data
+            counter = wp.int32(0)
+            for l in range(self.velocity_set.q):
+                # Only retrieve up to _num_of_aux_data
+                if counter == _num_of_aux_data:
+                    return prescribed_values
+
+                if l == lattice_central_index:
+                    # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
+                    value = self.read_field(field_storage, index, l)
+                    prescribed_values[counter] = self.compute_dtype(value)
+                    counter += 1
+                elif _missing_mask[l] == wp.uint8(1):
+                    # The other remaining BC auxiliary data are stored in missing directions of f_1.
+                    value = self.read_field(field_storage, index, _opp_indices[l])
+                    prescribed_values[counter] = self.compute_dtype(value)
+                    counter += 1
+
+        # Construct the warp kernel
+        @wp.kernel
+        def kernel(
+            f_1: wp.array4d(dtype=Any),
+            bc_mask: wp.array4d(dtype=wp.uint8),
+            missing_mask: wp.array4d(dtype=wp.uint8),
+        ):
+            # Get the global index
+            i, j, k = wp.tid()
+            index = wp.vec3i(i, j, k)
+
+            # read tid data
+            _, _, _boundary_id, _missing_mask = self.bc_helper.get_bc_thread_data(f_1, f_1, bc_mask, missing_mask, index)
+
+            # Apply the functional
+            # change this to use central location
+            if _boundary_id == _id:
+                # prescribed_values is a q-sized vector of type wp.vec
+                prescribed_values = self.user_defined_functional(index)
+
+                # call the functional
+                encoder_functional(index, _missing_mask, f_1, prescribed_values)
+
+        functional_dict = {"encoder": encoder_functional, "decoder": decoder_functional}
+        return functional_dict, kernel
+
+    def _construct_neon(self):
+        """
+        Constructs the Neon container for encoding auxilary data recovery.
+        """
+        # Use the warp functional for the Neon backend
+        functional_dict, _ = self._construct_warp()
+        encoder_functional = functional_dict["encoder"]
+        _id = self.boundary_id
+
+        # Construct the Neon container
+        @neon.Container.factory(name="EncodingAuxData_" + str(_id))
+        def aux_data_init_container(
+            f_1: Any,
+            bc_mask: Any,
+            missing_mask: Any,
+        ):
+            def aux_data_init_ll(loader: neon.Loader):
+                loader.set_grid(f_1.get_grid())
+
+                f_1_pn = loader.get_write_handle(f_1)
+                bc_mask_pn = loader.get_read_handle(bc_mask)
+                missing_mask_pn = loader.get_read_handle(missing_mask)
+
+                @wp.func
+                def aux_data_init_cl(index: Any):
+                    # read tid data
+                    _, _, _boundary_id, _missing_mask = self.bc_helper.neon_get_bc_thread_data(f_1_pn, f_1_pn, bc_mask_pn, missing_mask_pn, index)
+
+                    # Apply the functional
+                    if _boundary_id == _id:
+                        warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
+                        prescribed_values = self.user_defined_functional(warp_index)
+
+                        # Call the functional
+                        encoder_functional(index, _missing_mask, f_1_pn, prescribed_values)
+
+                # Declare the kernel in the Neon loader
+                loader.declare_kernel(aux_data_init_cl)
+
+            return aux_data_init_ll
+
+        return functional_dict, aux_data_init_container
+
+    @Operator.register_backend(ComputeBackend.WARP)
+    def warp_implementation(self, f_1, bc_mask, missing_mask):
+        # Launch the warp kernel
+        wp.launch(
+            self.warp_kernel,
+            inputs=[f_1, bc_mask, missing_mask],
+            dim=f_1.shape[1:],
+        )
+        return f_1
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_1, bc_mask, missing_mask):
+        c = self.neon_container(f_1, bc_mask, missing_mask)
+        c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
+        return f_1
+
+
+class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
+    """
+    Operator for encoding boundary auxiliary data during initialization.
+    """
+
+    def __init__(
+        self,
+        boundary_id: int,
+        num_of_aux_data: int,
+        user_defined_functional: Callable,
+        velocity_set: VelocitySet = None,
+        precision_policy: PrecisionPolicy = None,
+        compute_backend: ComputeBackend = None,
+    ):
+        super().__init__(
+            boundary_id=boundary_id,
+            num_of_aux_data=num_of_aux_data,
+            user_defined_functional=user_defined_functional,
+            velocity_set=velocity_set,
+            precision_policy=precision_policy,
+            compute_backend=compute_backend,
+        )
+
+        assert self.compute_backend == ComputeBackend.NEON, f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend."
+
+    def _construct_neon(self):
+        """
+        Constructs the Neon container for encoding auxilary data recovery.
+        """
+
+        # Borrow the functional from the warp implementation
+        functional_dict, _ = self._construct_warp()
+        encoder_functional = functional_dict["encoder"]
+        _id = self.boundary_id
+
+        # Construct the Neon container
+        @neon.Container.factory(name="MultiresEncodingAuxData_" + str(_id))
+        def aux_data_init_container(
+            f_1: Any,
+            bc_mask: Any,
+            missing_mask: Any,
+            level: Any,
+        ):
+            def aux_data_init_ll(loader: neon.Loader):
+                loader.set_mres_grid(f_1.get_grid(), level)
+
+                f_1_pn = loader.get_mres_write_handle(f_1)
+                bc_mask_pn = loader.get_mres_read_handle(bc_mask)
+                missing_mask_pn = loader.get_mres_read_handle(missing_mask)
+
+                @wp.func
+                def aux_data_init_cl(index: Any):
+                    # read tid data
+                    _, _, _boundary_id, _missing_mask = self.bc_helper.neon_get_bc_thread_data(f_1_pn, f_1_pn, bc_mask_pn, missing_mask_pn, index)
+
+                    # Apply the functional
+                    if _boundary_id == _id:
+                        # IMPORTANT NOTE:
+                        # It is assumed in XLB that the user_defined_functional in multi-res simulations is defined in terms of the indices at the finest level.
+                        # This assumption enables handling of BCs whose indices span multiple levels
+                        warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
+                        prescribed_values = self.user_defined_functional(warp_index)
+
+                        # Call the functional
+                        encoder_functional(index, _missing_mask, f_1_pn, prescribed_values)
+
+                # Declare the kernel in the Neon loader
+                loader.declare_kernel(aux_data_init_cl)
+
+            return aux_data_init_ll
+
+        return functional_dict, aux_data_init_container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_1, bc_mask, missing_mask, stream):
+        grid = bc_mask.get_grid()
+        for level in range(grid.num_levels):
+            c = self.neon_container(f_1, bc_mask, missing_mask, level)
+            c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
+        return f_1
