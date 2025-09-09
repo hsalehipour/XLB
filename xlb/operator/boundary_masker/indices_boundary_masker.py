@@ -145,6 +145,7 @@ class IndicesBoundaryMasker(Operator):
             bc_mask: Any,
             missing_mask: Any,
             grid_shape: Any,
+            level: Any = 0,
         ):
             for ii in range(bc_indices.shape[1]):
                 # If the current index does not match the boundary condition index, we skip it
@@ -164,7 +165,7 @@ class IndicesBoundaryMasker(Operator):
                 # Stream indices
                 for l in range(_q):
                     # Get the pull index which is the index of the neighboring node where information is pulled from
-                    pull_index, _ = self.helper_masker.get_pull_index(bc_mask, l, index)
+                    pull_index, _ = self.helper_masker.get_pull_index(bc_mask, l, index, level)
 
                     # Check if pull index is out of bound
                     # These directions will have missing information after streaming
@@ -193,6 +194,7 @@ class IndicesBoundaryMasker(Operator):
             bc_mask: Any,
             missing_mask: Any,
             grid_shape: Any,
+            level: Any = 0,
         ):
             for ii in range(bc_indices.shape[1]):
                 # If the current index does not match the boundary condition index, we skip it
@@ -200,7 +202,7 @@ class IndicesBoundaryMasker(Operator):
                     continue
                 for l in range(_q):
                     # Get the index of the streaming direction
-                    pull_index, offset = self.helper_masker.get_pull_index(bc_mask, l, index)
+                    pull_index, offset = self.helper_masker.get_pull_index(bc_mask, l, index, level)
 
                     # Check if pull index is a fluid node (bc_mask is zero for fluid nodes)
                     bc_mask_ngh = self.read_field_neighbor(bc_mask, index, offset, 0)
