@@ -6,5 +6,5 @@ from enum import Enum, auto
 class MeshVoxelizationMethod(Enum):
     AABB = auto()
     RAY = auto()
-    AABB_FILL = auto()
+    AABB_CLOSE = auto()
     WINDING = auto()

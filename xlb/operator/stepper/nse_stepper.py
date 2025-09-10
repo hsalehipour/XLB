@@ -25,7 +25,7 @@ from xlb.operator.boundary_masker import (
     MeshMaskerAABB,
     MeshMaskerRay,
     MeshMaskerWinding,
-    MeshMaskerAABBFill,
+    MeshMaskerAABBClose,
 )
 from xlb.helper import check_bc_overlaps
 from xlb.helper.nse_fields import create_nse_fields
@@ -153,8 +153,8 @@ class IncompressibleNavierStokesStepper(Stepper):
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
                     )
-                elif bc.voxelization_method is MeshVoxelizationMethod.AABB_FILL:
-                    mesh_masker = MeshMaskerAABBFill(
+                elif bc.voxelization_method is MeshVoxelizationMethod.AABB_CLOSE:
+                    mesh_masker = MeshMaskerAABBClose(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
