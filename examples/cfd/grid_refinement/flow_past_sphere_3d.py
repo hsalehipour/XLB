@@ -136,7 +136,7 @@ def bc_profile():
 bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
 # Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
-bc_walls = FullwayBounceBackBC(indices=walls)  # TODO: issues with halfway bounce back only here!
+bc_walls = FullwayBounceBackBC(indices=walls)
 # bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
 bc_sphere = HalfwayBounceBackBC(indices=sphere)

@@ -66,11 +66,14 @@ class HelperFunctionsMasker(object):
             field: Any,
             lattice_dir: wp.int32,
             index: wp.vec3i,
+            level: Any,
         ):
             pull_index = wp.vec3i()
             offset = wp.vec3i()
             for d in range(self.velocity_set.d):
                 offset[d] = -_c[d, lattice_dir]
+                for _ in range(level):
+                    offset[d] *= 2
                 pull_index[d] = index[d] + offset[d]
 
             return pull_index, offset
@@ -80,10 +83,11 @@ class HelperFunctionsMasker(object):
             field: Any,
             lattice_dir: wp.int32,
             index: Any,
+            level: Any,
         ):
             # Convert the index to warp
             index_wp = neon_index_to_warp(field, index)
-            pull_index_wp, _ = get_pull_index_warp(field, lattice_dir, index_wp)
+            pull_index_wp, _ = get_pull_index_warp(field, lattice_dir, index_wp, level)
             offset = wp.neon_ngh_idx(wp.int8(-_c[0, lattice_dir]), wp.int8(-_c[1, lattice_dir]), wp.int8(-_c[2, lattice_dir]))
             return pull_index_wp, offset
 

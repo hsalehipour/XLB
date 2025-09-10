@@ -61,6 +61,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                         bc_mask_pn,
                         missing_mask_pn,
                         grid_shape,
+                        level,
                     )
 
                 loader.declare_kernel(domain_bounds_kernel)
@@ -114,6 +115,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                         bc_mask_pn,
                         missing_mask_pn,
                         grid_shape,
+                        level,
                     )
 
                 loader.declare_kernel(interior_missing_mask_kernel)
