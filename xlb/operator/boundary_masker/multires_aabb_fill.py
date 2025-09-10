@@ -3,15 +3,15 @@ from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
-from xlb.operator.boundary_masker import MeshMaskerAABBFill
+from xlb.operator.boundary_masker import MeshMaskerAABBClose
 from xlb.operator.operator import Operator
 import neon
 
 
-class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
+class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
     """
     Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization
-    in multiresolution simulations (NEON backend). It takes in a number of fill_in_voxels to perform morphological
+    in multiresolution simulations (NEON backend). It takes in a number of close_voxels to perform morphological
     operations (dilate followed by erode) to ensure small channels are filled with solid voxels.
 
     This version provides NEON-specific functionals working on multires partitions (mPartition) and bIndex.
@@ -22,9 +22,9 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
-        fill_in_voxels: int = 4,
+        close_voxels: int = 4,
     ):
-        super().__init__(velocity_set, precision_policy, compute_backend, fill_in_voxels)
+        super().__init__(velocity_set, precision_policy, compute_backend, close_voxels)
         if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
 
@@ -47,7 +47,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         # Set local constants
         lattice_central_index = self.velocity_set.center_index
 
-        # Main AABB fill: sets bc_mask, missing_mask, distances based on solid_mask
+        # Main AABB close: sets bc_mask, missing_mask, distances based on solid_mask
         # bc_mask: wp.uint8, missing_mask: wp.uint8, distances: dtype from precision policy (float)
         @wp.func
         def mres_functional_aabb(
@@ -160,7 +160,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             return solid_launcher
 
         # Main AABB container
-        @neon.Container.factory(name="MeshMaskerAABBFill")
+        @neon.Container.factory(name="MeshMaskerAABBClose")
         def container(
             mesh_id: Any,
             id_number: Any,
@@ -240,20 +240,20 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             container_solid = self.neon_container_dict["container_solid"](mesh_id, solid_mask, level)
             container_solid.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
-            for fill in range(self.fill_in_voxels):
+            for close in range(self.close_voxels):
                 container_dilate = self.neon_container_dict["container_dilate"](solid_mask, solid_mask_out, level)
                 container_dilate.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            if self.fill_in_voxels % 2 > 0:
+            if self.close_voxels % 2 > 0:
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            for fill in range(self.fill_in_voxels):
+            for fill in range(self.close_voxels):
                 container_erode = self.neon_container_dict["container_erode"](solid_mask_out, solid_mask, level)
                 container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            if self.fill_in_voxels % 2 > 0:
+            if self.close_voxels % 2 > 0:
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
             container_aabb = self.neon_container_dict["container_aabb"](

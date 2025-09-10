@@ -11,7 +11,7 @@ from xlb.operator.operator import Operator
 from xlb.operator.boundary_masker.mesh_boundary_masker import MeshBoundaryMasker
 
 
-class MeshMaskerAABBFill(MeshBoundaryMasker):
+class MeshMaskerAABBClose(MeshBoundaryMasker):
     """
     Operator for creating a boundary missing_mask from an STL file
     """
@@ -21,11 +21,11 @@ class MeshMaskerAABBFill(MeshBoundaryMasker):
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
-        fill_in_voxels: int = 3,
+        close_voxels: int = 3,
     ):
-        self.fill_in_voxels = fill_in_voxels
+        self.close_voxels = close_voxels
         # Call super
-        self.tile_half = fill_in_voxels
+        self.tile_half = close_voxels
         self.tile_size = self.tile_half * 2 + 1
         super().__init__(velocity_set, precision_policy, compute_backend)
 
