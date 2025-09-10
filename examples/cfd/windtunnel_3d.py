@@ -103,7 +103,7 @@ bc_left = RegularizedBC("velocity", prescribed_value=(wind_speed, 0.0, 0.0), ind
 bc_walls = FullwayBounceBackBC(indices=walls)
 bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
 bc_car = HalfwayBounceBackBC(mesh_vertices=car_vertices, voxelization_method=voxelization_method)
-# bc_car = HybridBC(bc_method="nonequilibrium_regularized",  mesh_vertices=car_vertices, 
+# bc_car = HybridBC(bc_method="nonequilibrium_regularized",  mesh_vertices=car_vertices,
 #   voxelization_method=voxelization_method, use_mesh_distance=True)
 boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 

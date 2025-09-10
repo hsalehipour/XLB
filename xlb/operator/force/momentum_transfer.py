@@ -17,7 +17,7 @@ import neon
 class LBMOperationSequence(Enum):
     """
     Note that for dense and single resolution simulations in XLB, the order of operations in the stepper is "stream-then-collide".
-    For MultiRes stepper however the order of operations is always "collide-then-stream" except at the finest level when the FUSION_AT_FINEST 
+    For MultiRes stepper however the order of operations is always "collide-then-stream" except at the finest level when the FUSION_AT_FINEST
     optimization is used.
     In that case the order of operations is "stream-then-collide" ONLY at the finest level.
     """

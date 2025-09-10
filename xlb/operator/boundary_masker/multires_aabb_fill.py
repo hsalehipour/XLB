@@ -7,15 +7,12 @@ from xlb.operator.boundary_masker import MeshMaskerAABBFill
 from xlb.operator.operator import Operator
 import neon
 
-# Ensure NEON multires builtins are registered before containers compile
-import neon.multires.mPartition as mpart
-mpart.register_builtins()
-
 
 class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
     """
     Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization
-    in multiresolution simulations (NEON backend).
+    in multiresolution simulations (NEON backend). It takes in a number of fill_in_voxels to perform morphological
+    operations (dilate followed by erode) to ensure small channels are filled with solid voxels.
 
     This version provides NEON-specific functionals working on multires partitions (mPartition) and bIndex.
     """
@@ -48,19 +45,21 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
         _opp_indices = self.velocity_set.opp_indices
 
         # Set local constants
-        # self.lattice_central_index = self.velocity_set.center_index
+        lattice_central_index = self.velocity_set.center_index
 
         # Main AABB fill: sets bc_mask, missing_mask, distances based on solid_mask
         # bc_mask: wp.uint8, missing_mask: wp.uint8, distances: dtype from precision policy (float)
         @wp.func
-        def mres_functional_aabb(index: Any,
-                                 mesh_id: wp.uint64,
-                                 id_number: wp.int32,
-                                 distances_pn: Any,     # mPartition(dtype=distance type), cardinality=_q
-                                 bc_mask_pn: Any,       # mPartition_uint8, cardinality=1
-                                 missing_mask_pn: Any,  # mPartition_uint8, cardinality=_q
-                                 solid_mask_pn: Any,    # mPartition_uint8, cardinality=1
-                                 needs_mesh_distance: bool):
+        def mres_functional_aabb(
+            index: Any,
+            mesh_id: wp.uint64,
+            id_number: wp.int32,
+            distances_pn: Any,  # mPartition(dtype=distance type), cardinality=_q
+            bc_mask_pn: Any,  # mPartition_uint8, cardinality=1
+            missing_mask_pn: Any,  # mPartition_uint8, cardinality=_q
+            solid_mask_pn: Any,  # mPartition_uint8, cardinality=1
+            needs_mesh_distance: bool,
+        ):
             # Cell center from bc_mask partition
             cell_center = self.helper_masker.index_to_position(bc_mask_pn, index)
 
@@ -74,7 +73,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
             # loop lattice directions
             for direction_idx in range(_q):
                 # skip central if provided by velocity set
-                if direction_idx == self.lattice_central_index:
+                if direction_idx == lattice_central_index:
                     continue
 
                 # If neighbor index is valid at this resolution level
@@ -125,6 +124,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                     functional_erode_warp(index, f_field_pn, f_field_out_pn)
 
                 loader.declare_kernel(erode_kernel)
+
             return erode_launcher
 
         # Dilate: f_field -> f_field_out
@@ -140,29 +140,20 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                     functional_dilate_warp(index, f_field_pn, f_field_out_pn)
 
                 loader.declare_kernel(dilate_kernel)
+
             return dilate_launcher
 
         # Solid mask: voxelize mesh into solid_mask
         @neon.Container.factory(name="Solid")
-        def container_solid(
-            mesh_id: wp.uint64,
-            solid_mask: wp.array3d(dtype=wp.uint8),
-            level: int
-        ):
+        def container_solid(mesh_id: wp.uint64, solid_mask: wp.array3d(dtype=wp.uint8), level: int):
             def solid_launcher(loader: neon.Loader):
                 loader.set_mres_grid(solid_mask.get_grid(), level)
                 solid_mask_pn = loader.get_mres_write_handle(solid_mask)
 
                 @wp.func
                 def solid_kernel(index: Any):
-                    # mres_functional_solid(index, mesh_id, solid_mask_pn, wp.vec3f(0.0, 0.0, 0.0))
                     # apply the functional
-                    functional_solid(
-                        index,
-                        mesh_id,
-                        solid_mask_pn,
-                        wp.vec3f(0.0, 0.0, 0.0)
-                    )
+                    functional_solid(index, mesh_id, solid_mask_pn, wp.vec3f(0.0, 0.0, 0.0))
 
                 loader.declare_kernel(solid_kernel)
 
@@ -235,15 +226,11 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
         grid = bc_mask.get_grid()
         # Create fields using new_field
-        solid_mask = grid.new_field(
-            cardinality=1,
-            dtype=wp.uint8,
-            memory_type=neon.MemoryType.device()
-        )
+        solid_mask = grid.new_field(cardinality=1, dtype=wp.uint8, memory_type=neon.MemoryType.device())
         solid_mask_out = grid.new_field(
             cardinality=1,
             dtype=wp.uint8,
-            memory_type=neon.MemoryType.device()
+            memory_type=neon.MemoryType.device(),
             # memory_type=neon.MemoryType.host_device()
         )
 
@@ -261,7 +248,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                 container_dilate.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            if self.fill_in_voxels%2 > 0:
+            if self.fill_in_voxels % 2 > 0:
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
             for fill in range(self.fill_in_voxels):
@@ -269,7 +256,7 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
                 container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            if self.fill_in_voxels%2 > 0:
+            if self.fill_in_voxels % 2 > 0:
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
             container_aabb = self.neon_container_dict["container_aabb"](
