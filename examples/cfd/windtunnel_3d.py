@@ -92,7 +92,7 @@ mesh_vertices = mesh_vertices / dx
 # values would be fine but leave a gap between surfaces that are supposed to touch.
 if voxelization_method in (MeshVoxelizationMethod.RAY, MeshVoxelizationMethod.WINDING):
     shift_z = 2
-elif voxelization_method in (MeshVoxelizationMethod.AABB, MeshVoxelizationMethod.AABB_FILL):
+elif voxelization_method in (MeshVoxelizationMethod.AABB, MeshVoxelizationMethod.AABB_CLOSE):
     shift_z = 3
 shift = np.array([grid_shape[0] / 4, (grid_shape[1] - mesh_extents[1] / dx) / 2, shift_z])
 car_vertices = mesh_vertices + shift
