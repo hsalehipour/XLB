@@ -204,9 +204,6 @@ class MultiresMeshMaskerAABBFill(MeshMaskerAABBFill):
 
         # Expose NEON functionals too (in case callers want to reuse)
         functional_dict = {
-            # "mres_functional_erode": mres_functional_erode,
-            # "mres_functional_dilate": mres_functional_dilate,
-            # "mres_functional_solid": mres_functional_solid,
             "mres_functional_aabb": mres_functional_aabb,
         }
 
