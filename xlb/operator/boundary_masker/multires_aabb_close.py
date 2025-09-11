@@ -240,7 +240,7 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
             container_solid = self.neon_container_dict["container_solid"](mesh_id, solid_mask, level)
             container_solid.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
-            for close in range(self.close_voxels):
+            for _ in range(self.close_voxels):
                 container_dilate = self.neon_container_dict["container_dilate"](solid_mask, solid_mask_out, level)
                 container_dilate.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
@@ -248,7 +248,7 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
             if self.close_voxels % 2 > 0:
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
 
-            for fill in range(self.close_voxels):
+            for _ in range(self.close_voxels):
                 container_erode = self.neon_container_dict["container_erode"](solid_mask_out, solid_mask, level)
                 container_erode.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
                 solid_mask, solid_mask_out = solid_mask_out, solid_mask
