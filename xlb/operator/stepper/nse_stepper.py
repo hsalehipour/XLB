@@ -135,29 +135,30 @@ class IncompressibleNavierStokesStepper(Stepper):
         # Process mesh-based boundary conditions for 3D
         if DefaultConfig.velocity_set.d == 3 and bc_with_vertices:
             for bc in bc_with_vertices:
-                if bc.voxelization_method is MeshVoxelizationMethod.AABB:
+                if bc.voxelization_method.id is MeshVoxelizationMethod("AABB").id:
                     mesh_masker = MeshMaskerAABB(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
                     )
-                elif bc.voxelization_method is MeshVoxelizationMethod.RAY:
+                elif bc.voxelization_method.id is MeshVoxelizationMethod("RAY").id:
                     mesh_masker = MeshMaskerRay(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
                     )
-                elif bc.voxelization_method is MeshVoxelizationMethod.WINDING:
+                elif bc.voxelization_method.id is MeshVoxelizationMethod("WINDING").id:
                     mesh_masker = MeshMaskerWinding(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
                     )
-                elif bc.voxelization_method is MeshVoxelizationMethod.AABB_CLOSE:
+                elif bc.voxelization_method.id is MeshVoxelizationMethod("AABB_CLOSE").id:
                     mesh_masker = MeshMaskerAABBClose(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
+                        close_voxels=bc.voxelization_method.options.get("close_voxels"),
                     )
                 else:
                     raise ValueError(f"Unsupported voxelization method: {bc.voxelization_method}")

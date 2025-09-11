@@ -21,8 +21,11 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
-        close_voxels: int = 3,
+        close_voxels: int = None,
     ):
+        assert close_voxels is not None, (
+            "Please provide the number of close voxels using the 'close_voxels' argument! e.g., MeshVoxelizationMethod('AABB_CLOSE', close_voxels=3)"
+        )
         self.close_voxels = close_voxels
         # Call super
         self.tile_half = close_voxels
