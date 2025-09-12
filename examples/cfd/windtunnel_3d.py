@@ -92,7 +92,7 @@ mesh_vertices = mesh_vertices / dx
 # values would be fine but leave a gap between surfaces that are supposed to touch.
 if voxelization_method in (MeshVoxelizationMethod.RAY, MeshVoxelizationMethod.WINDING):
     shift_z = 2
-elif voxelization_method in (MeshVoxelizationMethod.AABB, MeshVoxelizationMethod.AABB_FILL):
+elif voxelization_method in (MeshVoxelizationMethod.AABB, MeshVoxelizationMethod.AABB_CLOSE):
     shift_z = 3
 shift = np.array([grid_shape[0] / 4, (grid_shape[1] - mesh_extents[1] / dx) / 2, shift_z])
 car_vertices = mesh_vertices + shift
@@ -103,7 +103,8 @@ bc_left = RegularizedBC("velocity", prescribed_value=(wind_speed, 0.0, 0.0), ind
 bc_walls = FullwayBounceBackBC(indices=walls)
 bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
 bc_car = HalfwayBounceBackBC(mesh_vertices=car_vertices, voxelization_method=voxelization_method)
-# bc_car = HybridBC(bc_method="nonequilibrium_regularized",  mesh_vertices=car_vertices, voxelization_method=voxelization_method, use_mesh_distance=True)
+# bc_car = HybridBC(bc_method="nonequilibrium_regularized",  mesh_vertices=car_vertices,
+#   voxelization_method=voxelization_method, use_mesh_distance=True)
 boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
 

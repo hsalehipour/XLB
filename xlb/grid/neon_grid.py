@@ -30,10 +30,10 @@ class NeonGrid(Grid):
 
         # check that the device list is a list of integers
         if not isinstance(backend_config["device_list"], list):
-            raise ValueError(f"backend_config['device_list'] must be a list of integers")
+            raise ValueError("backend_config['device_list'] must be a list of integers")
         for device in backend_config["device_list"]:
             if not isinstance(device, int):
-                raise ValueError(f"backend_config['device_list'] must be a list of integers")
+                raise ValueError("backend_config['device_list'] must be a list of integers")
 
         self.config = backend_config
         self.bk = None
