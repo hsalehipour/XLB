@@ -22,7 +22,7 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
-        close_voxels: int = 4,
+        close_voxels: int = None,
     ):
         super().__init__(velocity_set, precision_policy, compute_backend, close_voxels)
         if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:

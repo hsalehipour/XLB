@@ -130,7 +130,7 @@ bc_sphere = HybridBC(
     bc_method="nonequilibrium_regularized",
     mesh_vertices=sphere,
     use_mesh_distance=True,
-    voxelization_method=MeshVoxelizationMethod.RAY,
+    voxelization_method=MeshVoxelizationMethod("RAY"),
     profile=bc_profile(),
 )
 # Not assining BC for walls makes them periodic.

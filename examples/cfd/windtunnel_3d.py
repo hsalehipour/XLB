@@ -75,7 +75,7 @@ walls = np.unique(np.array(walls), axis=-1).tolist()
 
 # Load the mesh (replace with your own mesh)
 stl_filename = "../stl-files/DrivAer-Notchback.stl"
-voxelization_method = MeshVoxelizationMethod.RAY
+voxelization_method = MeshVoxelizationMethod("RAY")
 mesh = trimesh.load_mesh(stl_filename, process=False)
 mesh_vertices = mesh.vertices
 
@@ -90,9 +90,9 @@ mesh_vertices = mesh_vertices / dx
 # Depending on the voxelization method, shift_z ensures the bottom ground does not intersect with the voxelized mesh
 # Any smaller shift value would lead to large lift computations due to the initial equilibrium distributions. Bigger
 # values would be fine but leave a gap between surfaces that are supposed to touch.
-if voxelization_method in (MeshVoxelizationMethod.RAY, MeshVoxelizationMethod.WINDING):
+if voxelization_method in (MeshVoxelizationMethod("RAY"), MeshVoxelizationMethod("WINDING")):
     shift_z = 2
-elif voxelization_method in (MeshVoxelizationMethod.AABB, MeshVoxelizationMethod.AABB_CLOSE):
+elif voxelization_method in (MeshVoxelizationMethod("AABB"), MeshVoxelizationMethod("AABB_CLOSE", close_voxels=3)):
     shift_z = 3
 shift = np.array([grid_shape[0] / 4, (grid_shape[1] - mesh_extents[1] / dx) / 2, shift_z])
 car_vertices = mesh_vertices + shift

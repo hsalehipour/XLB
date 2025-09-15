@@ -230,17 +230,18 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         # Process mesh-based boundary conditions for 3D
         if DefaultConfig.velocity_set.d == 3 and bc_with_vertices:
             for bc in bc_with_vertices:
-                if bc.voxelization_method is MeshVoxelizationMethod.AABB:
+                if bc.voxelization_method.id is MeshVoxelizationMethod("AABB").id:
                     mesh_masker = MultiresMeshMaskerAABB(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
                     )
-                elif bc.voxelization_method is MeshVoxelizationMethod.AABB_CLOSE:
+                elif bc.voxelization_method.id is MeshVoxelizationMethod("AABB_CLOSE").id:
                     mesh_masker = MultiresMeshMaskerAABBClose(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
+                        close_voxels=bc.voxelization_method.options.get("close_voxels"),
                     )
                 else:
                     raise ValueError(f"Unsupported voxelization method for multi-res: {bc.voxelization_method}")
