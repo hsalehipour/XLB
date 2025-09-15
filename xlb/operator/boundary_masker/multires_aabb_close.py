@@ -105,9 +105,9 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
                             dist = wp.length(pos_mesh - cell_center) - 0.5 * max_length
                             weight = dist / (max_length if max_length > 0.0 else 1.0)
                             # distances has cardinality _q; store into this channel
-                            self.write_field(distances_pn, index, direction_idx, wp.float32(weight))
+                            self.write_field(distances_pn, index, direction_idx, self.store_dtype(weight))
                         else:
-                            self.write_field(distances_pn, index, direction_idx, wp.float32(1.0))
+                            self.write_field(distances_pn, index, direction_idx, self.store_dtype(1.0))
 
         # Containers
 

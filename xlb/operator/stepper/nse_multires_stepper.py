@@ -17,7 +17,13 @@ from xlb.operator.boundary_condition.boundary_condition import ImplementationSte
 from xlb.operator.boundary_condition.boundary_condition_registry import boundary_condition_registry
 from xlb.operator.collision import ForcedCollision
 from xlb.helper import check_bc_overlaps
-from xlb.operator.boundary_masker import MeshVoxelizationMethod, MultiresMeshMaskerAABB, MultiresMeshMaskerAABBClose, MultiresIndicesBoundaryMasker
+from xlb.operator.boundary_masker import (
+    MeshVoxelizationMethod,
+    MultiresMeshMaskerAABB,
+    MultiresMeshMaskerAABBClose,
+    MultiresIndicesBoundaryMasker,
+    MultiresMeshMaskerRay,
+)
 from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeAuxiliaryData
 
 
@@ -232,6 +238,12 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             for bc in bc_with_vertices:
                 if bc.voxelization_method.id is MeshVoxelizationMethod("AABB").id:
                     mesh_masker = MultiresMeshMaskerAABB(
+                        velocity_set=DefaultConfig.velocity_set,
+                        precision_policy=DefaultConfig.default_precision_policy,
+                        compute_backend=DefaultConfig.default_backend,
+                    )
+                elif bc.voxelization_method.id is MeshVoxelizationMethod("RAY").id:
+                    mesh_masker = MultiresMeshMaskerRay(
                         velocity_set=DefaultConfig.velocity_set,
                         precision_policy=DefaultConfig.default_precision_policy,
                         compute_backend=DefaultConfig.default_backend,
