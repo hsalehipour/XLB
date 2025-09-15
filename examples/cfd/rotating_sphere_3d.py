@@ -145,11 +145,11 @@ stepper = IncompressibleNavierStokesStepper(
 )
 
 # Make initializer operator
-from xlb.helper.initializers import OutletInitializer
+from xlb.helper.initializers import CustomInitializer
 
-initializer = OutletInitializer(
-    outlet_bc_id=bc_do_nothing.id,
-    wind_vector=(wind_speed, 0.0, 0.0),
+initializer = CustomInitializer(
+    bc_id=bc_do_nothing.id,
+    constant_velocity_vector=(wind_speed, 0.0, 0.0),
     velocity_set=velocity_set,
     precision_policy=precision_policy,
     compute_backend=compute_backend,

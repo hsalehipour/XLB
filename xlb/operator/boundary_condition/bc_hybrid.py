@@ -183,7 +183,7 @@ class HybridBC(BoundaryCondition):
         """
 
         @wp.func
-        def profile_functional(f_1: Any, index: Any, timestep: Any):
+        def profile_functional_neon(f_1: Any, index: Any, timestep: Any):
             # Convert neon index to warp index
             warp_index = self.bc_helper.neon_index_to_warp(f_1, index)
             if wp.static(self.is_time_dependent):
@@ -191,7 +191,14 @@ class HybridBC(BoundaryCondition):
             else:
                 return self.profile(warp_index)
 
-        return profile_functional
+        @wp.func
+        def profile_functional_warp(f_1: Any, index: Any, timestep: Any):
+            if wp.static(self.is_time_dependent):
+                return self.profile(index, timestep)
+            else:
+                return self.profile(index)
+
+        return profile_functional_warp if self.compute_backend == ComputeBackend.WARP else profile_functional_neon
 
     def _construct_warp(self):
         # Construct the functionals for this BC

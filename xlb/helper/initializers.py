@@ -1,5 +1,6 @@
 import warp as wp
 from typing import Any
+from xlb import DefaultConfig
 from xlb.operator import Operator
 from xlb.velocity_set import VelocitySet
 from xlb.compute_backend import ComputeBackend
@@ -31,50 +32,78 @@ def initialize_eq(f, grid, velocity_set, precision_policy, compute_backend, rho=
 
 def initialize_multires_eq(f, grid, velocity_set, precision_policy, backend, rho, u):
     equilibrium = MultiresQuadraticEquilibrium()
-    equilibrium(rho, u, f, stream=0)
-    return f
+    return equilibrium(rho, u, f, stream=0)
 
 
-# Defining an initializer for outlet only
-class OutletInitializer(Operator):
+# Defining an initializer operator that initializes the entire domain or the specified BC to a constant velocity and density
+class CustomInitializer(Operator):
     def __init__(
         self,
-        outlet_bc_id: int = None,
-        wind_vector=None,
+        constant_velocity_vector=[0.0, 0.0, 0.0],
+        constant_density: float = 1.0,
+        bc_id: int = -1,
+        initialization_operator=None,
         velocity_set: VelocitySet = None,
         precision_policy=None,
         compute_backend=None,
     ):
-        assert outlet_bc_id is not None, "Outlet BC ID must be provided."
-        self.outlet_bc_id = outlet_bc_id
-        self.wind_vector = wind_vector
-        self.rho = 1.0
-        self.equilibrium = QuadraticEquilibrium(
-            velocity_set=velocity_set,
-            precision_policy=precision_policy,
-            compute_backend=ComputeBackend.WARP,
-        )
+        self.bc_id = bc_id
+        self.constant_velocity_vector = constant_velocity_vector
+        self.constant_density = constant_density
+        if initialization_operator is None:
+            compute_backend = compute_backend or DefaultConfig.default_backend
+            self.initialization_operator = QuadraticEquilibrium(
+                velocity_set=velocity_set or DefaultConfig.velocity_set,
+                precision_policy=precision_policy or DefaultConfig.precision_policy,
+                compute_backend=compute_backend if compute_backend == ComputeBackend.JAX else ComputeBackend.WARP,
+            )
         super().__init__(velocity_set, precision_policy, compute_backend)
+
+    @Operator.register_backend(ComputeBackend.JAX)
+    def jax_implementation(self, bc_mask, f_field):
+        from xlb.grid import grid_factory
+        import jax.numpy as jnp
+
+        grid_shape = f_field.shape[1:]
+        grid = grid_factory(grid_shape)
+        rho_init = grid.create_field(cardinality=1, fill_value=self.constant_density, dtype=self.precision_policy.compute_precision)
+        u_init = grid.create_field(cardinality=self.velocity_set.d, fill_value=0.0, dtype=self.precision_policy.compute_precision)
+        _vel = jnp.array(self.constant_velocity_vector)[(...,) + (None,)*self.velocity_set.d]
+        if self.bc_id == -1:
+            u_init += _vel
+        else:
+            u_init = jnp.where(bc_mask[0] == self.bc_id, u_init + _vel, u_init)
+        return self.initialization_operator(rho_init, u_init)
 
     def _construct_warp(self):
         _q = self.velocity_set.q
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
-        _u = _u_vec(self.wind_vector[0], self.wind_vector[1], self.wind_vector[2])
-        _rho = self.compute_dtype(self.rho)
+        _u = _u_vec(self.constant_velocity_vector[0], self.constant_velocity_vector[1], self.constant_velocity_vector[2])
+        _rho = self.compute_dtype(self.constant_density)
         _w = self.velocity_set.w
-        outlet_bc_id = self.outlet_bc_id
+        bc_id = self.bc_id
 
         @wp.func
-        def functional(index: Any, bc_mask: Any, f_field: Any):
+        def functional_local(index: Any, bc_mask: Any, f_field: Any):
             # Check if the index corresponds to the outlet
-            if self.read_field(bc_mask, index, 0) == outlet_bc_id:
-                _feq = self.equilibrium.warp_functional(_rho, _u)
+            if self.read_field(bc_mask, index, 0) == bc_id:
+                _f_init = self.initialization_operator.warp_functional(_rho, _u)
                 for l in range(_q):
-                    self.write_field(f_field, index, l, _feq[l])
+                    self.write_field(f_field, index, l, _f_init[l])
             else:
                 # In the rest of the domain, we assume zero velocity and equilibrium distribution.
                 for l in range(_q):
                     self.write_field(f_field, index, l, _w[l])
+
+        @wp.func
+        def functional_domain(index: Any, bc_mask: Any, f_field: Any):
+            # If bc_id is -1, initialize the entire domain according to the custom initialization operator for the given velocity
+            _f_init = self.initialization_operator.warp_functional(_rho, _u)
+            for l in range(_q):
+                self.write_field(f_field, index, l, _f_init[l])
+
+        # Set the functional based on whether we are initializing a specific BC or the entire domain
+        functional = functional_local if self.bc_id != -1 else functional_domain
 
         # Construct the warp kernel
         @wp.kernel
@@ -105,7 +134,7 @@ class OutletInitializer(Operator):
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 
-        @neon.Container.factory(name="OutletInitializer")
+        @neon.Container.factory(name="CustomInitializer")
         def container(
             bc_mask: Any,
             f_field: Any,
@@ -135,22 +164,24 @@ class OutletInitializer(Operator):
 
 
 # Defining an initializer for outlet only
-class MultiresOutletInitializer(OutletInitializer):
+class CustomMultiresInitializer(CustomInitializer):
     def __init__(
         self,
-        outlet_bc_id: int = None,
-        wind_vector=None,
+        constant_velocity_vector=[0.0, 0.0, 0.0],
+        constant_density: float = 1.0,
+        bc_id: int = -1,
+        initialization_operator=None,
         velocity_set: VelocitySet = None,
         precision_policy=None,
         compute_backend=None,
     ):
-        super().__init__(outlet_bc_id, wind_vector, velocity_set, precision_policy, compute_backend)
+        super().__init__(constant_velocity_vector, constant_density, bc_id, initialization_operator, velocity_set, precision_policy, compute_backend)
 
     def _construct_neon(self):
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 
-        @neon.Container.factory(name="MultiresOutletInitializer")
+        @neon.Container.factory(name="CustomMultiresInitializer")
         def container(
             bc_mask: Any,
             f_field: Any,
