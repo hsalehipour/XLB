@@ -478,7 +478,7 @@ class MultiresIO(object):
 
                 # Convert the warp fields to numpy arrays and use level's mask to filter the data
                 mask = self.levels_data[level][0]
-                field_np = np.array(wp.to_jax(self.field_warp_dict[field_name][level]))
+                field_np = self.field_warp_dict[field_name][level].numpy()
                 for card in range(cardinality):
                     field_np_card = field_np[card][mask]
                     fields_data[f"{field_name}_{card}"].append(field_np_card)
