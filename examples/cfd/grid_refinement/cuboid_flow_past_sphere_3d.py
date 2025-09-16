@@ -227,11 +227,11 @@ visc = u_max * num_finest_voxels_across_part / Re
 omega = 1.0 / (3.0 * visc + 0.5)
 
 # Make initializer operator
-from xlb.helper.initializers import MultiresOutletInitializer
+from xlb.helper.initializers import CustomMultiresInitializer
 
-initializer = MultiresOutletInitializer(
-    outlet_bc_id=bc_outlet.id,
-    wind_vector=(u_max, 0.0, 0.0),
+initializer = CustomMultiresInitializer(
+    bc_id=bc_outlet.id,
+    constant_velocity_vector=(u_max, 0.0, 0.0),
     velocity_set=velocity_set,
     precision_policy=precision_policy,
     compute_backend=compute_backend,
