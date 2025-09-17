@@ -68,7 +68,7 @@ class CustomInitializer(Operator):
         grid = grid_factory(grid_shape)
         rho_init = grid.create_field(cardinality=1, fill_value=self.constant_density, dtype=self.precision_policy.compute_precision)
         u_init = grid.create_field(cardinality=self.velocity_set.d, fill_value=0.0, dtype=self.precision_policy.compute_precision)
-        _vel = jnp.array(self.constant_velocity_vector)[(...,) + (None,)*self.velocity_set.d]
+        _vel = jnp.array(self.constant_velocity_vector)[(...,) + (None,) * self.velocity_set.d]
         if self.bc_id == -1:
             u_init += _vel
         else:

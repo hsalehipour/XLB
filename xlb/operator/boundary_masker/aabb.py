@@ -104,6 +104,7 @@ class MeshMaskerAABB(MeshBoundaryMasker):
             # Get local indices
             index = wp.vec3i(i, j, k)
 
+            # apply the functional
             functional(
                 index,
                 mesh_id,
