@@ -189,7 +189,7 @@ class MultiresIO(object):
 
         for level_idx, (data, voxel_size, origin, level) in enumerate(levels_data):
             origin = origin * voxel_size
-            corners_list, conn_list, _ = self._process_level(data, voxel_size, origin, level, point_id_offsets[level_idx])
+            corners_list, conn_list = self._process_level(data, voxel_size, origin, level, point_id_offsets[level_idx])
 
             if corners_list:
                 print(f"\tProcessing level {level}: Voxel size {voxel_size * scale}, Origin {origin}, Shape {data.shape}")
@@ -231,7 +231,7 @@ class MultiresIO(object):
             all_connectivity.append(connectivity)
             pid_offset += len(chunk) * 8
 
-        return all_corners, all_connectivity, level
+        return all_corners, all_connectivity
 
     def _process_voxel_chunk(self, true_indices, origin, voxel_size, point_id_offset):
         """
