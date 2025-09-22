@@ -185,8 +185,6 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps, opt
     # Initialize fields
     omega = 1.0
     f_0, f_1, bc_mask, missing_mask = stepper.prepare_fields()
-    if compute_backend == ComputeBackend.NEON:
-        stepper.prepare_skeleton(f_0, f_1, bc_mask, missing_mask, omega)
 
     warmup_iterations = 10
     # Warp-up iterations

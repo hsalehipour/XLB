@@ -19,7 +19,7 @@ class NeonGrid(Grid):
         if backend_config is None:
             backend_config = {
                 "device_list": [0],
-                "skeleton_config": neon.SkeletonConfig.none(),
+                "skeleton_config": neon.SkeletonConfig.OCC.none(),
             }
 
         # check that the config dictionary has the required keys
