@@ -420,7 +420,7 @@ class IncompressibleNavierStokesStepper(Stepper):
                             f_result = wp.static(self.boundary_conditions[i].neon_functional)(index, timestep, _missing_mask, f_0, f_1, f_pre, f_post)
                     if wp.static(self.boundary_conditions[i].id in extrapolation_outflow_bc_ids):
                         if _boundary_id == wp.static(self.boundary_conditions[i].id):
-                            f_result = wp.static(self.boundary_conditions[i].assemble_dynamic_data)(
+                            f_result = wp.static(self.boundary_conditions[i].assemble_auxiliary_data)(
                                 index, timestep, _missing_mask, f_0, f_1, f_pre, f_post
                             )
             return f_result
