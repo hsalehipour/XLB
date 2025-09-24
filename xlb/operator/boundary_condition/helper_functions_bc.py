@@ -176,6 +176,16 @@ class HelperFunctionsBC(object):
 
             # Compute pressure tensor Pi using all f_post-streaming values
             Pi = momentum_flux.warp_functional(f_post)
+            feq = equilibrium.warp_functional(rho,u)
+            epsilon = compute_dtype(1e-7)
+            missing_count = compute_dtype(0.0)
+            one = compute_dtype(1.0)
+            half = compute_dtype(0.5)
+            for l in range(_q):
+                if _missing_mask[l] == wp.uint8(1):
+                    missing_count += one
+            scale = ((one + missing_count) / compute_dtype(_q)) * half
+
 
             # Compute double dot product Qi:Pi1 (where Pi1 = PiNeq)
             nt = _d * (_d + 1) // 2
@@ -192,14 +202,105 @@ class HelperFunctionsBC(object):
                     # Compute c.u
                     cu = compute_dtype(0.0)
                     for d in range(_d):
-                        if _c[d, l] == 1:
-                            cu += u[d]
-                        elif _c[d, l] == -1:
-                            cu -= u[d]
+                        cu += _c_float[d, l] * u[d]
                     cu *= compute_dtype(3.0)
 
                     # change f_post using the Grad's approximation
-                    f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi
+                    f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi 
+                    f_post[l] = (one - scale) * f_post[l] + scale * feq[l]
+
+                    f_post[l] = wp.max[epsilon, f_post[l]]
+                else:
+                    f_post[l] = wp.max[epsilon, f_post[l]]
+
+            return f_post
+        
+        @wp.func
+        def grads_approximate_fpop0(
+            index: Any,            
+            _missing_mask: Any,
+            f_0: Any,
+            f_1: Any,
+            f_pre: Any,
+            f_post: Any,
+            u_wall: Any,
+            rho: Any, 
+            u: Any, 
+            needs_mesh_distance: bool,
+        ):
+           
+            # Compute partial density, velocity, and pressure tensor from known populations in f_post (after streaming)
+            Pi = momentum_flux.warp_functional(f_post)  # Partial Pi from known
+            feq = equilibrium.warp_functional(rho,u)
+            epsilon = compute_dtype(1e-7)
+            max_f = compute_dtype(0.0)
+            one = compute_dtype(1.0)
+            two = compute_dtype(2.0)
+            three = compute_dtype(3.0)
+            four_point_five = compute_dtype(4.5)
+            one_point_five = compute_dtype(1.5)
+            missing_count = compute_dtype(0.0)
+            
+            for l in range(_q):
+                if _missing_mask[l] == wp.uint8(1):
+                    missing_count += one
+                max_f = wp.max(max_f, f_pre[l])
+            #scale = (one + missing_count) / (two * compute_dtype(_q))
+            max_f *= two
+
+            nt = _d * (_d + 1) // 2
+
+            # Apply Grad's approximation per missing direction with distance-weighted target u_l
+            for l in range(_q):
+                if _missing_mask[l] == wp.uint8(1):
+                    # Get per-direction weight (q_l for curved boundaries)
+                    weight_l = compute_dtype(0.5)
+                    if needs_mesh_distance:
+                        weight_l = compute_dtype(self.distance_decoder_function(f_1, index, l))
+                   
+                    # Compute per-direction target velocity u_l (blend fluid u and wall u)
+                    u_l = _u_vec()  # Assuming 3D; adjust for your _d
+                    for d in range(_d):
+                        u_l[d] = weight_l * u[d] + (one - weight_l) * u_wall[d]
+
+                    # Compute c . u_l
+                    cu_l = compute_dtype(0.0)
+                    for d in range(_d):
+                        cu_l += _c_float[d, l] * u_l[d]
+                    cu_l *= three
+
+                    # Compute quadratic term: (9/2)(c.u_l)^2 - (3/2) u_l^2                    
+                    quad_term = compute_dtype(0.5) * cu_l * cu_l - one_point_five * (u_l[0]*u_l[0] + u_l[1]*u_l[1] + u_l[2]*u_l[2])
+
+                    # Compute Qi:Pi with trace subtraction
+                    QiPi = compute_dtype(0.0)
+                    for t in range(nt):
+                        pi_comp = Pi[t]
+                        if t == 0 or t == 3 or t == 5:
+                            pi_comp -= rho / three
+                        QiPi += _qi[l, t] * pi_comp
+
+                    # Full Grad's distribution with quadratic
+                    feq_l = _w[l] * rho * (one + cu_l + quad_term) + _w[l] 
+                    noneq = four_point_five * QiPi #* scale
+                    
+                    
+                # Full Grad's
+                f_grad = feq_l + noneq
+
+                # Adaptive limiter: Scale noneq only if f_grad would be negative or exceed max_f
+                if f_grad < epsilon:
+                    if noneq < compute_dtype(0.0):
+                        limiter = (epsilon - feq_l) / noneq  # 0 < limiter < 1
+                        noneq *= limiter
+                    f_post[l] = feq_l + noneq  # Now >= epsilon
+                elif f_grad > max_f:  # Now using the f_pre-based bound
+                    if noneq > compute_dtype(0.0):
+                        limiter = (max_f - feq_l) / noneq  # 0 < limiter < 1
+                        noneq *= limiter
+                    f_post[l] = feq_l + noneq
+                else:
+                    f_post[l] = f_grad  # No issue, use full Grad's
 
             return f_post
 

@@ -252,13 +252,19 @@ class MomentumTransfer(Operator):
                 # Compute the momentum transfer
                 for d in range(self.velocity_set.d):
                     m[d] = self.compute_dtype(0.0)
+                    sum_val = self.compute_dtype(0.0)
+                    c = self.compute_dtype(0.0)
                     for l in range(self.velocity_set.q):
                         if _missing_mask[l] == wp.uint8(1):
-                            phi = f_post_collision[_opp_indices[l]] + f_post_stream[l]
-                            if _c[d, _opp_indices[l]] == 1:
-                                m[d] += phi
-                            elif _c[d, _opp_indices[l]] == -1:
-                                m[d] -= phi
+                            phi = f_post_collision[_opp_indices[l]] + f_post_stream[l]                            
+                            x = phi if _c[d, _opp_indices[l]] == 1 else -phi if _c[d, _opp_indices[l]] == -1 else 0.0
+                            t = sum_val + x
+                            if wp.abs(sum_val) >= wp.abs(x):
+                                c += (sum_val - t) + x
+                            else:
+                                c += (x - t) + sum_val
+                            sum_val = t
+                    m[d] = sum_val + c
             # Atomic sum to get the total force vector
             wp.atomic_add(force, 0, m)
 

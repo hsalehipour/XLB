@@ -72,9 +72,17 @@ class SecondMoment(Operator):
             # Get second order moment (a symmetric tensore shaped into a vector)
             pi = _pi_vec()
             for d in range(_pi_dim):
-                pi[d] = self.compute_dtype(0.0)
+                sum_val = self.compute_dtype(0.0)
+                c = self.compute_dtype(0.0)
                 for q in range(self.velocity_set.q):
-                    pi[d] += _cc[q, d] * fneq[q]
+                    x = _cc[q, d] * fneq[q]
+                    t = sum_val + x
+                    if wp.abs(sum_val) >= wp.abs(x):
+                        c += (sum_val - t) + x
+                    else:
+                        c += (x - t) + sum_val
+                    sum_val = t
+                pi[d] = sum_val + c
             return pi
 
         # Construct the kernel

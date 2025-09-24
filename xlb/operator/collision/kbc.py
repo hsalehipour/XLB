@@ -257,11 +257,31 @@ class KBC(Collision):
             feq: Any,
         ):
             temp = wp.cw_div(delta_h, feq)
-            sp1 = self.compute_dtype(0.0)
-            sp2 = self.compute_dtype(0.0)
+            sum_val1 = self.compute_dtype(0.0)
+            c1 = self.compute_dtype(0.0)
             for i in range(self.velocity_set.q):
-                sp1 += temp[i] * delta_s[i]
-                sp2 += temp[i] * delta_h[i]
+                x1 = temp[i] * delta_s[i]
+                t1 = sum_val1 + x1
+                if wp.abs(sum_val1) >= wp.abs(x1):
+                    c1 += (sum_val1 - t1) + x1
+                else:
+                    c1 += (x1 - t1) + sum_val1
+                sum_val1 = t1
+            sp1 = sum_val1 + c1
+
+            # Neumaier summation for sp2
+            sum_val2 = self.compute_dtype(0.0)
+            c2 = self.compute_dtype(0.0)
+            for i in range(self.velocity_set.q):
+                x2 = temp[i] * delta_h[i]
+                t2 = sum_val2 + x2
+                if wp.abs(sum_val2) >= wp.abs(x2):
+                    c2 += (sum_val2 - t2) + x2
+                else:
+                    c2 += (x2 - t2) + sum_val2
+                sum_val2 = t2
+            sp2 = sum_val2 + c2
+
             return sp1, sp2
 
         # Construct the functional

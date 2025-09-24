@@ -276,7 +276,19 @@ class HybridBC(BoundaryCondition):
             rho, u = self.macroscopic.warp_functional(f_post)
 
             # Compute Grad's approximation using full equation as in Eq (10) of Dorschner et al.
-            f_post = self.bc_helper.grads_approximate_fpop(_missing_mask, rho, u, f_post)
+            f_post = self.bc_helper.grads_approximate_fpop(
+                #index,            
+                _missing_mask,
+                #f_0,
+                #f_1,
+                #f_pre,
+                #f_post,
+                #u_wall,
+                rho, 
+                u, 
+                f_post,
+                #wp.static(self.needs_mesh_distance),
+                )
             return f_post
 
         @wp.func
@@ -297,7 +309,8 @@ class HybridBC(BoundaryCondition):
             #     boundaries in the lattice Boltzmann method. Physical Review E 77, 056703.
 
             # Apply interpolated bounceback first to find missing populations at the boundary
-            u_wall = self.profile_functional(f_1, index, timestep)
+            u_wall = self.profile_functional(f_1, index, timestep)         
+
             f_post = self.bc_helper.interpolated_nonequilibrium_bounceback(
                 index,
                 _missing_mask,
