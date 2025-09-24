@@ -1052,4 +1052,3 @@ class MultiresIO(object):
             header='x,y,z,value',
             comments=''
         )
-
