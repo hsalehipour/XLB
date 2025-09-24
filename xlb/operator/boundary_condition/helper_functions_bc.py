@@ -209,9 +209,9 @@ class HelperFunctionsBC(object):
                     f_post[l] = rho * _w[l] * (compute_dtype(1.0) + cu) + _w[l] * compute_dtype(4.5) * QiPi 
                     f_post[l] = (one - scale) * f_post[l] + scale * feq[l]
 
-                    f_post[l] = wp.max[epsilon, f_post[l]]
+                    f_post[l] = wp.max(epsilon, f_post[l])
                 else:
-                    f_post[l] = wp.max[epsilon, f_post[l]]
+                    f_post[l] = wp.max(epsilon, f_post[l])
 
             return f_post
         
