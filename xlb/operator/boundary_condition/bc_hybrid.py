@@ -277,18 +277,11 @@ class HybridBC(BoundaryCondition):
 
             # Compute Grad's approximation using full equation as in Eq (10) of Dorschner et al.
             f_post = self.bc_helper.grads_approximate_fpop(
-                #index,            
-                _missing_mask,
-                #f_0,
-                #f_1,
-                #f_pre,
-                #f_post,
-                #u_wall,
+                _missing_mask,                       
                 rho, 
                 u, 
                 f_post,
-                #wp.static(self.needs_mesh_distance),
-                )
+                )            
             return f_post
 
         @wp.func
