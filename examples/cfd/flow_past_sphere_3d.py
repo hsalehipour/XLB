@@ -80,7 +80,7 @@ def bc_profile():
 
         return bc_profile_jax
 
-    elif compute_backend == ComputeBackend.WARP:
+    else:
         wp_dtype = precision_policy.compute_precision.wp_dtype
         H_y = wp_dtype(grid_shape[1] - 1)  # Height in y direction
         H_z = wp_dtype(grid_shape[2] - 1)  # Height in z direction
@@ -126,6 +126,7 @@ macro = Macroscopic(
     precision_policy=precision_policy,
     velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=ComputeBackend.JAX),
 )
+to_jax = xlb.utils.ToJAX("populations", velocity_set.q, grid_shape)
 
 # Setup Momentum Transfer for Force Calculation
 from xlb.operator.force.momentum_transfer import MomentumTransfer
@@ -136,6 +137,8 @@ sphere_cross_section = np.pi * sphere_radius**2
 
 # Post-Processing Function
 def post_process(step, f_0, f_1):
+    wp.synchronize()
+
     # Compute lift and drag
     boundary_force = momentum_transfer(f_0, f_1, bc_mask, missing_mask)
     drag = boundary_force[0]  # x-direction
@@ -146,7 +149,7 @@ def post_process(step, f_0, f_1):
 
     # Convert to JAX array if necessary
     if not isinstance(f_0, jnp.ndarray):
-        f_0 = wp.to_jax(f_0)
+        f_0 = to_jax(f_0)
         wp.synchronize()
 
     rho, u = macro(f_0)
@@ -177,8 +180,6 @@ for step in range(num_steps):
     f_0, f_1 = f_1, f_0  # Swap the buffers
 
     if step % post_process_interval == 0 or step == num_steps - 1:
-        if compute_backend == ComputeBackend.WARP:
-            wp.synchronize()
         post_process(step, f_0, f_1)
         end_time = time.time()
         elapsed = end_time - start_time

@@ -314,3 +314,97 @@ def axangle2mat(axis, angle, is_normalized=False):
         [xyC + zs, y * yC + c, yzC - xs],
         [zxC - ys, yzC + xs, z * zC + c],
     ])
+
+
+class ToJAX(object):
+    def __init__(self, field_name, field_cardinality, grid_shape, store_precision=None):
+        """
+        Initialize the MultiresIO object.
+
+        Parameters
+        ----------
+        field_name : str
+            The name of the field to be converted.
+        field_cardinality : int
+            The cardinality of the field to be converted.
+        grid_shape : tuple
+            The shape of the grid on which the field is defined.
+        store_precision : str, optional
+            The precision policy for storing data.
+        """
+        from xlb.compute_backend import ComputeBackend
+        from xlb.grid import grid_factory
+        from xlb import DefaultConfig
+
+        # Assign to self
+        self.field_name = field_name
+        self.field_cardinality = field_cardinality
+        self.grid_shape = grid_shape
+        self.compute_backend = DefaultConfig.default_backend
+        self.velocity_set = DefaultConfig.velocity_set
+        if store_precision is None:
+            self.store_precision = DefaultConfig.default_precision_policy.store_precision
+            self.store_dtype = DefaultConfig.default_precision_policy.store_precision.wp_dtype
+
+        if self.compute_backend == ComputeBackend.NEON:
+            # Allocate warp fields for copying neon fields
+            # Use the warp backend to create dense fields for copying NEON dGrid fields
+            grid_dense = grid_factory(grid_shape, compute_backend=ComputeBackend.WARP)
+            self.warp_field = grid_dense.create_field(cardinality=self.field_cardinality, dtype=self.store_precision)
+
+    def copy_neon_to_warp(self, neon_field):
+        """Convert a dense neon field to a warp field by copying."""
+        import warp as wp
+        import neon
+        from typing import Any
+
+        assert neon_field.get_grid().name == "dGrid", "to_warp only supports dense grids"
+        _d = self.velocity_set.d
+
+        @neon.Container.factory("to_warp")
+        def container(src_field: Any, dst_field: Any, cardinality: wp.int32):
+            def loading_step(loader: neon.Loader):
+                loader.set_grid(src_field.get_grid())
+                src_pn = loader.get_read_handle(src_field)
+
+                @wp.func
+                def cloning(gridIdx: Any):
+                    cIdx = wp.neon_global_idx(src_pn, gridIdx)
+                    gx = wp.neon_get_x(cIdx)
+                    gy = wp.neon_get_y(cIdx)
+                    gz = wp.neon_get_z(cIdx)
+
+                    # XLB is flattening the z dimension in 3D, while neon uses the y dimension
+                    if _d == 2:
+                        gy, gz = gz, gy
+
+                    for card in range(cardinality):
+                        value = wp.neon_read(src_pn, gridIdx, card)
+                        dst_field[card, gx, gy, gz] = value
+
+                loader.declare_kernel(cloning)
+
+            return loading_step
+
+        cardinality = neon_field.cardinality
+        c = container(neon_field, self.warp_field, cardinality)
+        c.run(0)
+        wp.synchronize()
+        return self.warp_field
+
+    def __call__(self, field):
+        from xlb.compute_backend import ComputeBackend
+        import warp as wp
+
+        if self.compute_backend == ComputeBackend.JAX:
+            return field
+        elif self.compute_backend == ComputeBackend.WARP:
+            return wp.to_jax(field)
+        elif self.compute_backend == ComputeBackend.NEON:
+            assert field.cardinality == self.field_cardinality, (
+                f"Field cardinality mismatch! Expected {self.field_cardinality}, got {field.cardinality}!"
+            )
+            return wp.to_jax(self.copy_neon_to_warp(field))
+
+        else:
+            raise ValueError("Unsupported compute backend!")

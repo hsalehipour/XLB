@@ -20,7 +20,7 @@ class Macroscopic(Operator):
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0), inline=True)
-    def jax_implementation(self, f):
+    def jax_implementation(self, f, rho=None, u=None):
         rho = self.zero_moment(f)
         u = self.first_moment(f, rho)
         return rho, u

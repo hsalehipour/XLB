@@ -40,7 +40,7 @@ class IncompressibleNavierStokesStepper(Stepper):
         collision_type="BGK",
         forcing_scheme="exact_difference",
         force_vector=None,
-        backend_config=None,
+        backend_config={},
     ):
         super().__init__(grid, boundary_conditions)
         self.backend_config = backend_config
@@ -420,7 +420,7 @@ class IncompressibleNavierStokesStepper(Stepper):
                             f_result = wp.static(self.boundary_conditions[i].neon_functional)(index, timestep, _missing_mask, f_0, f_1, f_pre, f_post)
                     if wp.static(self.boundary_conditions[i].id in extrapolation_outflow_bc_ids):
                         if _boundary_id == wp.static(self.boundary_conditions[i].id):
-                            f_result = wp.static(self.boundary_conditions[i].assemble_dynamic_data)(
+                            f_result = wp.static(self.boundary_conditions[i].assemble_auxiliary_data)(
                                 index, timestep, _missing_mask, f_0, f_1, f_pre, f_post
                             )
             return f_result
@@ -532,6 +532,8 @@ class IncompressibleNavierStokesStepper(Stepper):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_launch(self, f_0, f_1, bc_mask, missing_mask, omega, timestep):
+        if timestep == 0:
+            self.prepare_skeleton(f_0, f_1, bc_mask, missing_mask, omega)
         self.sk[self.sk_iter].run()
         self.sk_iter = (self.sk_iter + 1) % 2
         return f_0, f_1
@@ -544,7 +546,7 @@ class IncompressibleNavierStokesStepper(Stepper):
         self.neon_skeleton["even"]["container"] = self.neon_container(f_1, f_0, bc_mask, missing_mask, omega, 1)
         # check if 'occ' is a valid key
         if "occ" not in self.backend_config:
-            occ = neon.SkeletonConfig.none()
+            occ = neon.SkeletonConfig.OCC.none()
         else:
             occ = self.backend_config["occ"]
             # check that occ is of type neon.SkeletonConfig.OCC

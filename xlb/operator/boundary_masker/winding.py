@@ -20,6 +20,9 @@ class MeshMaskerWinding(MeshBoundaryMasker):
     ):
         # Call super
         super().__init__(velocity_set, precision_policy, compute_backend)
+        assert self.compute_backend != ComputeBackend.NEON, (
+            'MeshVoxelizationMethod("WINDING") is not implemented in Neon yet! Please use a different method of mesh voxelization!'
+        )
 
     def _construct_warp(self):
         # Make constants for warp

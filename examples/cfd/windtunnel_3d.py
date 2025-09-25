@@ -21,6 +21,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
 
+import neon
+
 # -------------------------- Simulation Setup --------------------------
 
 # Grid parameters
@@ -28,7 +30,7 @@ grid_size_x, grid_size_y, grid_size_z = 512, 128, 128
 grid_shape = (grid_size_x, grid_size_y, grid_size_z)
 
 # Simulation Configuration
-compute_backend = ComputeBackend.WARP
+compute_backend = ComputeBackend.NEON
 precision_policy = PrecisionPolicy.FP32FP32
 
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
@@ -108,11 +110,15 @@ bc_car = HalfwayBounceBackBC(mesh_vertices=car_vertices, voxelization_method=vox
 boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
 
+# Configure backend options:
+backend_config = {"occ": neon.SkeletonConfig.OCC.from_string("standard"), "device_list": [0, 1]} if compute_backend == ComputeBackend.NEON else {}
+
 # Setup Stepper
 stepper = IncompressibleNavierStokesStepper(
     grid=grid,
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
+    backend_config=backend_config,
 )
 
 # Prepare Fields
@@ -189,7 +195,7 @@ def post_process(
     """
     # Convert to JAX array if necessary
     if not isinstance(f_0, jnp.ndarray):
-        f_0_jax = wp.to_jax(f_0)
+        f_0_jax = to_jax(f_0)
     else:
         f_0_jax = f_0
 
@@ -235,6 +241,7 @@ macro = Macroscopic(
     precision_policy=precision_policy,
     velocity_set=xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=ComputeBackend.JAX),
 )
+to_jax = xlb.utils.ToJAX("populations", velocity_set.q, grid_shape)
 
 # Initialize Lists to Store Coefficients and Time Steps
 time_steps = []
@@ -251,7 +258,7 @@ for step in range(num_steps):
 
     # Print progress at intervals
     if step % print_interval == 0:
-        if compute_backend == ComputeBackend.WARP:
+        if compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
             wp.synchronize()
         elapsed_time = time.time() - start_time
         print(f"Iteration: {step}/{num_steps} | Time elapsed: {elapsed_time:.2f}s")
