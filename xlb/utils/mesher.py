@@ -186,9 +186,11 @@ class MultiresIO(object):
 
         #For convertin velocities to model units
         if scale != 1 and timestep_size !=1:            
-            self.conversion = scale / timestep_size
+            self.velocity_conversion = scale / timestep_size
+            self.pressure_conversion = (1.204 / 3)  * (scale**2 / timestep_size**2)
         else: 
-            self.conversion = 1
+            self.velocity_conversion = 1
+            self.pressure_conversion = 1
 
         # Set the default precision policy if not provided
         from xlb import DefaultConfig
@@ -391,7 +393,9 @@ class MultiresIO(object):
             for fname, fdata in fields_data.items():
                 #Convert lbm velocity to model velocity
                 if "velocity" in fname.lower():
-                    fdata = fdata * self.conversion
+                    fdata = fdata * self.velocity_conversion
+                elif "rho" in fname.lower():
+                    fdata = fdata * self.pressure_conversion
                 fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts, chunks=fld_chunks, shuffle=True)
 
     def _merge_duplicates(self, coordinates, connectivity, levels_data):
@@ -643,7 +647,9 @@ class MultiresIO(object):
             field_name = list(fields_data.keys())[component]
             cell_data = fields_data[field_name]
         if "velocity" in field_name.lower():
-            cell_data = cell_data * self.conversion
+            cell_data = cell_data * self.velocity_conversion
+        elif "rho" in field_name.lower():
+            cell_data = cell_data * self.pressure_conversion
         if normalize != 1.0:  
             cell_data = np.clip(cell_data / normalize,0,1)
         else:   
@@ -981,7 +987,9 @@ class MultiresIO(object):
             cell_data = fields_data[field_name]
            
         if "velocity" in field_name.lower():
-            cell_data = cell_data * self.conversion
+            cell_data = cell_data * self.velocity_conversion
+        elif "rho" in field_name.lower():
+            cell_data = cell_data * self.pressure_conversion
        
         # Plot each field in the dictionary
         self._to_line_field(
