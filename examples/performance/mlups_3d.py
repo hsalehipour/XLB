@@ -439,8 +439,14 @@ def print_scalability_summary(args, stats_list):
 
 def report(args, stats):
     import neon
+    import sys
 
     report = neon.Report("LBM MLUPS LDC")
+    
+    # Save the full command line
+    command_line = " ".join(sys.argv)
+    report.add_member("command_line", command_line)
+    
     report.add_member("velocity_set", args.velocity_set.__class__.__name__)
     report.add_member("compute_backend", args.compute_backend.name)
     report.add_member("precision_policy", args.precision)
