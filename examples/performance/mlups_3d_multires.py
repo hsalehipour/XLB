@@ -10,16 +10,34 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.grid import multires_grid_factory
 from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import FullwayBounceBackBC, EquilibriumBC
+from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="MLUPS for 3D Lattice Boltzmann Method Simulation with Multi-resolution Grid")
+    parser = argparse.ArgumentParser(
+        description="MLUPS for 3D Lattice Boltzmann Method Simulation with Multi-resolution Grid",
+        epilog="""
+Examples:
+  %(prog)s 100 1000 neon fp32/fp32 2 NAIVE_COLLIDE_STREAM
+  %(prog)s 200 500 neon fp64/fp64 3 FUSION_AT_FINEST --report
+  %(prog)s 50 2000 neon fp32/fp16 2 NAIVE_COLLIDE_STREAM --export_final_velocity
+
+Valid values:
+  compute_backend: neon
+  precision: fp32/fp32, fp64/fp64, fp64/fp32, fp32/fp16
+  mres_perf_opt: NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST
+  velocity_set: D3Q19, D3Q27
+  collision_model: BGK, KBC
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    
     # Positional arguments
-    parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid")
-    parser.add_argument("num_steps", type=int, help="Timestep for the simulation")
-    parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
-    parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
-    parser.add_argument("num_levels", type=int, help="Number of levels for the multiresolution grid")
+    parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid (e.g., 100)")
+    parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation (e.g., 1000)")
+    parser.add_argument("compute_backend", type=str, help="Backend for the simulation (neon)")
+    parser.add_argument("precision", type=str, help="Precision for the simulation (fp32/fp32, fp64/fp64, fp64/fp32, fp32/fp16)")
+    parser.add_argument("num_levels", type=int, help="Number of levels for the multiresolution grid (e.g., 2)")
+    parser.add_argument("mres_perf_opt", type=MresPerfOptimizationType.from_string, help="Multi-resolution performance optimization strategy (NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST)")
 
     # Optional arguments
     parser.add_argument("--num_devices", type=int, default=0, help="Number of devices for the simulation (default: 0)")
@@ -32,8 +50,24 @@ def parse_arguments():
     parser.add_argument("--export_final_velocity", action="store_true",
                         help="Export the final velocity field to a vti file (default: disabled)")
 
-    args = parser.parse_args()
-    
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        # Re-raise with custom message
+        print("\n" + "="*60)
+        print("USAGE EXAMPLES:")
+        print("="*60)
+        print("python mlups_3d_multires.py 100 1000 neon fp32/fp32 2 NAIVE_COLLIDE_STREAM")
+        print("python mlups_3d_multires.py 200 500 neon fp64/fp64 3 FUSION_AT_FINEST --report")
+        print("\nVALID VALUES:")
+        print("  compute_backend: neon")
+        print("  precision: fp32/fp32, fp64/fp64, fp64/fp32, fp32/fp16")
+        print("  mres_perf_opt: NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST")
+        print("  velocity_set: D3Q19, D3Q27")
+        print("  collision_model: BGK, KBC")
+        print("="*60)
+        raise
+
     print_args(args)
 
     if args.compute_backend != "neon":
@@ -58,6 +92,7 @@ def print_args(args):
     print(f"Precision Policy:     {args.precision}")
     print(f"Velocity Set:         {args.velocity_set}")
     print(f"Collision Model:      {args.collision_model}")
+    print(f"Mres Perf Opt:        {args.mres_perf_opt}")
     print(f"Generate Report:      {'Yes' if args.report else 'No'}")
     print(f"Export Velocity:      {'Yes' if args.export_final_velocity else 'No'}")
 
@@ -211,8 +246,8 @@ def run(velocity_set,
         num_steps,
         num_levels,
         collision_model,
-        export_final_velocity
-        ):
+        export_final_velocity,
+        mres_perf_opt, ):
     # Create grid and setup boundary conditions
 
     # Convert indices to list of indices per level
@@ -243,7 +278,8 @@ def run(velocity_set,
     sim = xlb.helper.MultiresSimulationManager(omega=omega,
                                                grid=grid,
                                                boundary_conditions=boundary_conditions,
-                                               collision_type=collision_model)
+                                               collision_type=collision_model,
+                                               mres_perf_opt=mres_perf_opt, )
 
     # sim.export_macroscopic("Initial_")
     # sim.step()
@@ -251,6 +287,10 @@ def run(velocity_set,
     print("start timing")
     wp.synchronize()
     start_time = time.time()
+
+    if num_levels == 1:
+        num_steps = num_steps // 2 
+    
     for i in range(num_steps):
         sim.step()
         # if i % 1000 == 0:
@@ -293,11 +333,11 @@ def generate_report(args, stats, mlups_stats):
     import sys
 
     report = neon.Report("LBM MLUPS Multiresolution LDC")
-    
+
     # Save the full command line
     command_line = " ".join(sys.argv)
     report.add_member("command_line", command_line)
-    
+
     report.add_member("velocity_set", args.velocity_set)
     report.add_member("compute_backend", args.compute_backend)
     report.add_member("precision_policy", args.precision)
@@ -306,11 +346,11 @@ def generate_report(args, stats, mlups_stats):
     report.add_member("num_steps", args.num_steps)
     report.add_member("num_levels", stats["num_levels"])
     report.add_member("finer_steps", mlups_stats["finer_steps"])
-    
+
     # Performance metrics
     report.add_member("elapsed_time", stats["time"])
     report.add_member("emlups", mlups_stats["EMLUPS"])
-    
+
     report_name = f"mlups_3d_multires_size_{args.cube_edge}_levels_{stats['num_levels']}"
     report.write(report_name, True)
     print("Report generated successfully.")
@@ -320,7 +360,9 @@ def main():
     args = parse_arguments()
     velocity_set = setup_simulation(args)
     grid_shape = (args.cube_edge, args.cube_edge, args.cube_edge)
-    stats = run(velocity_set, grid_shape, args.num_steps, args.num_levels, args.collision_model, args.export_final_velocity)
+    stats = run(velocity_set, grid_shape, args.num_steps, args.num_levels, args.collision_model,
+                args.export_final_velocity,
+                mres_perf_opt = args.mres_perf_opt)
     mlups_stats = calculate_mlups(args.cube_edge, args.num_steps, stats["time"], stats["num_levels"])
 
     print(f"Simulation completed in {stats['time']:.2f} seconds")
