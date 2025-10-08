@@ -36,7 +36,7 @@ wp.config.quiet = True
 # Physical and simulation parameters
 voxel_size = 0.15/300.0 # Finest voxel size in meters
 ulb = 0.05         # Lattice velocity
-flow_passes = 2    # Domain flow passes
+flow_passes = 3    # Domain flow passes
 kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s
 
 # STL filename
@@ -51,7 +51,7 @@ reynolds_numbers = [ 10000, 1000000]
 
 # I/O settings
 print_interval_percentage = 5   # Print every 1% of iterations
-file_output_crossover_percentage = 50  # Crossover at 50% of iterations
+file_output_crossover_percentage = 80  # Crossover at 50% of iterations
 num_file_outputs_pre_crossover = 1    # Outputs before crossover
 num_file_outputs_post_crossover = 1   # Outputs after crossover
 
@@ -83,7 +83,9 @@ def generate_makemesh_mesh(stl_filename, voxel_size, ground_refinement_level=Non
     }
 
     padding_values = [
-        [6, 6, 6, 6, 6, 6],
+        [15, 15, 15, 15, 15, 15],
+        [15, 15, 15, 15, 15, 15],
+        [8, 8, 8, 8, 8, 8],
         [6, 6, 6, 6, 6, 6],
         [6, 6, 6, 6, 6, 6],
         [6, 6, 6, 6, 6, 6],
@@ -520,7 +522,7 @@ for Re in reynolds_numbers:
 
     # Create initializer
     initializer = CustomMultiresInitializer(
-   # bc_id=boundary_conditions[-2].id,  # bc_outlet
+    bc_id=boundary_conditions[-2].id,  # bc_outlet
     constant_velocity_vector=(ulb, 0.0, 0.0),
     velocity_set=velocity_set,
     precision_policy=precision_policy,

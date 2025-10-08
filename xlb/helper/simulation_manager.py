@@ -24,7 +24,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         super().__init__(grid, boundary_conditions, collision_type, forcing_scheme, force_vector)
 
         self.initializer = initializer
-        self.omega = omega
+        #self.omega = omega
         self.count_levels = grid.count_levels
         self.mres_perf_opt = mres_perf_opt
         # Create fields
@@ -47,6 +47,12 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             precision_policy=self.precision_policy,
             velocity_set=self.velocity_set,
         )
+        if isinstance(omega, (int, float)):
+            self.omega = [omega] * self.count_levels
+        elif isinstance(omega, list) and len(omega) == self.count_levels:
+            self.omega = omega
+        else:
+            raise ValueError(f"Omega must be a scalar or a list of length {self.count_levels}.")
 
         # Construct the stepper skeleton
         self._construct_stepper_skeleton()
@@ -85,7 +91,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 f_1=self.f_1,
                 bc_mask=self.bc_mask,
                 missing_mask=self.missing_mask,
-                omega=self.omega,
+                omega=self.omega[level],
                 timestep=0,
             )
 
@@ -121,7 +127,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1=self.f_1,
                     bc_mask=self.bc_mask,
                     missing_mask=self.missing_mask,
-                    omega=self.omega,
+                    omega=self.omega[level],
                     timestep=0,
                     is_f1_the_explosion_src_field=True,
                 )
@@ -133,7 +139,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1=self.f_0,
                     bc_mask=self.bc_mask,
                     missing_mask=self.missing_mask,
-                    omega=self.omega,
+                    omega=self.omega[level],
                     timestep=0,
                     is_f1_the_explosion_src_field=False,
                 )
@@ -150,7 +156,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 f_1=self.f_1,
                 bc_mask=self.bc_mask,
                 missing_mask=self.missing_mask,
-                omega=self.omega,
+                omega=self.omega[level],
                 timestep=0,
             )
             # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.

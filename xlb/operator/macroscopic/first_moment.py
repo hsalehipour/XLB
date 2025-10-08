@@ -19,6 +19,7 @@ class FirstMoment(Operator):
 
     def _construct_warp(self):
         _c = self.velocity_set.c
+        _c_float = self.velocity_set.c_float
         _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
         _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
 
@@ -28,12 +29,7 @@ class FirstMoment(Operator):
             compensation = self.compute_dtype(0.0)
             for l in range(self.velocity_set.q):
                 # Get contribution based on the sign of _c[d, l]
-                if _c[d, l] == 1:
-                    val = f[l]
-                elif _c[d, l] == -1:
-                    val = -f[l]
-                else:
-                    val = self.compute_dtype(0.0)
+                val = _c_float[d, l] * f[l]                
                 t = total + val
                 if wp.abs(total) >= wp.abs(val):
                     compensation = compensation + ((total - t) + val)

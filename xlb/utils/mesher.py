@@ -650,8 +650,9 @@ class MultiresIO(object):
             cell_data = cell_data * self.velocity_conversion
         elif "rho" in field_name.lower():
             cell_data = cell_data * self.pressure_conversion
+
         if normalize != 1.0:  
-            cell_data = np.clip(cell_data / normalize,0,1)
+            cell_data = np.clip((cell_data / normalize),0,1)
         else:   
             cell_data = cell_data  
         # Plot each field in the dictionary
@@ -667,6 +668,7 @@ class MultiresIO(object):
             show_axes=show_axes,
             show_colorbar=show_colorbar,
             output=output,
+            normalize=normalize,
             **kwargs,
         )
         if output == 'array':
@@ -690,6 +692,7 @@ class MultiresIO(object):
         show_axes,
         show_colorbar,
         output,
+        normalize,
         **kwargs,
     ):
         """
@@ -798,121 +801,14 @@ class MultiresIO(object):
             plt.savefig(output_filename + ".png", dpi=dpi, bbox_inches="tight", pad_inches=0)
             plt.close()
         else:
-            plt.imsave(output_filename + ".png", grid_field, cmap=cmap, origin="lower")
+            if normalize != 1.0:
+                plt.imsave(output_filename + ".png", grid_field, cmap=cmap, origin="lower", vmin=0, vmax=1)
+            else:
+                plt.imsave(output_filename + ".png", grid_field, cmap=cmap, origin="lower")
             
         if output == 'both':
             return grid_field
             
-    def _to_slice_image_single_field2(
-        self,
-        output_filename,
-        field_data,
-        plane_point,
-        plane_normal,
-        slice_thickness,
-        bounds,
-        grid_res,
-        cmap,
-        show_axes,
-        show_colorbar,
-        **kwargs,
-    ):
-        """
-        Helper function to create a slice image for a single field.
-        """
-        from matplotlib import cm
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from scipy.interpolate import griddata
-        from scipy.spatial import cKDTree
-        tic = time.time()
-        # field data are associated with the cells centers
-        cell_values = field_data
-
-        # get the normalized plane normal
-        plane_normal = np.asarray(np.abs(plane_normal))
-        n = plane_normal / np.linalg.norm(plane_normal)
-
-        # Compute centroids (K = 8 for hexahedral cells)
-        #cell_points = self.coordinates[self.connectivity]
-        #centroids = np.mean(cell_points, axis=1)
-        centroids = self.centroids
-
-        # Compute signed distances of each cell center to the plane
-        plane_point *= plane_normal
-        sdf = np.dot(centroids - plane_point, n)
-
-        # Filter: cells with centroid near plane
-        mask = np.abs(sdf) <= slice_thickness / 2
-        if not np.any(mask):
-            raise ValueError("No cells intersect the plane within thickness.")
-
-        # Project centroids to plane
-        centroids_slice = centroids[mask]
-        sdf_slice = sdf[mask]
-        proj = centroids_slice - np.outer(sdf_slice, n)
-
-        values = cell_values[mask]
-
-        # Build in-plane basis
-        if np.allclose(n, [1, 0, 0]):
-            u1 = np.array([0, 1, 0])
-        else:
-            u1 = np.array([1, 0, 0])
-        u2 = np.abs(np.cross(n, u1))
-
-        local_x = np.dot(proj - plane_point, u1)
-        local_y = np.dot(proj - plane_point, u2)
-
-        # Define extent of the plot
-        xmin, xmax, ymin, ymax = local_x.min(), local_x.max(), local_y.min(), local_y.max()
-        Lx = xmax - xmin
-        Ly = ymax - ymin
-        extent = np.array([xmin + bounds[0] * Lx, xmin + bounds[1] * Lx, ymin + bounds[2] * Ly, ymin + bounds[3] * Ly])
-        mask_bounds = (extent[0] <= local_x) & (local_x <= extent[1]) & (extent[2] <= local_y) & (local_y <= extent[3])
-
-        if cmap is None:
-            cmap = cm.nipy_spectral
-
-        #Adjust vertical resolution based on bounds
-        # Compute bounded ranges
-        bounded_x_min = local_x[mask_bounds].min()
-        bounded_x_max = local_x[mask_bounds].max()
-        bounded_y_min = local_y[mask_bounds].min()
-        bounded_y_max = local_y[mask_bounds].max()
-        width_x = bounded_x_max - bounded_x_min
-        height_y = bounded_y_max - bounded_y_min        
-        aspect_ratio = height_y / width_x        
-        grid_resY = max(1, int(np.round(grid_res*aspect_ratio)))
-        print(f" ******Time to slice griddata {time.time()-tic}")
-        # Rasterize: scatter cell centers to 2D grid
-        grid_x = np.linspace(local_x[mask_bounds].min(), local_x[mask_bounds].max(), grid_res)
-        grid_y = np.linspace(local_y[mask_bounds].min(), local_y[mask_bounds].max(), grid_resY)
-        xv, yv = np.meshgrid(grid_x, grid_y, indexing="xy")
-
-        # Linear interpolation for each grid point
-        grid_field = griddata(points=(local_x, local_y), values=values, xi=(xv, yv), method="linear", fill_value=np.nan)        
-        print(f" *****Time to after griddata {time.time()-tic}")
-        # Plot
-        if show_colorbar or show_axes:
-            # Plot
-            dpi = 300
-            plt.imshow(
-                grid_field,
-                extent=[xmin, xmax, ymin, ymax],
-                cmap=cmap,
-                origin="lower",
-                aspect="equal",
-                **kwargs,
-            )        
-            if show_colorbar:
-                plt.colorbar()
-            if not show_axes:
-                plt.axis('off')
-            plt.savefig(output_filename + ".png", dpi=300, bbox_inches="tight", pad_inches=0)
-            plt.close()
-        else:
-            plt.imsave(output_filename + ".png", grid_field, cmap=cmap, origin="lower")
     
     def to_line(self, 
         output_filename, 

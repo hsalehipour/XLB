@@ -188,7 +188,7 @@ class HelperFunctionsBC(object):
             for l in range(_q):
                 if _missing_mask[l] == wp.uint8(1):
                     missing_count += one
-            scale = one - ((one + missing_count) / compute_dtype(_q)) 
+            scale = one - ((one + missing_count) / compute_dtype(_q))
 
             # Compute double dot product Qi:Pi1 (where Pi1 = PiNeq)
             nt = _d * (_d + 1) // 2

@@ -498,7 +498,10 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     _missing_mask = _missing_mask_vec()
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_collision = _f0_thread
-                    _f_post_stream = self.stream.neon_functional(f_0_pn, index)
+                    # _f_post_stream = self.stream.neon_functional(f_0_pn, index)
+                    _f_post_stream = _f_vec()
+                    _f_post_stream[lattice_central_index] = wp.neon_read(f_0_pn, index, lattice_central_index)
+
 
                     for l in range(self.velocity_set.q):
                         if l == lattice_central_index:
@@ -531,6 +534,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # -> **Explosion**
                                         # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                         _f_post_stream[l] = exploded_pop
+                            
+                            else: # we have ngh at same level just stream?
+                               _f_post_stream[l] = accumulated
                         else:
                             # HERE -> I have a finer ngh. in direction pull (opposite l)
                             # Then I have to read from the halo on top of my finer ngh.
@@ -763,7 +769,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     _missing_mask = _missing_mask_vec()
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_collision = _f0_thread
-                    _f_post_stream = self.stream.neon_functional(f_0_pn, index)
+                    # _f_post_stream = self.stream.neon_functional(f_0_pn, index)
+                    _f_post_stream = _f_vec()
+                    _f_post_stream[lattice_central_index] = wp.neon_read(f_0_pn, index, lattice_central_index)
 
                     for l in range(self.velocity_set.q):
                         if l == lattice_central_index:
@@ -799,6 +807,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                     # -> **Explosion**
                                     # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                     _f_post_stream[l] = exploded_pop
+                        else: # we have ngh at same level just stream?
+                            _f_post_stream[l] = accumulated
 
                     # do non mres post-streaming corrections
                     _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
