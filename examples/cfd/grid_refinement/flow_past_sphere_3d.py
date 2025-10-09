@@ -145,11 +145,11 @@ boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
 # Configure the simulation relaxation time
 visc = 2.0 * u_max * sphere_radius / Re
-omega = 1.0 / (3.0 * visc + 0.5)
+omega_finest = 1.0 / (3.0 * visc + 0.5)
 
 # Define a multi-resolution simulation manager
 sim = xlb.helper.MultiresSimulationManager(
-    omega=omega,
+    omega_finest=omega_finest,
     grid=grid,
     boundary_conditions=boundary_conditions,
     collision_type="BGK",
