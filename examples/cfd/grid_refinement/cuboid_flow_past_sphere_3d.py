@@ -224,7 +224,7 @@ boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
 # Configure the simulation relaxation time
 visc = u_max * num_finest_voxels_across_part / Re
-omega = 1.0 / (3.0 * visc + 0.5)
+omega_finest = 1.0 / (3.0 * visc + 0.5)
 
 # Make initializer operator
 from xlb.helper.initializers import CustomMultiresInitializer
@@ -239,7 +239,7 @@ initializer = CustomMultiresInitializer(
 
 # Define a multi-resolution simulation manager
 sim = xlb.helper.MultiresSimulationManager(
-    omega=omega,
+    omega_finest=omega_finest,
     grid=grid,
     boundary_conditions=boundary_conditions,
     collision_type="KBC",
