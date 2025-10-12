@@ -192,10 +192,10 @@ def run(velocity_set, grid_shape, num_steps):
     Re = 5000.0
     clength = grid_shape[0] - 1
     visc = prescribed_vel * clength / Re
-    omega = 1.0 / (3.0 * visc + 0.5)
+    omega_finest = 1.0 / (3.0 * visc + 0.5)
 
     # Define a multi-resolution simulation manager
-    sim = xlb.helper.MultiresSimulationManager(omega=omega, grid=grid, boundary_conditions=boundary_conditions, collision_type="KBC")
+    sim = xlb.helper.MultiresSimulationManager(omega_finest=omega_finest, grid=grid, boundary_conditions=boundary_conditions, collision_type="KBC")
 
     # sim.export_macroscopic("Initial_")
     # sim.step()
