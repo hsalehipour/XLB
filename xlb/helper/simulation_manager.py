@@ -12,7 +12,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
 
     def __init__(
         self,
-        omega,
+        omega_finest,
         grid,
         boundary_conditions=[],
         collision_type="BGK",
@@ -24,8 +24,8 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         super().__init__(grid, boundary_conditions, collision_type, forcing_scheme, force_vector)
 
         self.initializer = initializer
-        #self.omega = omega
         self.count_levels = grid.count_levels
+        self.omega_list = [self.compute_omega(omega_finest, level) for level in range(self.count_levels)]
         self.mres_perf_opt = mres_perf_opt
         # Create fields
         self.rho = grid.create_field(cardinality=1, dtype=self.precision_policy.store_precision)
@@ -47,15 +47,30 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             precision_policy=self.precision_policy,
             velocity_set=self.velocity_set,
         )
-        if isinstance(omega, (int, float)):
-            self.omega = [omega] * self.count_levels
-        elif isinstance(omega, list) and len(omega) == self.count_levels:
-            self.omega = omega
-        else:
-            raise ValueError(f"Omega must be a scalar or a list of length {self.count_levels}.")
 
         # Construct the stepper skeleton
         self._construct_stepper_skeleton()
+
+    def compute_omega(self, omega_finest, level):
+        """
+        Compute the relaxation parameter omega at a given grid level based on the finest level omega.
+        We select a refinement ratio of 2 where a coarse cell at level L is uniformly divided into 2^d cells
+        where d is the dimension. to arrive at level L - 1, or in other words ∆x_{L-1} = ∆x_L/2.
+        For neighboring cells that interface two grid levels, a maximum jump in grid level of ∆L = 1 is
+        allowed. Due to acoustic scaling which requires the speed of sound cs to remain constant across various grid levels,
+        ∆tL ∝ ∆xL and hence ∆t_{L-1} = ∆t_{L}/2. In addition, the fluid viscosity \nu must also remain constant on each
+        grid level which leads to the following relationship for the relaxation parameter omega at grid level L base
+        on the finest grid level omega_finest.
+
+        Args:
+            omega_finest: Relaxation parameter at the finest grid level.
+            level: Current grid level (0-indexed, with 0 being the finest level).
+
+        Returns:
+            Relaxation parameter omega at the specified grid level.
+        """
+        omega0 = omega_finest
+        return 2 ** (level + 1) * omega0 / ((2**level - 1.0) * omega0 + 2.0)
 
     def export_macroscopic(self, fname_prefix):
         print(f"exporting macroscopic: #levels {self.count_levels}")
@@ -80,6 +95,10 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         def recursion_reference(level, app):
             if level < 0:
                 return
+
+            # Compute omega at the current level
+            omega = self.omega_list[level]
+
             print(f"RECURSION down to level {level}")
             print(f"RECURSION Level {level}, COLLIDE")
 
@@ -91,7 +110,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 f_1=self.f_1,
                 bc_mask=self.bc_mask,
                 missing_mask=self.missing_mask,
-                omega=self.omega[level],
+                omega=omega,
                 timestep=0,
             )
 
@@ -116,6 +135,9 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             if level < 0:
                 return
 
+            # Compute omega at the current level
+            omega = self.omega_list[level]
+
             if level == 0:
                 print(f"RECURSION down to the finest level {level}")
                 print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
@@ -127,7 +149,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1=self.f_1,
                     bc_mask=self.bc_mask,
                     missing_mask=self.missing_mask,
-                    omega=self.omega[level],
+                    omega=omega,
                     timestep=0,
                     is_f1_the_explosion_src_field=True,
                 )
@@ -139,7 +161,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1=self.f_0,
                     bc_mask=self.bc_mask,
                     missing_mask=self.missing_mask,
-                    omega=self.omega[level],
+                    omega=omega,
                     timestep=0,
                     is_f1_the_explosion_src_field=False,
                 )
@@ -156,7 +178,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 f_1=self.f_1,
                 bc_mask=self.bc_mask,
                 missing_mask=self.missing_mask,
-                omega=self.omega[level],
+                omega=omega,
                 timestep=0,
             )
             # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.

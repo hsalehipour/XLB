@@ -78,25 +78,22 @@ class BoundaryCondition(Operator):
         # Currently we support three methods based on (a) aabb method (b) ray casting and (c) winding number.
         self.voxelization_method = voxelization_method
 
-        if self.compute_backend == ComputeBackend.WARP:
-            # Set local constants TODO: This is a hack and should be fixed with warp update
-            _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
-            _missing_mask_vec = wp.vec(self.velocity_set.q, dtype=wp.uint8)  # TODO fix vec bool
+        # Construct a default warp functional for assembling auxiliary data if needed
+        if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
 
-        @wp.func
-        def assemble_auxiliary_data(
-            index: Any,
-            timestep: Any,
-            missing_mask: Any,
-            f_0: Any,
-            f_1: Any,
-            f_pre: Any,
-            f_post: Any,
-        ):
-            return f_post
+            @wp.func
+            def assemble_auxiliary_data(
+                index: Any,
+                timestep: Any,
+                missing_mask: Any,
+                f_0: Any,
+                f_1: Any,
+                f_pre: Any,
+                f_post: Any,
+                level: Any = 0,
+            ):
+                return f_post
 
-        # Construct some helper warp functions for getting tid data
-        if self.compute_backend == ComputeBackend.WARP:
             self.assemble_auxiliary_data = assemble_auxiliary_data
 
     def pad_indices(self):
