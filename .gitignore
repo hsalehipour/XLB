@@ -160,3 +160,6 @@ build/
 # Ignore h5 and xmf formats
 *.h5
 *.xmf
+
+# Ignore CSV files
+*.csv
