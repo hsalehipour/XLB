@@ -1,9 +1,10 @@
 import numpy as np
 import trimesh
-from typing import Any
+from typing import Any, Optional
 
 import neon
 import warp as wp
+from xlb.utils.utils import UnitConvertor
 
 
 def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
@@ -21,6 +22,30 @@ def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
     adjusted_min = np.round(cuboid_min / voxel_size_up) * voxel_size_up
     adjusted_max = np.round(cuboid_max / voxel_size_up) * voxel_size_up
     return adjusted_min, adjusted_max
+
+
+def prepare_sparsity_pattern(level_data):
+    """
+    Prepare the sparsity pattern for the multiresolution grid based on the level data. "level_data" is expected to be formatted as in
+    the output of "make_cuboid_mesh".
+    """
+    num_levels = len(level_data)
+    level_origins = []
+    sparsity_pattern = []
+    for lvl in range(num_levels):
+        # Get the level mask from the level data
+        level_mask = level_data[lvl][0]
+
+        # Ensure level_0 is contiguous int32
+        level_mask = np.ascontiguousarray(level_mask, dtype=np.int32)
+
+        # Append the padded level mask to the sparsity pattern
+        sparsity_pattern.append(level_mask)
+
+        # Get the origin for this level
+        level_origins.append(level_data[lvl][2])
+
+    return sparsity_pattern, level_origins
 
 
 def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
@@ -125,7 +150,14 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
 
 class MultiresIO(object):
-    def __init__(self, field_name_cardinality_dict, levels_data, scale=1, offset=(0.0, 0.0, 0.0), store_precision=None):
+    def __init__(
+        self,
+        field_name_cardinality_dict,
+        levels_data,
+        unit_convertor: UnitConvertor = None,
+        offset: Optional[tuple] = (0.0, 0.0, 0.0),
+        store_precision=None,
+    ):
         """
         Initialize the MultiresIO object.
 
@@ -136,15 +168,18 @@ class MultiresIO(object):
             Example: {'velocity_x': 1, 'velocity_y': 1, 'velocity': 3, 'density': 1}
         levels_data : list of tuples
             Each tuple contains (data, voxel_size, origin, level).
-        scale : float or tuple, optional
-            Scale factor for the coordinates.
+        unit_convertor : UnitConvertor
+            An instance of the UnitConvertor class for unit conversions.
         offset : tuple, optional
             Offset to be applied to the coordinates.
         store_precision : str, optional
             The precision policy for storing data.
         """
+        # Set the unit convertor object
+        self.unit_convertor = unit_convertor
+
         # Process the multires geometry and extract coordinates and connectivity in the coordinate system of the finest level
-        coordinates, connectivity, level_id_field, total_cells = self.process_geometry(levels_data, scale)
+        coordinates, connectivity, level_id_field, total_cells = self.process_geometry(levels_data)
 
         # Ensure that coordinates and connectivity are not empty
         assert coordinates.size != 0, "Error: No valid data to process. Check the input levels_data."
@@ -152,8 +187,8 @@ class MultiresIO(object):
         # Merge duplicate points
         coordinates, connectivity = self._merge_duplicates(coordinates, connectivity, levels_data)
 
-        # Apply scale and offset
-        coordinates = self._transform_coordinates(coordinates, scale, offset)
+        # Transform coordinates to physical units and apply offset if provided
+        coordinates = self._transform_coordinates(coordinates, offset)
 
         # Assign to self
         self.field_name_cardinality_dict = field_name_cardinality_dict
@@ -177,7 +212,7 @@ class MultiresIO(object):
         # Construct the NEON container for exporting multi-resolution data
         self.container = self._construct_neon_container()
 
-    def process_geometry(self, levels_data, scale):
+    def process_geometry(self, levels_data):
         num_voxels_per_level = [np.sum(data) for data, _, _, _ in levels_data]
         num_points_per_level = [8 * nv for nv in num_voxels_per_level]
         point_id_offsets = np.cumsum([0] + num_points_per_level[:-1])
@@ -189,10 +224,10 @@ class MultiresIO(object):
 
         for level_idx, (data, voxel_size, origin, level) in enumerate(levels_data):
             origin = origin * voxel_size
-            corners_list, conn_list = self._process_level(data, voxel_size, origin, level, point_id_offsets[level_idx])
+            corners_list, conn_list = self._process_level(data, voxel_size, origin, point_id_offsets[level_idx])
 
             if corners_list:
-                print(f"\tProcessing level {level}: Voxel size {voxel_size * scale}, Origin {origin}, Shape {data.shape}")
+                print(f"\tProcessing level {level}: Voxel size {voxel_size}, Origin {origin}, Shape {data.shape}")
                 all_corners.extend(corners_list)
                 all_connectivity.extend(conn_list)
                 num_cells = sum(c.shape[0] for c in conn_list)
@@ -208,13 +243,13 @@ class MultiresIO(object):
 
         return coordinates, connectivity, level_id_field, total_cells
 
-    def _process_level(self, data, voxel_size, origin, level, point_id_offset):
+    def _process_level(self, data, voxel_size, origin, point_id_offset):
         """
         Given a voxel grid, returns all corners and connectivity in NumPy for this resolution level.
         """
         true_indices = np.argwhere(data)
         if true_indices.size == 0:
-            return [], [], level
+            return [], []
 
         max_voxels_per_chunk = 268_435_450
         chunks = np.array_split(true_indices, max(1, (len(true_indices) + max_voxels_per_chunk - 1) // max_voxels_per_chunk))
@@ -368,10 +403,11 @@ class MultiresIO(object):
         connectivity = mapping[connectivity]
         return coordinates, connectivity
 
-    def _transform_coordinates(self, coordinates, scale, offset):
-        scale = np.array([scale] * 3 if isinstance(scale, (int, float)) else scale, dtype=np.float32)
+    def _transform_coordinates(self, coordinates, offset):
         offset = np.array(offset, dtype=np.float32)
-        return coordinates * scale + offset
+        if self.unit_convertor is not None:
+            coordinates = self.unit_convertor.length_to_physical(coordinates)
+        return coordinates + offset
 
     def _prepare_container_inputs(self):
         # load necessary modules
@@ -445,7 +481,7 @@ class MultiresIO(object):
 
         # Ensure that this operator is called on multires grids
         grid_mres = next(iter(field_neon_dict.values())).get_grid()
-        assert grid_mres.name == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases"
+        assert grid_mres.name == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases!"
 
         for field_name in field_neon_dict.keys():
             assert field_name in self.field_name_cardinality_dict.keys(), (
@@ -488,9 +524,19 @@ class MultiresIO(object):
             fields_data[field_name] = np.concatenate(fields_data[field_name])
             assert fields_data[field_name].size == self.total_cells, f"Error: Field {field_name} size mismatch!"
 
+            # Unit conversion if applicable
+            if self.unit_convertor is not None:
+                if "velocity" in field_name.lower():
+                    fields_data[field_name] = self.unit_convertor.velocity_to_physical(fields_data[field_name])
+                elif "density" in field_name.lower():
+                    fields_data[field_name] = self.unit_convertor.density_to_physical(fields_data[field_name])
+                elif "pressure" in field_name.lower():
+                    fields_data[field_name] = self.unit_convertor.pressure_to_physical(fields_data[field_name])
+                # Add more physical quantities as needed
+
         return fields_data
 
-    def to_hdf5(self, output_filename, field_neon_dict, compression="gzip", compression_opts=0, store_precision=None):
+    def to_hdf5(self, output_filename, field_neon_dict, compression="gzip", compression_opts=0):
         """
         Export the multi-resolution mesh data to an HDF5 file.
         Parameters
@@ -503,8 +549,6 @@ class MultiresIO(object):
             The compression method to use for the HDF5 file.
         compression_opts : int, optional
             The compression options to use for the HDF5 file.
-        store_precision : str, optional
-            The precision policy for storing data in the HDF5 file.
         """
         import time
 

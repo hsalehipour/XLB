@@ -272,7 +272,7 @@ def run(velocity_set,
     Re = 5000.0
     clength = grid_shape[0] - 1
     visc = prescribed_vel * clength / Re
-    omega = 1.0 / (3.0 * visc + 0.5)
+    omega_finest = 1.0 / (3.0 * visc + 0.5)
 
     # Define a multi-resolution simulation manager
     sim = xlb.helper.MultiresSimulationManager(omega=omega,

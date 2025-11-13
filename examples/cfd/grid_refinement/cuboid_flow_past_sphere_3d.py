@@ -17,7 +17,7 @@ from xlb.operator.boundary_condition import (
     HybridBC,
 )
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
-from xlb.utils.mesher import make_cuboid_mesh
+from xlb.utils.mesher import make_cuboid_mesh, prepare_sparsity_pattern
 from xlb.operator.force import MultiresMomentumTransfer
 
 
@@ -80,31 +80,6 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part):
     print(f"Full shape based on finest voxels size is {grid_shape_finest}")
     os.remove("temp.stl")
     return level_data, mesh_vertices, tuple([int(a) for a in grid_shape_finest])
-
-
-def prepare_sparsity_pattern(level_data):
-    """
-    Prepare the sparsity pattern for the multiresolution grid based on the level data. "level_data" is expected to be formatted as in
-    the output of "make_cuboid_mesh".
-    """
-    num_levels = len(level_data)
-    sparsity_pattern = []
-    level_origins = []
-    sparsity_pattern = []
-    for lvl in range(num_levels):
-        # Get the level mask from the level data
-        level_mask = level_data[lvl][0]
-
-        # Ensure level_0 is contiguous int32
-        level_mask = np.ascontiguousarray(level_mask, dtype=np.int32)
-
-        # Append the padded level mask to the sparsity pattern
-        sparsity_pattern.append(level_mask)
-
-        # Get the origin for this level
-        level_origins.append(level_data[lvl][2])
-
-    return sparsity_pattern, level_origins
 
 
 # -------------------------- Simulation Setup --------------------------
@@ -224,7 +199,7 @@ boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
 # Configure the simulation relaxation time
 visc = u_max * num_finest_voxels_across_part / Re
-omega = 1.0 / (3.0 * visc + 0.5)
+omega_finest = 1.0 / (3.0 * visc + 0.5)
 
 # Make initializer operator
 from xlb.helper.initializers import CustomMultiresInitializer
@@ -239,7 +214,7 @@ initializer = CustomMultiresInitializer(
 
 # Define a multi-resolution simulation manager
 sim = xlb.helper.MultiresSimulationManager(
-    omega=omega,
+    omega_finest=omega_finest,
     grid=grid,
     boundary_conditions=boundary_conditions,
     collision_type="KBC",

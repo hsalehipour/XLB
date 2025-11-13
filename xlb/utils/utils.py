@@ -408,3 +408,92 @@ class ToJAX(object):
 
         else:
             raise ValueError("Unsupported compute backend!")
+
+
+class UnitConvertor(object):
+    def __init__(
+        self,
+        velocity_lbm_unit: float,
+        velocity_physical_unit: float,
+        voxel_size_physical_unit: float,
+        density_physical_unit: float = 1.2041,
+        pressure_physical_unit: float = 1.101325e5,
+    ):
+        """
+        Initialize the UnitConvertor object.
+
+        Parameters
+        ----------
+        velocity_lbm_unit : float
+            The reference velocity in lattice Boltzmann units.
+        velocity_physical_unit : float
+            The reference velocity in physical units (e.g., m/s).
+        voxel_size_physical_unit : float
+            The size of a voxel in physical units (e.g., meters).
+        density_physical_unit : float, optional
+            The reference density in physical units (e.g., kg/m^3). Default is 1.2041 (density of air at room temperature).
+        pressure_physical_unit : float, optional
+            The reference pressure in physical units (e.g., Pascals). Default is 1.101325e5 (atmospheric pressure at sea level).
+        """
+
+        self.voxel_size = voxel_size_physical_unit
+        self.velocity_lbm_unit = velocity_lbm_unit
+        self.velocity_phys_unit = velocity_physical_unit
+
+        # Reference density and pressure in physical units
+        self.reference_density = density_physical_unit
+        self.referece_pressure = pressure_physical_unit
+
+    @property
+    def time_step_physical(self):
+        return self.voxel_size * self.velocity_lbm_unit / self.velocity_phys_unit
+
+    @property
+    def reference_length(self):
+        return self.voxel_size
+
+    @property
+    def reference_time(self):
+        return self.time_step_physical
+
+    @property
+    def reference_velocity(self):
+        return self.reference_length / self.reference_time
+
+    def length_to_lbm(self, length_phys):
+        return length_phys / self.reference_length
+
+    def length_to_physical(self, length_lbm):
+        return length_lbm * self.reference_length
+
+    def time_to_lbm(self, time_phys):
+        return time_phys / self.reference_time
+
+    def time_to_physical(self, time_lbm):
+        return time_lbm * self.reference_time
+
+    def density_to_lbm(self, rho_phys):
+        return rho_phys / self.reference_density
+
+    def density_to_physical(self, rho_lbm):
+        return rho_lbm * self.reference_density
+
+    def velocity_to_lbm(self, velocity_phys):
+        return velocity_phys / self.reference_velocity
+
+    def velocity_to_physical(self, velocity_lbm):
+        return velocity_lbm * self.reference_velocity
+
+    def viscosity_to_lbm(self, viscosity_phys):
+        return viscosity_phys * (self.reference_time / (self.reference_length**2))
+
+    def viscosity_to_physical(self, viscosity_lbm):
+        return viscosity_lbm * (self.reference_length**2 / self.reference_time)
+
+    def pressure_to_lbm(self, pressure_phys):
+        pressure_perturbation = pressure_phys - self.reference_pressure
+        return pressure_perturbation / self.reference_density / self.reference_velocity**2
+
+    def pressure_to_physical(self, pressure_lbm):
+        pressure_perturbation = pressure_lbm - 1.0 / 3.0
+        return self.referece_pressure + pressure_perturbation * self.reference_density * (self.reference_velocity**2)
