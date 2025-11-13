@@ -7,5 +7,6 @@ from .utils import (
     voxelize_stl,
     axangle2mat,
     ToJAX,
+    UnitConvertor,
 )
 from .mesher import make_cuboid_mesh, MultiresIO
