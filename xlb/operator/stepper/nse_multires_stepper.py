@@ -896,22 +896,81 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
     def add_to_app(
         self,
-        app,
-        op_name,
-        mres_level,
-        f_0,
-        f_1,
-        bc_mask,
-        missing_mask,
-        omega,
-        timestep,
-        is_f1_the_explosion_src_field: bool = None,
+            **kwargs
     ):
+        import inspect
+
+        def validate_kwargs_forward(func, kwargs):
+            """
+            Check whether `func(**kwargs)` would be valid,
+            and return *all* the issues instead of raising on the first one.
+
+            Returns a dict; empty dict means "everything is OK".
+            """
+            sig = inspect.signature(func)
+            params = sig.parameters
+
+            errors = {}
+
+            # --- 1. Positional-only required params (cannot be given via kwargs) ---
+            pos_only_required = [
+                name for name, p in params.items()
+                if p.kind == inspect.Parameter.POSITIONAL_ONLY
+                   and p.default is inspect._empty
+            ]
+            if pos_only_required:
+                errors["positional_only_required"] = pos_only_required
+
+            # --- 2. Unexpected kwargs (if no **kwargs in target) ---
+            has_var_kw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in params.values()
+            )
+            if not has_var_kw:
+                allowed_kw = {
+                    name for name, p in params.items()
+                    if p.kind in (
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                }
+                unexpected = sorted(set(kwargs) - allowed_kw)
+                if unexpected:
+                    errors["unexpected_kwargs"] = unexpected
+
+            # --- 3. Missing required keyword-passable params ---
+            missing_required = [
+                name for name, p in params.items()
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+                   and p.default is inspect._empty  # no default
+                   and name not in kwargs  # not provided
+            ]
+            if missing_required:
+                errors["missing_required"] = missing_required
+
+            return errors
+
+        container_generator = None
+        try:
+            op_name = kwargs.pop("op_name")
+            app = kwargs.pop("app")
+        except:
+            raise ValueError("op_name and app must be provided as keyword arguments")
+
+        try:
+            container_generator = self.neon_container[op_name]
+        except KeyError:
+            raise ValueError(f"Operator {op_name} not found in neon container. Available operators: {list(self.neon_container.keys())}")
+
+        errors = validate_kwargs_forward(container_generator, kwargs)
+        if errors:
+            raise ValueError(f"Cannot forward kwargs to target: {errors}")
+
         nvtx.push_range(f"New Container {op_name}", color="yellow")
-        if is_f1_the_explosion_src_field is None:
-            app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep))
-        else:
-            app.append(self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep, is_f1_the_explosion_src_field))
+        app.append(container_generator(**kwargs))
         nvtx.pop_range()
 
     @Operator.register_backend(ComputeBackend.NEON)
