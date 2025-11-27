@@ -275,7 +275,7 @@ def run(velocity_set,
     omega_finest = 1.0 / (3.0 * visc + 0.5)
 
     # Define a multi-resolution simulation manager
-    sim = xlb.helper.MultiresSimulationManager(omega=omega,
+    sim = xlb.helper.MultiresSimulationManager(omega_finest=omega_finest,
                                                grid=grid,
                                                boundary_conditions=boundary_conditions,
                                                collision_type=collision_model,
