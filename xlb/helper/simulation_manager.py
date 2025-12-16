@@ -421,31 +421,31 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254:
             # Run kernel that generates teh 254 value in the bc_mask
             wp.synchronize()
-            self.bc_mask.update_host(0)
-            wp.synchronize()
-            self.bc_mask.export_vti(f"mask_before.vti", "u")
+            # self.bc_mask.update_host(0)
+            # wp.synchronize()
+            # self.bc_mask.export_vti(f"mask_before.vti", "u")
 
             self.neon_container['reset_bc_mask_for_no_mr_no_bc_as_254'](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            self.bc_mask.update_host(0)
-            wp.synchronize()
-            self.bc_mask.export_vti(f"mask_after.vti", "u")
+            # self.bc_mask.update_host(0)
+            # wp.synchronize()
+            # self.bc_mask.export_vti(f"mask_after.vti", "u")
             recursion_fused_finest_254(self.count_levels - 1, app=self.app)
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254_ALL:
             # Run kernel that generates teh 254 value in the bc_mask
             wp.synchronize()
-            self.bc_mask.update_host(0)
-            wp.synchronize()
-            self.bc_mask.export_vti(f"mask_before.vti", "u")
+            # self.bc_mask.update_host(0)
+            # wp.synchronize()
+            # self.bc_mask.export_vti(f"mask_before.vti", "u")
 
             num_levels =  self.f_0.get_grid().num_levels
             for l in range(num_levels):
                 self.neon_container['reset_bc_mask_for_no_mr_no_bc_as_254'](l, self.f_0, self.f_1, self.bc_mask,
                                                                         self.bc_mask).run(0)
+            # wp.synchronize()
+            # self.bc_mask.update_host(0)
             wp.synchronize()
-            self.bc_mask.update_host(0)
-            wp.synchronize()
-            self.bc_mask.export_vti(f"mask_after.vti", "u")
+            # self.bc_mask.export_vti(f"mask_after.vti", "u")
             recursion_fused_finest_254_all(self.count_levels - 1, app=self.app)
         else:
             raise ValueError(f"Unknown optimization level: {self.opt_level}")
