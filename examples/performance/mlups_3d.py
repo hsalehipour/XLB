@@ -22,7 +22,7 @@ def parse_arguments():
     VELOCITY_SETS = ["D3Q19", "D3Q27"]
     COLLISION_MODELS = ["BGK", "KBC"]
     OCC_OPTIONS = ["standard", "none"]
-    
+
     parser = argparse.ArgumentParser(
         description="MLUPS Benchmark for 3D Lattice Boltzmann Method Simulation",
         epilog=f"""
@@ -32,41 +32,44 @@ Examples:
   %(prog)s 150 2000 neon fp32/fp32 --gpu_devices=[0,1,2] --measure_scalability --report
   %(prog)s 100 1000 neon fp32/fp32 --repetitions 5 --export_final_velocity
         """,
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    
+
     # Positional arguments
-    parser.add_argument("cube_edge", type=int, 
-                       help="Length of the edge of the cubic grid (e.g., 100)")
-    parser.add_argument("num_steps", type=int, 
-                       help="Number of timesteps for the simulation (e.g., 1000)")
-    parser.add_argument("compute_backend", type=str, 
-                       choices=COMPUTE_BACKENDS,
-                       help=f"Backend for the simulation ({', '.join(COMPUTE_BACKENDS)})")
-    parser.add_argument("precision", type=str, 
-                       choices=PRECISION_OPTIONS,
-                       help=f"Precision for the simulation ({', '.join(PRECISION_OPTIONS)})")
-    
+    parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid (e.g., 100)")
+    parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation (e.g., 1000)")
+    parser.add_argument("compute_backend", type=str, choices=COMPUTE_BACKENDS, help=f"Backend for the simulation ({', '.join(COMPUTE_BACKENDS)})")
+    parser.add_argument("precision", type=str, choices=PRECISION_OPTIONS, help=f"Precision for the simulation ({', '.join(PRECISION_OPTIONS)})")
+
     # Optional arguments
-    parser.add_argument("--gpu_devices", type=str, default=None,
-                       help="CUDA devices to use for Neon backend (e.g., [0,1,2] or [0])")
-    parser.add_argument("--velocity_set", type=str, default="D3Q19", 
-                       choices=VELOCITY_SETS,
-                       help=f"Lattice velocity set (default: D3Q19, choices: {', '.join(VELOCITY_SETS)})")
-    parser.add_argument("--collision_model", type=str, default="BGK", 
-                       choices=COLLISION_MODELS,
-                       help=f"Collision model (default: BGK, choices: {', '.join(COLLISION_MODELS)}, KBC requires D3Q27)")
-    parser.add_argument("--occ", type=str, default="standard", 
-                       choices=OCC_OPTIONS,
-                       help=f"Overlapping Communication and Computation strategy (default: standard, choices: {', '.join(OCC_OPTIONS)})")
-    parser.add_argument("--report", action="store_true", 
-                       help="Generate Neon performance report")
-    parser.add_argument("--export_final_velocity", action="store_true", 
-                       help="Export final velocity field to VTI file")
-    parser.add_argument("--measure_scalability", action="store_true", 
-                       help="Measure performance across different GPU counts")
-    parser.add_argument("--repetitions", type=int, default=1, metavar="N",
-                       help="Number of simulation repetitions for statistical analysis (default: 1)")
+    parser.add_argument("--gpu_devices", type=str, default=None, help="CUDA devices to use for Neon backend (e.g., [0,1,2] or [0])")
+    parser.add_argument(
+        "--velocity_set",
+        type=str,
+        default="D3Q19",
+        choices=VELOCITY_SETS,
+        help=f"Lattice velocity set (default: D3Q19, choices: {', '.join(VELOCITY_SETS)})",
+    )
+    parser.add_argument(
+        "--collision_model",
+        type=str,
+        default="BGK",
+        choices=COLLISION_MODELS,
+        help=f"Collision model (default: BGK, choices: {', '.join(COLLISION_MODELS)}, KBC requires D3Q27)",
+    )
+    parser.add_argument(
+        "--occ",
+        type=str,
+        default="standard",
+        choices=OCC_OPTIONS,
+        help=f"Overlapping Communication and Computation strategy (default: standard, choices: {', '.join(OCC_OPTIONS)})",
+    )
+    parser.add_argument("--report", action="store_true", help="Generate Neon performance report")
+    parser.add_argument("--export_final_velocity", action="store_true", help="Export final velocity field to VTI file")
+    parser.add_argument("--measure_scalability", action="store_true", help="Measure performance across different GPU counts")
+    parser.add_argument(
+        "--repetitions", type=int, default=1, metavar="N", help="Number of simulation repetitions for statistical analysis (default: 1)"
+    )
 
     args = parser.parse_args()
 
@@ -97,8 +100,9 @@ Examples:
         if args.gpu_devices is None:
             print("[INFO] No GPU devices specified. Using default device 0.")
             args.gpu_devices = [0]
-        
+
         import neon
+
         occ_enum = neon.SkeletonConfig.OCC.from_string(args.occ)
         args.occ_enum = occ_enum  # Store the enum for Neon
         args.occ_display = args.occ  # Store the original string for display
@@ -129,7 +133,6 @@ Examples:
         velocity_set = xlb.velocity_set.D3Q27(precision_policy=args.precision_policy, compute_backend=compute_backend)
     args.velocity_set = velocity_set
 
-
     print_args(args)
 
     return args
@@ -140,27 +143,27 @@ def print_args(args):
     print("\n" + "=" * 70)
     print("                    SIMULATION CONFIGURATION")
     print("=" * 70)
-    
+
     # Grid and simulation parameters
     print("GRID & SIMULATION:")
     print(f"  Grid Size:              {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
     print(f"  Total Lattice Points:   {args.cube_edge**3:,}")
     print(f"  Time Steps:             {args.num_steps:,}")
     print(f"  Repetitions:            {args.repetitions}")
-    
+
     # Computational settings
     print("\nCOMPUTATIONAL SETTINGS:")
     print(f"  Compute Backend:        {args.compute_backend.name}")
     print(f"  Precision Policy:       {args.precision}")
     print(f"  Velocity Set:           {args.velocity_set.__class__.__name__}")
     print(f"  Collision Model:        {args.collision_model}")
-    
+
     # Backend-specific settings
     if args.compute_backend.name == "NEON":
         print("\nNEON BACKEND SETTINGS:")
         print(f"  GPU Devices:            {args.gpu_devices}")
         print(f"  OCC Strategy:           {args.occ_display}")
-    
+
     # Output options
     print("\nOUTPUT OPTIONS:")
     print(f"  Generate Report:        {'Yes' if args.report else 'No'}")
@@ -184,7 +187,9 @@ def init_xlb(args):
     return args.compute_backend, args.precision_policy, options
 
 
-def run_simulation(compute_backend, precision_policy, grid_shape, num_steps, options, export_final_velocity, repetitions, num_devices, collision_model):
+def run_simulation(
+    compute_backend, precision_policy, grid_shape, num_steps, options, export_final_velocity, repetitions, num_devices, collision_model
+):
     grid = grid_factory(grid_shape, backend_config=options)
     box = grid.bounding_box_indices()
     box_no_edge = grid.bounding_box_indices(remove_edges=True)
@@ -262,6 +267,7 @@ def calculate_mlups(cube_edge, num_steps, elapsed_time):
     mlups = (total_lattice_updates / elapsed_time) / 1e6
     return mlups
 
+
 def print_summary_with_stats(args, stats):
     """Print comprehensive simulation summary with statistics from multiple repetitions"""
     total_lattice_points = args.cube_edge**3
@@ -336,6 +342,7 @@ def print_summary_with_stats(args, stats):
             print(f"  MLUPs per GPU:          {mlups_per_gpu:.2f}")
 
     print("=" * 70)
+
 
 def print_scalability_summary(args, stats_list):
     """Print comprehensive scalability summary with MLUPs statistics for different GPU counts"""
@@ -423,16 +430,17 @@ def print_scalability_summary(args, stats_list):
 
     print("=" * 95)
 
+
 def report(args, stats):
     import neon
     import sys
 
     report = neon.Report("LBM MLUPS LDC")
-    
+
     # Save the full command line
     command_line = " ".join(sys.argv)
     report.add_member("command_line", command_line)
-    
+
     report.add_member("velocity_set", args.velocity_set.__class__.__name__)
     report.add_member("compute_backend", args.compute_backend.name)
     report.add_member("precision_policy", args.precision)
@@ -469,14 +477,14 @@ def report(args, stats):
     report_name += f"_collision_model_{args.collision_model}"
     report_name += f"_grid_size_{args.cube_edge}"
     report_name += f"_num_steps_{args.num_steps}"
-    
+
     if args.compute_backend.name == "NEON":
         report_name += f"_occ_{args.occ_display}"
         report_name += f"_num_devices_{len(args.gpu_devices)}"
-    
+
     if args.repetitions > 1:
         report_name += f"_repetitions_{args.repetitions}"
-    
+
     report.write(report_name, True)
 
 

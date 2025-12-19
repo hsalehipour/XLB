@@ -29,34 +29,36 @@ Valid values:
   velocity_set: D3Q19, D3Q27
   collision_model: BGK, KBC
         """,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
     # Positional arguments
     parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid (e.g., 100)")
     parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation (e.g., 1000)")
     parser.add_argument("compute_backend", type=str, help="Backend for the simulation (neon)")
     parser.add_argument("precision", type=str, help="Precision for the simulation (fp32/fp32, fp64/fp64, fp64/fp32, fp32/fp16)")
     parser.add_argument("num_levels", type=int, help="Number of levels for the multiresolution grid (e.g., 2)")
-    parser.add_argument("mres_perf_opt", type=MresPerfOptimizationType.from_string, help="Multi-resolution performance optimization strategy (NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST)")
+    parser.add_argument(
+        "mres_perf_opt",
+        type=MresPerfOptimizationType.from_string,
+        help="Multi-resolution performance optimization strategy (NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST)",
+    )
 
     # Optional arguments
     parser.add_argument("--num_devices", type=int, default=0, help="Number of devices for the simulation (default: 0)")
-    parser.add_argument("--velocity_set", type=str, default="D3Q19",
-                        help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
-    parser.add_argument("--collision_model", type=str, default="BGK",
-                        help="Collision model: BGK or KBC (default: BGK)")
+    parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
+    parser.add_argument("--collision_model", type=str, default="BGK", help="Collision model: BGK or KBC (default: BGK)")
 
     parser.add_argument("--report", action="store_true", help="Generate a neon report file (default: disabled)")
-    parser.add_argument("--export_final_velocity", action="store_true",
-                        help="Export the final velocity field to a vti file (default: disabled)")
+    parser.add_argument("--export_final_velocity", action="store_true", help="Export the final velocity field to a vti file (default: disabled)")
 
     try:
         args = parser.parse_args()
     except SystemExit:
         # Re-raise with custom message
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("USAGE EXAMPLES:")
-        print("="*60)
+        print("=" * 60)
         print("python mlups_3d_multires.py 100 1000 neon fp32/fp32 2 NAIVE_COLLIDE_STREAM")
         print("python mlups_3d_multires.py 200 500 neon fp64/fp64 3 FUSION_AT_FINEST --report")
         print("\nVALID VALUES:")
@@ -65,7 +67,7 @@ Valid values:
         print("  mres_perf_opt: NAIVE_COLLIDE_STREAM, FUSION_AT_FINEST")
         print("  velocity_set: D3Q19, D3Q27")
         print("  collision_model: BGK, KBC")
-        print("="*60)
+        print("=" * 60)
         raise
 
     print_args(args)
@@ -85,7 +87,7 @@ def print_args(args):
     print("           3D LATTICE BOLTZMANN SIMULATION CONFIG")
     print("=" * 60)
     print(f"Grid Size:            {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
-    print(f"Total Lattice Points: {args.cube_edge ** 3:,}")
+    print(f"Total Lattice Points: {args.cube_edge**3:,}")
     print(f"Time Steps:           {args.num_steps:,}")
     print(f"Number Levels:        {args.num_levels}")
     print(f"Compute Backend:      {args.compute_backend}")
@@ -151,7 +153,7 @@ def problem1(grid_shape, velocity_set, num_levels):
     dim = neon.Index_3d(grid_shape[0], grid_shape[1], grid_shape[2])
 
     def get_peeled_np(level, width):
-        divider = 2 ** level
+        divider = 2**level
         m = neon.Index_3d(dim.x // divider, dim.y // divider, dim.z // divider)
         if level == 0:
             m = dim
@@ -175,7 +177,7 @@ def problem1(grid_shape, velocity_set, num_levels):
             l = get_peeled_np(i, 8)
             levels.append(l)
         lastLevel = num_levels - 1
-        divider = 2 ** lastLevel
+        divider = 2**lastLevel
         m = neon.Index_3d(dim.x // divider + 1, dim.y // divider + 1, dim.z // divider + 1)
         lastLevel = np.ones((m.x, m.y, m.z), dtype=int)
         lastLevel = np.ascontiguousarray(lastLevel, dtype=np.int32)
@@ -194,8 +196,7 @@ def problem1(grid_shape, velocity_set, num_levels):
     box = grid.bounding_box_indices()
     box_no_edge = grid.bounding_box_indices(remove_edges=True)
     lid = box_no_edge["top"]
-    walls = [box["bottom"][i] + box["left"][i] + box["right"][i] + box["front"][i] + box["back"][i] for i in
-             range(len(grid.shape))]
+    walls = [box["bottom"][i] + box["left"][i] + box["right"][i] + box["front"][i] + box["back"][i] for i in range(len(grid.shape))]
     walls = np.unique(np.array(walls), axis=-1).tolist()
     # convert bc indices to a list of list, where the first entry of the list corresponds to the finest level
     lid = [lid] + [[] for _ in range(num_levels - 1)]
@@ -208,8 +209,8 @@ def problem2(grid_shape, velocity_set, num_levels):
     level_origins = []
     level_list = []
     for lvl in range(num_levels):
-        divider = 2 ** lvl
-        growth = 1.5 ** lvl
+        divider = 2**lvl
+        growth = 1.5**lvl
         shape = grid_shape[0] // divider, grid_shape[1] // divider, grid_shape[2] // divider
         if lvl == num_levels - 1:
             level = np.ascontiguousarray(np.ones(shape, dtype=int), dtype=np.int32)
@@ -232,8 +233,7 @@ def problem2(grid_shape, velocity_set, num_levels):
     box = grid.bounding_box_indices(shape=grid.level_to_shape(num_levels - 1))
     box_no_edge = grid.bounding_box_indices(shape=grid.level_to_shape(1), remove_edges=True)
     lid = box_no_edge["top"]
-    walls = [box["bottom"][i] + box["left"][i] + box["right"][i] + box["front"][i] + box["back"][i] for i in
-             range(len(grid.shape))]
+    walls = [box["bottom"][i] + box["left"][i] + box["right"][i] + box["front"][i] + box["back"][i] for i in range(len(grid.shape))]
     walls = np.unique(np.array(walls), axis=-1).tolist()
     # convert bc indices to a list of list, where the first entry of the list corresponds to the finest level
     lid = [[] for _ in range(num_levels - 1)] + [lid]
@@ -241,13 +241,15 @@ def problem2(grid_shape, velocity_set, num_levels):
     return grid, lid, walls
 
 
-def run(velocity_set,
-        grid_shape,
-        num_steps,
-        num_levels,
-        collision_model,
-        export_final_velocity,
-        mres_perf_opt, ):
+def run(
+    velocity_set,
+    grid_shape,
+    num_steps,
+    num_levels,
+    collision_model,
+    export_final_velocity,
+    mres_perf_opt,
+):
     # Create grid and setup boundary conditions
 
     # Convert indices to list of indices per level
@@ -275,11 +277,13 @@ def run(velocity_set,
     omega_finest = 1.0 / (3.0 * visc + 0.5)
 
     # Define a multi-resolution simulation manager
-    sim = xlb.helper.MultiresSimulationManager(omega_finest=omega_finest,
-                                               grid=grid,
-                                               boundary_conditions=boundary_conditions,
-                                               collision_type=collision_model,
-                                               mres_perf_opt=mres_perf_opt, )
+    sim = xlb.helper.MultiresSimulationManager(
+        omega_finest=omega_finest,
+        grid=grid,
+        boundary_conditions=boundary_conditions,
+        collision_type=collision_model,
+        mres_perf_opt=mres_perf_opt,
+    )
 
     # sim.export_macroscopic("Initial_")
     # sim.step()
@@ -289,8 +293,8 @@ def run(velocity_set,
     start_time = time.time()
 
     if num_levels == 1:
-        num_steps = num_steps // 2 
-    
+        num_steps = num_steps // 2
+
     for i in range(num_steps):
         sim.step()
         # if i % 1000 == 0:
@@ -310,7 +314,7 @@ def run(velocity_set,
 
 def calculate_mlups(cube_edge, num_steps, elapsed_time, num_levels):
     num_step_finer = num_steps * 2 ** (num_levels - 1)
-    total_lattice_updates = cube_edge ** 3 * num_step_finer
+    total_lattice_updates = cube_edge**3 * num_step_finer
     mlups = (total_lattice_updates / elapsed_time) / 1e6
     return {"EMLUPS": mlups, "finer_steps": num_step_finer}
 
@@ -360,9 +364,9 @@ def main():
     args = parse_arguments()
     velocity_set = setup_simulation(args)
     grid_shape = (args.cube_edge, args.cube_edge, args.cube_edge)
-    stats = run(velocity_set, grid_shape, args.num_steps, args.num_levels, args.collision_model,
-                args.export_final_velocity,
-                mres_perf_opt = args.mres_perf_opt)
+    stats = run(
+        velocity_set, grid_shape, args.num_steps, args.num_levels, args.collision_model, args.export_final_velocity, mres_perf_opt=args.mres_perf_opt
+    )
     mlups_stats = calculate_mlups(args.cube_edge, args.num_steps, stats["time"], stats["num_levels"])
 
     print(f"Simulation completed in {stats['time']:.2f} seconds")

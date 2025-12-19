@@ -465,7 +465,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             def ll_collide_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
-
                 f_0_pn = loader.get_mres_read_handle(f_0_fd)
                 f_1_pn = loader.get_mres_write_handle(f_1_fd)
 
@@ -698,13 +697,13 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
         @neon.Container.factory(name="no_254_stream_coarse_step_ABC")
         def stream_coarse_step_ABC_no_254(
-                level: int,
-                f_0_fd: Any,
-                f_1_fd: Any,
-                bc_mask_fd: Any,
-                missing_mask_fd: Any,
-                omega: Any,
-                timestep: int,
+            level: int,
+            f_0_fd: Any,
+            f_1_fd: Any,
+            bc_mask_fd: Any,
+            missing_mask_fd: Any,
+            omega: Any,
+            timestep: int,
         ):
             num_levels = f_0_fd.get_grid().num_levels
 
@@ -757,8 +756,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                         has_ngh_at_same_level = wp.bool(False)
-                        accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0),
-                                                       has_ngh_at_same_level)
+                        accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
 
                         # if (!pin.hasChildren(cell, dir)) {
                         if not wp.neon_has_finer_ngh(f_0_pn, index, pull_direction):
@@ -804,8 +802,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             #     wp.print("ERRRRRRORRRRRRRRRRRRRR")
 
                     # do non mres post-streaming corrections
-                    _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn,
-                                              _f_post_collision, _f_post_stream, True)
+                    _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
 
                     # Apply auxiliary recovery for boundary conditions (swapping) before overwriting f_1
                     neon_apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0_pn, f_1_pn)
@@ -844,7 +841,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 missing_mask_pn = loader.get_mres_read_handle(missing_mask_fd)
 
                 _c = self.velocity_set.c
-
 
                 @wp.func
                 def cl_stream_coarse(index: Any):
@@ -921,7 +917,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     # They are not mr halo cells
                     wp.neon_write(bc_mask_pn, index, 0, wp.uint8(254))
 
-
                 loader.declare_kernel(cl_stream_coarse)
 
             return ll_stream_coarse
@@ -979,13 +974,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             return ll_stream_coarse
 
         @neon.Container.factory(name="stream_coarse_step_254")
-        def stream_coarse_step_254(
-                level: int,
-                f_0_fd: Any,
-                f_1_fd: Any,
-                bc_mask_fd: Any,
-                missing_mask_fd: Any
-        ):
+        def stream_coarse_step_254(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any):
 
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
@@ -1243,7 +1232,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             bc_mask_fd: Any,
             missing_mask_fd: Any,
             omega: Any,
-            timestep:Any,
+            timestep: Any,
             is_f1_the_explosion_src_field: bool,
         ):
             if level != 0:
@@ -1397,7 +1386,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     if _boundary_id != wp.uint8(254):
                         return
 
-
                     # do stream normally
                     _missing_mask = _missing_mask_vec()
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
@@ -1475,20 +1463,17 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             "finest_fused_pull": finest_fused_pull,
             "finest_fused_pull_no_254": finest_fused_pull_no_254,
             "finest_fused_pull_254": finest_fused_pull_254,
-            "reset_bc_mask_for_no_mr_no_bc_as_254":reset_bc_mask_for_no_mr_no_bc_as_254,
-            "collide_coarse_no_254":collide_coarse_no_254,
-            "collide_coarse_254":collide_coarse_254,
-            "stream_coarse_step_ABC_no_254":stream_coarse_step_ABC_no_254,
-            "stream_coarse_step_254":stream_coarse_step_254,
+            "reset_bc_mask_for_no_mr_no_bc_as_254": reset_bc_mask_for_no_mr_no_bc_as_254,
+            "collide_coarse_no_254": collide_coarse_no_254,
+            "collide_coarse_254": collide_coarse_254,
+            "stream_coarse_step_ABC_no_254": stream_coarse_step_ABC_no_254,
+            "stream_coarse_step_254": stream_coarse_step_254,
         }
 
     def launch_container(self, streamId, op_name, mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep):
         self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep).run(0)
 
-    def add_to_app(
-        self,
-            **kwargs
-    ):
+    def add_to_app(self, **kwargs):
         import inspect
 
         def validate_kwargs_forward(func, kwargs):
@@ -1504,23 +1489,18 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             errors = {}
 
             # --- 1. Positional-only required params (cannot be given via kwargs) ---
-            pos_only_required = [
-                name for name, p in params.items()
-                if p.kind == inspect.Parameter.POSITIONAL_ONLY
-                   and p.default is inspect._empty
-            ]
+            pos_only_required = [name for name, p in params.items() if p.kind == inspect.Parameter.POSITIONAL_ONLY and p.default is inspect._empty]
             if pos_only_required:
                 errors["positional_only_required"] = pos_only_required
 
             # --- 2. Unexpected kwargs (if no **kwargs in target) ---
-            has_var_kw = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD
-                for p in params.values()
-            )
+            has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
             if not has_var_kw:
                 allowed_kw = {
-                    name for name, p in params.items()
-                    if p.kind in (
+                    name
+                    for name, p in params.items()
+                    if p.kind
+                    in (
                         inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         inspect.Parameter.KEYWORD_ONLY,
                     )
@@ -1531,13 +1511,15 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             # --- 3. Missing required keyword-passable params ---
             missing_required = [
-                name for name, p in params.items()
-                if p.kind in (
+                name
+                for name, p in params.items()
+                if p.kind
+                in (
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.KEYWORD_ONLY,
                 )
-                   and p.default is inspect._empty  # no default
-                   and name not in kwargs  # not provided
+                and p.default is inspect._empty  # no default
+                and name not in kwargs  # not provided
             ]
             if missing_required:
                 errors["missing_required"] = missing_required

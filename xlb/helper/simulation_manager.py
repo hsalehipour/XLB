@@ -235,7 +235,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1_fd=self.f_1,
                     bc_mask_fd=self.bc_mask,
                     missing_mask_fd=self.missing_mask,
-                    omega=omega
+                    omega=omega,
                 )
                 self.add_to_app(
                     app=app,
@@ -329,7 +329,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     f_1_fd=self.f_1,
                     bc_mask_fd=self.bc_mask,
                     missing_mask_fd=self.missing_mask,
-                    omega=omega
+                    omega=omega,
                 )
                 self.add_to_app(
                     app=app,
@@ -425,7 +425,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             # wp.synchronize()
             # self.bc_mask.export_vti(f"mask_before.vti", "u")
 
-            self.neon_container['reset_bc_mask_for_no_mr_no_bc_as_254'](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
+            self.neon_container["reset_bc_mask_for_no_mr_no_bc_as_254"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
             # self.bc_mask.update_host(0)
             # wp.synchronize()
@@ -438,10 +438,9 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             # wp.synchronize()
             # self.bc_mask.export_vti(f"mask_before.vti", "u")
 
-            num_levels =  self.f_0.get_grid().num_levels
+            num_levels = self.f_0.get_grid().num_levels
             for l in range(num_levels):
-                self.neon_container['reset_bc_mask_for_no_mr_no_bc_as_254'](l, self.f_0, self.f_1, self.bc_mask,
-                                                                        self.bc_mask).run(0)
+                self.neon_container["reset_bc_mask_for_no_mr_no_bc_as_254"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             # wp.synchronize()
             # self.bc_mask.update_host(0)
             wp.synchronize()
