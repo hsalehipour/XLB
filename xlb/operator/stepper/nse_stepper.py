@@ -234,7 +234,7 @@ class IncompressibleNavierStokesStepper(Stepper):
         feq = self.equilibrium(rho, u)
 
         # Apply collision
-        f_post_collision = self.collision(f_post_stream, feq, rho, u, omega)
+        f_post_collision = self.collision(f_post_stream, feq, omega)
 
         # Apply collision type boundary conditions
         for bc in self.boundary_conditions:
@@ -271,7 +271,7 @@ class IncompressibleNavierStokesStepper(Stepper):
         feq = self.equilibrium(rho, u)
 
         # Apply collision
-        f_post_collision = self.collision(f_post_stream, feq, rho, u, omega)
+        f_post_collision = self.collision(f_post_stream, feq, omega)
 
         # Apply collision type boundary conditions
         for bc in self.boundary_conditions:
@@ -422,7 +422,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
             _rho, _u = self.macroscopic.warp_functional(_f_post_stream)
             _feq = self.equilibrium.warp_functional(_rho, _u)
-            _f_post_collision = self.collision.warp_functional(_f_post_stream, _feq, _rho, _u, omega)
+            _f_post_collision = self.collision.warp_functional(_f_post_stream, _feq, omega)
 
             # Apply post-collision boundary conditions
             _f_post_collision = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0, f_1, _f_post_stream, _f_post_collision, False)
@@ -578,7 +578,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
                     _rho, _u = self.macroscopic.neon_functional(_f_post_stream)
                     _feq = self.equilibrium.neon_functional(_rho, _u)
-                    _f_post_collision = self.collision.neon_functional(_f_post_stream, _feq, _rho, _u, omega)
+                    _f_post_collision = self.collision.neon_functional(_f_post_stream, _feq, omega)
 
                     # Apply post-collision boundary conditions
                     _f_post_collision = apply_bc(

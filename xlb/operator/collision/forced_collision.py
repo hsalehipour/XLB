@@ -33,9 +33,9 @@ class ForcedCollision(Collision):
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0,))
-    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, rho, u, omega):
-        fout = self.collision_operator(f, feq, rho, u, omega)
-        fout = self.forcing_operator(fout, feq, rho, u)
+    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
+        fout = self.collision_operator(f, feq, omega)
+        fout = self.forcing_operator(fout, feq)
         return fout
 
     def _construct_warp(self):
@@ -45,9 +45,9 @@ class ForcedCollision(Collision):
 
         # Construct the functional
         @wp.func
-        def functional(f: Any, feq: Any, rho: Any, u: Any, omega: Any):
-            fout = self.collision_operator.warp_functional(f, feq, rho, u, omega)
-            fout = self.forcing_operator.warp_functional(fout, feq, rho, u)
+        def functional(f: Any, feq: Any, omega: Any):
+            fout = self.collision_operator.warp_functional(f, feq, omega)
+            fout = self.forcing_operator.warp_functional(fout, feq)
             return fout
 
         # Construct the warp kernel
@@ -56,8 +56,6 @@ class ForcedCollision(Collision):
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             omega: Any,
         ):
             # Get the global index
@@ -71,13 +69,9 @@ class ForcedCollision(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -86,7 +80,7 @@ class ForcedCollision(Collision):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, fout, rho, u, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
@@ -94,8 +88,6 @@ class ForcedCollision(Collision):
                 f,
                 feq,
                 fout,
-                rho,
-                u,
                 omega,
             ],
             dim=f.shape[1:],

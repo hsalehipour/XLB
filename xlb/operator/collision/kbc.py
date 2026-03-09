@@ -43,8 +43,6 @@ class KBC(Collision):
         self,
         f: jnp.ndarray,
         feq: jnp.ndarray,
-        rho: jnp.ndarray,
-        u: jnp.ndarray,
         omega,
     ):
         """
@@ -56,10 +54,6 @@ class KBC(Collision):
             Distribution function.
         feq : jax.numpy.array
             Equilibrium distribution function.
-        rho : jax.numpy.array
-            Density.
-        u : jax.numpy.array
-            Velocity.
         """
         fneq = f - feq
         if isinstance(self.velocity_set, D2Q9):
@@ -269,8 +263,6 @@ class KBC(Collision):
         def functional(
             f: Any,
             feq: Any,
-            rho: Any,
-            u: Any,
             omega: Any,
         ):
             # Compute shear and delta_s
@@ -301,8 +293,6 @@ class KBC(Collision):
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             omega: Any,
         ):
             # Get the global index
@@ -316,13 +306,9 @@ class KBC(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -338,7 +324,7 @@ class KBC(Collision):
         return functional, None
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, fout, rho, u, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
@@ -346,8 +332,6 @@ class KBC(Collision):
                 f,
                 feq,
                 fout,
-                rho,
-                u,
                 omega,
             ],
             dim=f.shape[1:],
