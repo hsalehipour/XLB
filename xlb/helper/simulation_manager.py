@@ -217,7 +217,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_no_254",
+                    op_name="CFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_0,
                     f_1_fd=self.f_1,
@@ -229,7 +229,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_254",
+                    op_name="SFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_0,
                     f_1_fd=self.f_1,
@@ -239,7 +239,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_no_254",
+                    op_name="CFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_1,
                     f_1_fd=self.f_0,
@@ -251,7 +251,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_254",
+                    op_name="SFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_1,
                     f_1_fd=self.f_0,
@@ -311,7 +311,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_no_254",
+                    op_name="CFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_0,
                     f_1_fd=self.f_1,
@@ -323,7 +323,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_254",
+                    op_name="SFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_0,
                     f_1_fd=self.f_1,
@@ -333,7 +333,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_no_254",
+                    op_name="CFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_1,
                     f_1_fd=self.f_0,
@@ -345,7 +345,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 self.add_to_app(
                     app=app,
-                    op_name="finest_fused_pull_254",
+                    op_name="SFV_finest_fused_pull",
                     level=level,
                     f_0_fd=self.f_1,
                     f_1_fd=self.f_0,
@@ -360,7 +360,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
 
             self.add_to_app(
                 app=app,
-                op_name="collide_coarse_no_254",
+                op_name="CFV_collide_coarse",
                 level=level,
                 f_0_fd=self.f_0,
                 f_1_fd=self.f_1,
@@ -371,7 +371,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
             self.add_to_app(
                 app=app,
-                op_name="collide_coarse_254",
+                op_name="SFV_collide_coarse",
                 level=level,
                 f_0_fd=self.f_0,
                 f_1_fd=self.f_1,
@@ -394,7 +394,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             print(f"RECURSION Level {level}, stream_coarse_step_ABC")
             self.add_to_app(
                 app=app,
-                op_name="stream_coarse_step_ABC_no_254",
+                op_name="SFV_stream_coarse_step_ABC",
                 level=level,
                 f_0_fd=self.f_1,
                 f_1_fd=self.f_0,
@@ -405,7 +405,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
             self.add_to_app(
                 app=app,
-                op_name="stream_coarse_step_254",
+                op_name="SFV_stream_coarse_step",
                 level=level,
                 f_0_fd=self.f_1,
                 f_1_fd=self.f_0,
@@ -425,7 +425,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             # wp.synchronize()
             # self.bc_mask.export_vti(f"mask_before.vti", "u")
 
-            self.neon_container["reset_bc_mask_for_no_mr_no_bc_as_254"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
+            self.neon_container["SFV_reset_bc_mask"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
             # self.bc_mask.update_host(0)
             # wp.synchronize()
@@ -440,7 +440,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
 
             num_levels = self.f_0.get_grid().num_levels
             for l in range(num_levels):
-                self.neon_container["reset_bc_mask_for_no_mr_no_bc_as_254"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
+                self.neon_container["SFV_reset_bc_mask"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             # wp.synchronize()
             # self.bc_mask.update_host(0)
             wp.synchronize()

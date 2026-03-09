@@ -26,7 +26,10 @@ from xlb.operator.boundary_masker import (
 )
 from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeAuxiliaryData
 
-
+"""
+SFV = Simple Fluid Voxel: a fluid voxel that is not a BC nor is involved in explosion or coalescence
+CFV = Complex Fluid Voxel: a fluid voxel that is not a SFV
+"""
 class MultiresIncompressibleNavierStokesStepper(Stepper):
     def __init__(
         self,
@@ -147,15 +150,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                 @wp.func
                 def compute(index: Any):
-                    # _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    # if _boundary_id == wp.uint8(255):
-                    #     return
-                    # for l in range(self.velocity_set.q):
-                    #     val = wp.neon_read(coalescence_factor_pn, index, l)
-                    #     if val > 0:
-                    #         val = self.compute_dtype(1) / val
-                    #     wp.neon_write(coalescence_factor_pn, index, l, val)
-                    #####
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
                     if _boundary_id == wp.uint8(255):
                         return
@@ -184,13 +178,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # HERE -> I have a finer ngh. in direction pull (opposite l)
                             # Then I have to read from the halo on top of my finer ngh.
                             if has_ngh_at_same_level:
-                                # if l == 10:
-                                #     wp.print(accumulated)
-                                #     glob = wp.neon_global_idx(f_1_pn, index)
-                                #     wp.neon_cuda_info()
-                                #     wp.neon_print(glob)
-                                #     wp.neon_level(f_1_pn)
-                                # accumulated = _w[l]
                                 # Full State
                                 # YES finer ngh. in the pull direction (opposite of l)
                                 # YES ngh. at the same level
@@ -198,9 +185,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 if coalescence_factor > self.compute_dtype(0):
                                     coalescence_factor = self.compute_dtype(1) / (self.compute_dtype(2) * coalescence_factor)
                                     wp.neon_write(coalescence_factor_pn, index, l, coalescence_factor)
-                            #
-                            # else:
-                            #     wp.print("ERRRRRRORRRRRRRRRRRRRR")
 
                 loader.declare_kernel(compute)
 
@@ -450,8 +434,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return ll_collide_coarse
 
-        @neon.Container.factory(name="collide_coarse_254")
-        def collide_coarse_254(
+        @neon.Container.factory(name="SFV_collide_coarse")
+        def SFV_collide_coarse(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
@@ -460,15 +444,14 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            num_levels = f_0_fd.get_grid().num_levels
-
+            """
+            This container will execute the collision operator only on the SFV at the coarsest level.
+            """
             def ll_collide_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
                 f_0_pn = loader.get_mres_read_handle(f_0_fd)
                 f_1_pn = loader.get_mres_write_handle(f_1_fd)
-
-                # fake loading to enforce sequential step
 
                 bc_mask_pn = loader.get_mres_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_mres_read_handle(missing_mask_fd)
@@ -479,11 +462,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def device(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    """
-                    The c++ version starts with the following, which I am not sure is right:
-                        if (type(cell, 0) == CellType::bulk ) {
-                    BC type cells should do collide too
-                    """
                     if _boundary_id != wp.uint8(254):
                         return
 
@@ -502,8 +480,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return ll_collide_coarse
 
-        @neon.Container.factory(name="no_254_collide_coarse")
-        def collide_coarse_no_254(
+        @neon.Container.factory(name="CFV_collide_coarse")
+        def CFV_collide_coarse(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
@@ -695,8 +673,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return ll_stream_coarse
 
-        @neon.Container.factory(name="no_254_stream_coarse_step_ABC")
-        def stream_coarse_step_ABC_no_254(
+        @neon.Container.factory(name="SFV_stream_coarse_step_ABC")
+        def SFV_stream_coarse_step_ABC(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
@@ -705,15 +683,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            num_levels = f_0_fd.get_grid().num_levels
-
-            # if level != 0:
-            #     # throw an exception
-            #     raise Exception("Only the finest level is supported for now")
-
-            # module op to define odd of even iteration
-            # od_or_even = wp.module("odd_or_even", "even")
-
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
@@ -814,28 +783,21 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return ll_stream_coarse
 
-        @neon.Container.factory(name="reset_bc_mask_for_no_mr_no_bc_as_254")
-        def reset_bc_mask_for_no_mr_no_bc_as_254(
+        @neon.Container.factory(name="SFV_reset_bc_mask")
+        def SFV_reset_bc_mask(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
             bc_mask_fd: Any,
             missing_mask_fd: Any,
         ):
-            num_levels = f_0_fd.get_grid().num_levels
-
-            # if level != 0:
-            #     # throw an exception
-            #     raise Exception("Only the finest level is supported for now")
-
-            # module op to define odd of even iteration
-            # od_or_even = wp.module("odd_or_even", "even")
-
+            """
+            Setting the BC type to 254 for SFVs
+            """
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
                 f_0_pn = loader.get_mres_read_handle(f_0_fd)
-                f_1_pn = loader.get_mres_write_handle(f_1_fd)
 
                 bc_mask_pn = loader.get_mres_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_mres_read_handle(missing_mask_fd)
@@ -869,7 +831,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                         has_ngh_at_same_level = wp.bool(False)
-                        accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
+                        wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
 
                         # if (!pin.hasChildren(cell, dir)) {
                         if not wp.neon_has_finer_ngh(f_0_pn, index, pull_direction):
@@ -880,7 +842,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
-                                    exploded_pop = wp.neon_lbm_read_coarser_ngh(
+                                    wp.neon_lbm_read_coarser_ngh(
                                         f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
                                     )
                                     if has_a_coarser_ngh:
@@ -890,33 +852,22 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # YES ghost cell on top of us
                                         # YES courser ngh.
                                         # -> **Explosion**
-                                        # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                         return
                         else:
                             # HERE -> I have a finer ngh. in direction pull (opposite l)
                             # Then I have to read from the halo on top of my finer ngh.
                             if has_ngh_at_same_level:
-                                # if l == 10:
-                                #     wp.print(accumulated)
-                                #     glob = wp.neon_global_idx(f_1_pn, index)
-                                #     wp.neon_cuda_info()
-                                #     wp.neon_print(glob)
-                                #     wp.neon_level(f_1_pn)
-                                # accumulated = _w[l]
                                 # Full State
                                 # YES finer ngh. in the pull direction (opposite of l)
                                 # YES ngh. at the same level
                                 # -> **Coalescence**
                                 return
-                            else:
-                                wp.print("ERRRRRRORRRRRRRRRRRRRR")
 
                     # Only fluid voxels with the following properties can reach this line:
                     # They are not BC voxels
                     # They are not on a resolution jump -> they do not do coalescence or explosion
                     # They are not mr halo cells
                     wp.neon_write(bc_mask_pn, index, 0, wp.uint8(254))
-
                 loader.declare_kernel(cl_stream_coarse)
 
             return ll_stream_coarse
@@ -931,11 +882,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            num_levels = f_0_fd.get_grid().get_num_levels()
-
-            # if level != 0:
-            #     # throw an exception
-            #     raise Exception("Only the finest level is supported for now")
 
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
@@ -973,8 +919,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return ll_stream_coarse
 
-        @neon.Container.factory(name="stream_coarse_step_254")
-        def stream_coarse_step_254(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any):
+        @neon.Container.factory(name="SFV_stream_coarse_step")
+        def SFV_stream_coarse_step(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any):
 
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
@@ -992,13 +938,11 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
                     if _boundary_id != wp.uint8(254):
                         return
+                    # 254 voxel type:
+                    # They are not BC voxels
+                    # They are not on a resolution jump -> they do not do coalescence or explosion
+                    # They are not mr halo cells
 
-                    are_we_a_halo_cell = wp.neon_has_child(f_0_pn, index)
-                    if are_we_a_halo_cell:
-                        # HERE: we are a halo cell so we just exit
-                        return
-
-                    # do stream normally
                     _missing_mask = _missing_mask_vec()
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_collision = _f0_thread
@@ -1006,7 +950,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                     for l in range(self.velocity_set.q):
                         wp.neon_write(f_1_pn, index, l, _f_post_stream[l])
-                    # wp.print("stream_coarse")
 
                 loader.declare_kernel(cl_stream_coarse)
 
@@ -1079,13 +1022,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # HERE -> I have a finer ngh. in direction pull (opposite l)
                             # Then I have to read from the halo on top of my finer ngh.
                             if has_ngh_at_same_level:
-                                # if l == 10:
-                                #     wp.print(accumulated)
-                                #     glob = wp.neon_global_idx(f_1_pn, index)
-                                #     wp.neon_cuda_info()
-                                #     wp.neon_print(glob)
-                                #     wp.neon_level(f_1_pn)
-                                # accumulated = _w[l]
                                 # Full State
                                 # YES finer ngh. in the pull direction (opposite of l)
                                 # YES ngh. at the same level
@@ -1093,9 +1029,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 coalescence_factor = wp.neon_read(coalescence_factor_pn, index, l)
                                 accumulated = accumulated * coalescence_factor
                                 wp.neon_write(f_1_pn, index, l, accumulated)
-                            #
-                            # else:
-                            #     wp.print("ERRRRRRORRRRRRRRRRRRRR")
 
                 loader.declare_kernel(cl_stream_coarse)
 
@@ -1117,13 +1050,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 raise Exception("Only the finest level is supported for now")
             grid = f_0_fd.get_grid()
             num_levels = grid.num_levels
-
-            # if level != 0:
-            #     # throw an exception
-            #     raise Exception("Only the finest level is supported for now")
-
-            # module op to define odd of even iteration
-            # od_or_even = wp.module("odd_or_even", "even")
 
             def finest_fused_pull_launcher(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
@@ -1224,8 +1150,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
             return finest_fused_pull_launcher
 
-        @neon.Container.factory(name="finest_fused_pull_no_254")
-        def finest_fused_pull_no_254(
+        @neon.Container.factory(name="CFV_finest_fused_pull")
+        def CFV_finest_fused_pull(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
@@ -1240,13 +1166,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 raise Exception("Only the finest level is supported for now")
             grid = f_0_fd.get_grid()
             num_levels = grid.num_levels
-
-            # if level != 0:
-            #     # throw an exception
-            #     raise Exception("Only the finest level is supported for now")
-
-            # module op to define odd of even iteration
-            # od_or_even = wp.module("odd_or_even", "even")
 
             def finest_fused_pull_launcher(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
@@ -1315,7 +1234,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                     # YES ghost cell on top of us
                                     # YES courser ngh.
                                     # -> **Explosion**
-                                    # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                     _f_post_stream[l] = exploded_pop
 
                     # do non mres post-streaming corrections
@@ -1350,7 +1268,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             return finest_fused_pull_launcher
 
         @neon.Container.factory(name="254_finest_fused_pull")
-        def finest_fused_pull_254(
+        def SFV_finest_fused_pull(
             level: int,
             f_0_fd: Any,
             f_1_fd: Any,
@@ -1358,12 +1276,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             missing_mask_fd: Any,
             omega: Any,
         ):
-            if level != 0:
-                # throw an exception
-                raise Exception("Only the finest level is supported for now")
-            grid = f_0_fd.get_grid()
-            num_levels = grid.num_levels
-
             if level != 0:
                 # throw an exception
                 raise Exception("Only the finest level is supported for now")
@@ -1461,13 +1373,13 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             "stream_coarse_step_B": stream_coarse_step_B,
             "stream_coarse_step_C": stream_coarse_step_C,
             "finest_fused_pull": finest_fused_pull,
-            "finest_fused_pull_no_254": finest_fused_pull_no_254,
-            "finest_fused_pull_254": finest_fused_pull_254,
-            "reset_bc_mask_for_no_mr_no_bc_as_254": reset_bc_mask_for_no_mr_no_bc_as_254,
-            "collide_coarse_no_254": collide_coarse_no_254,
-            "collide_coarse_254": collide_coarse_254,
-            "stream_coarse_step_ABC_no_254": stream_coarse_step_ABC_no_254,
-            "stream_coarse_step_254": stream_coarse_step_254,
+            "CFV_finest_fused_pull": CFV_finest_fused_pull,
+            "SFV_finest_fused_pull": SFV_finest_fused_pull,
+            "SFV_reset_bc_mask": SFV_reset_bc_mask,
+            "CFV_collide_coarse": CFV_collide_coarse,
+            "SFV_collide_coarse": SFV_collide_coarse,
+            "SFV_stream_coarse_step_ABC": SFV_stream_coarse_step_ABC,
+            "SFV_stream_coarse_step": SFV_stream_coarse_step,
         }
 
     def launch_container(self, streamId, op_name, mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep):
