@@ -8,5 +8,10 @@ from .utils import (
     axangle2mat,
     ToJAX,
     UnitConvertor,
+    save_usd_vorticity,
+    save_usd_q_criterion,
+    update_usd_lagrangian_parts,
+    plot_object_placement,
+    colorize_scalars,
 )
 from .mesher import make_cuboid_mesh, MultiresIO
