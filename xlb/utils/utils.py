@@ -83,7 +83,7 @@ def save_image(fld, timestep=None, prefix=None, **kwargs):
     if len(fld.shape) > 3:
         raise ValueError("The input field should be 2D!")
     if len(fld.shape) == 3:
-        fld = np.sqrt(fld[0, ...] ** 2 + fld[0, ...] ** 2)
+        fld = np.sqrt(fld[0, ...] ** 2 + fld[1, ...] ** 2 + fld[2, ...] ** 2)
 
     plt.clf()
     kwargs.pop("cmap", None)

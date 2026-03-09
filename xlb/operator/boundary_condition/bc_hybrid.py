@@ -65,7 +65,7 @@ class HybridBC(BoundaryCondition):
             raise NotImplementedError("This BC is not implemented in 2D!")
 
         # Check if the compute backend is Warp
-        assert self.compute_backend == ComputeBackend.WARP or ComputeBackend.NEON, "This BC is currently not supported by JAX backend!"
+        assert self.compute_backend in (ComputeBackend.WARP, ComputeBackend.NEON), "This BC is currently not supported by JAX backend!"
 
         # Instantiate the operator for computing macroscopic values
         # Explicitly using the WARP backend for these operators as they may also be called by the Neon backend.

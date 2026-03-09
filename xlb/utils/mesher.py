@@ -63,7 +63,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
     """
     # Load the mesh and get its bounding box
     mesh = trimesh.load_mesh(stl_filename, process=False)
-    assert not mesh.is_empty, ValueError("Loaded mesh is empty or invalid.")
+    assert not mesh.is_empty, "Loaded mesh is empty or invalid."
 
     mesh_vertices = mesh.vertices
     min_bound = mesh_vertices.min(axis=0)
@@ -481,7 +481,7 @@ class MultiresIO(object):
 
         # Ensure that this operator is called on multires grids
         grid_mres = next(iter(field_neon_dict.values())).get_grid()
-        assert grid_mres.name == "mGrid", f"Operation {self.__class__.__name} is only applicable to multi-resolution cases!"
+        assert grid_mres.name == "mGrid", f"Operation {self.__class__.__name__} is only applicable to multi-resolution cases!"
 
         for field_name in field_neon_dict.keys():
             assert field_name in self.field_name_cardinality_dict.keys(), (
