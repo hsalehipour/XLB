@@ -86,5 +86,5 @@ class FirstMoment(Operator):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f, rho):
-        # rise exception as this feature is not implemented yet
+        # raise exception as this feature is not implemented yet
         raise NotImplementedError("This feature is not implemented in XLB with the NEON backend yet.")

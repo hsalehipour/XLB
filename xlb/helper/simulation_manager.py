@@ -183,7 +183,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
             # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
             # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
+            # 2. Explosion data is the output from the corser collide, which is f_1=self.f_1.
             # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
@@ -277,7 +277,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
             # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
             # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
+            # 2. Explosion data is the output from the corser collide, which is f_1=self.f_1.
             # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
@@ -382,7 +382,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
             # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
             # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
+            # 2. Explosion data is the output from the corser collide, which is f_1=self.f_1.
             # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:

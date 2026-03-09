@@ -476,7 +476,7 @@ class EncodeAuxiliaryData(Operator):
 
     def _construct_neon(self):
         """
-        Constructs the Neon container for encoding auxilary data recovery.
+        Constructs the Neon container for encoding auxiliary data recovery.
         """
         # Use the warp functional for the Neon backend
         functional_dict, _ = self._construct_warp()
@@ -561,7 +561,7 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
 
     def _construct_neon(self):
         """
-        Constructs the Neon container for encoding auxilary data recovery.
+        Constructs the Neon container for encoding auxiliary data recovery.
         """
 
         # Borrow the functional from the warp implementation

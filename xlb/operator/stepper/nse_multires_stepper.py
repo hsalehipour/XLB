@@ -625,7 +625,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # NO finer ngh. in the pull direction (opposite of l)
                             if not has_ngh_at_same_level:
                                 # NO ngh. at the same level
-                                # COULD we have a ngh. at the courser level?
+                                # COULD we have a ngh. at the coarser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
@@ -637,7 +637,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
                                         # YES ghost cell on top of us
-                                        # YES courser ngh.
+                                        # YES coarser ngh.
                                         # -> **Explosion**
                                         # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                         _f_post_stream[l] = exploded_pop
@@ -735,7 +735,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # NO finer ngh. in the pull direction (opposite of l)
                             if not has_ngh_at_same_level:
                                 # NO ngh. at the same level
-                                # COULD we have a ngh. at the courser level?
+                                # COULD we have a ngh. at the coarser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
@@ -747,7 +747,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
                                         # YES ghost cell on top of us
-                                        # YES courser ngh.
+                                        # YES coarser ngh.
                                         # -> **Explosion**
                                         # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                         _f_post_stream[l] = exploded_pop
@@ -842,7 +842,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # NO finer ngh. in the pull direction (opposite of l)
                             if not has_ngh_at_same_level:
                                 # NO ngh. at the same level
-                                # COULD we have a ngh. at the courser level?
+                                # COULD we have a ngh. at the coarser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
@@ -852,7 +852,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
                                         # YES ghost cell on top of us
-                                        # YES courser ngh.
+                                        # YES coarser ngh.
                                         # -> **Explosion**
                                         return
                         else:
@@ -1004,7 +1004,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                             # NO finer ngh. in the pull direction (opposite of l)
                             if not has_ngh_at_same_level:
                                 # NO ngh. at the same level
-                                # COULD we have a ngh. at the courser level?
+                                # COULD we have a ngh. at the coarser level?
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
@@ -1016,7 +1016,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                         # NO finer ngh. in the pull direction (opposite of l)
                                         # NO ngh. at the same level
                                         # YES ghost cell on top of us
-                                        # YES courser ngh.
+                                        # YES coarser ngh.
                                         # -> **Explosion**
                                         wp.neon_write(f_1_pn, index, l, exploded_pop)
                         else:
@@ -1098,7 +1098,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         # NO finer ngh. in the pull direction (opposite of l)
                         if not has_ngh_at_same_level:
                             # NO ngh. at the same level
-                            # COULD we have a ngh. at the courser level?
+                            # COULD we have a ngh. at the coarser level?
                             if wp.neon_has_parent(f_0_pn, index):
                                 # YES halo cell on top of us
                                 has_a_coarser_ngh = wp.bool(False)
@@ -1115,7 +1115,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                     # NO finer ngh. in the pull direction (opposite of l)
                                     # NO ngh. at the same level
                                     # YES ghost cell on top of us
-                                    # YES courser ngh.
+                                    # YES coarser ngh.
                                     # -> **Explosion**
                                     # wp.neon_write(f_1_pn, index, l, exploded_pop)
                                     _f_post_stream[l] = exploded_pop
@@ -1216,7 +1216,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         # NO finer ngh. in the pull direction (opposite of l)
                         if not has_ngh_at_same_level:
                             # NO ngh. at the same level
-                            # COULD we have a ngh. at the courser level?
+                            # COULD we have a ngh. at the coarser level?
                             if wp.neon_has_parent(f_0_pn, index):
                                 # YES halo cell on top of us
                                 has_a_coarser_ngh = wp.bool(False)
@@ -1233,7 +1233,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                     # NO finer ngh. in the pull direction (opposite of l)
                                     # NO ngh. at the same level
                                     # YES ghost cell on top of us
-                                    # YES courser ngh.
+                                    # YES coarser ngh.
                                     # -> **Explosion**
                                     _f_post_stream[l] = exploded_pop
 
