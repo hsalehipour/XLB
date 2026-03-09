@@ -284,7 +284,7 @@ class IndicesBoundaryMasker(Operator):
         }
         return functional_dict, kernel_dict
 
-    def _prepare_kernel_inputs(self, bclist, grid_shape):
+    def _prepare_kernel_inputs(self, bclist, grid_shape, start_index=None):
         """
         Prepare the inputs for the warp kernel by pre-allocating arrays and filling them with boundary condition information.
         """
@@ -371,7 +371,7 @@ class IndicesBoundaryMasker(Operator):
         bc_interior = self._find_bclist_interior(bclist, grid_shape)
 
         # Prepare the first kernel inputs for all items in boundary condition list
-        wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist, grid_shape)
+        wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist, grid_shape, start_index)
 
         # Launch the warp kernel
         wp.launch(
@@ -523,7 +523,7 @@ class IndicesBoundaryMasker(Operator):
         bc_interior = self._find_bclist_interior(bclist, grid_shape)
 
         # Prepare the first kernel inputs for all items in boundary condition list
-        wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist, grid_shape)
+        wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist, grid_shape, start_index)
 
         # Launch the first container
         container_domain_bounds = self.neon_container["container_domain_bounds"](
