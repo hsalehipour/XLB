@@ -64,10 +64,10 @@ class KBC(Collision):
         fneq = f - feq
         if isinstance(self.velocity_set, D2Q9):
             shear = self.decompose_shear_d2q9_jax(fneq)
-            delta_s = shear * rho / 4.0
+            delta_s = shear / 4.0
         elif isinstance(self.velocity_set, D3Q27):
             shear = self.decompose_shear_d3q27_jax(fneq)
-            delta_s = shear * rho
+            delta_s = shear
         else:
             raise NotImplementedError("Velocity set not supported: {}".format(type(self.velocity_set)))
 
@@ -277,10 +277,10 @@ class KBC(Collision):
             fneq = f - feq
             if wp.static(self.velocity_set.d == 3):
                 shear = decompose_shear_d3q27(fneq)
-                delta_s = shear * rho
+                delta_s = shear
             else:
                 shear = decompose_shear_d2q9(fneq)
-                delta_s = shear * rho / self.compute_dtype(4.0)
+                delta_s = shear / self.compute_dtype(4.0)
 
             # Compute required constants based on the input omega (omega is the inverse relaxation time)
             _beta = self.compute_dtype(0.5) * self.compute_dtype(omega)
