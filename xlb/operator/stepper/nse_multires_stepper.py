@@ -30,6 +30,8 @@ from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeAu
 SFV = Simple Fluid Voxel: a fluid voxel that is not a BC nor is involved in explosion or coalescence
 CFV = Complex Fluid Voxel: a fluid voxel that is not a SFV
 """
+
+
 class MultiresIncompressibleNavierStokesStepper(Stepper):
     def __init__(
         self,
@@ -447,6 +449,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             """
             This container will execute the collision operator only on the SFV at the coarsest level.
             """
+
             def ll_collide_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
@@ -794,6 +797,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             """
             Setting the BC type to 254 for SFVs
             """
+
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
@@ -842,9 +846,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 if wp.neon_has_parent(f_0_pn, index):
                                     # YES halo cell on top of us
                                     has_a_coarser_ngh = wp.bool(False)
-                                    wp.neon_lbm_read_coarser_ngh(
-                                        f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
-                                    )
+                                    wp.neon_lbm_read_coarser_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh)
                                     if has_a_coarser_ngh:
                                         # Full state:
                                         # NO finer ngh. in the pull direction (opposite of l)
@@ -868,6 +870,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     # They are not on a resolution jump -> they do not do coalescence or explosion
                     # They are not mr halo cells
                     wp.neon_write(bc_mask_pn, index, 0, wp.uint8(254))
+
                 loader.declare_kernel(cl_stream_coarse)
 
             return ll_stream_coarse
@@ -882,7 +885,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 
@@ -921,7 +923,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
         @neon.Container.factory(name="SFV_stream_coarse_step")
         def SFV_stream_coarse_step(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any):
-
             def ll_stream_coarse(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
 

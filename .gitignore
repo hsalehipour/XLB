@@ -163,3 +163,11 @@ build/
 
 # Ignore CSV files
 *.csv
+
+# USD files
+*.usd
+*.usda
+*.usdc
+*.usd.gz
+*.usd.zip
+*.usd.bz2
