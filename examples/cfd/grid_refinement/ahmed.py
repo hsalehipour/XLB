@@ -56,7 +56,7 @@ def generate_cuboid_mesh(stl_filename, voxel_size):
     """
     # Domain multipliers for each refinement level
     domain_multiplier = [
-        [3.0, 4.0, 2.5, 2.5, 0.0, 4.0],     # -x, x, -y, y, -z, z
+        [3.0, 4.0, 2.5, 2.5, 0.0, 4.0],  # -x, x, -y, y, -z, z
         [1.2, 1.25, 1.75, 1.75, 0.0, 1.5],
         [0.8, 1.0, 1.25, 1.25, 0.0, 1.2],
         [0.5, 0.65, 0.6, 0.60, 0.0, 0.6],

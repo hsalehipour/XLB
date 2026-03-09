@@ -16,31 +16,59 @@ from xlb.operator.macroscopic import Macroscopic
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="MLUPS for 3D Lattice Boltzmann Method Simulation (BGK)")
-    parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid")
-    parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation")
-    parser.add_argument("compute_backend", type=str, help="Backend for the simulation (jax, warp or neon)")
-    parser.add_argument("precision", type=str, help="Precision for the simulation (e.g., fp32/fp32)")
+    # Define valid options for consistency
+    COMPUTE_BACKENDS = ["neon", "warp", "jax"]
+    PRECISION_OPTIONS = ["fp32/fp32", "fp64/fp64", "fp64/fp32", "fp32/fp16"]
+    VELOCITY_SETS = ["D3Q19", "D3Q27"]
+    COLLISION_MODELS = ["BGK", "KBC"]
+    OCC_OPTIONS = ["standard", "none"]
+
+    parser = argparse.ArgumentParser(
+        description="MLUPS Benchmark for 3D Lattice Boltzmann Method Simulation",
+        epilog=f"""
+Examples:
+  %(prog)s 100 1000 neon fp32/fp32
+  %(prog)s 200 500 neon fp64/fp64 --collision_model KBC --velocity_set D3Q27
+  %(prog)s 150 2000 neon fp32/fp32 --gpu_devices=[0,1,2] --measure_scalability --report
+  %(prog)s 100 1000 neon fp32/fp32 --repetitions 5 --export_final_velocity
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Positional arguments
+    parser.add_argument("cube_edge", type=int, help="Length of the edge of the cubic grid (e.g., 100)")
+    parser.add_argument("num_steps", type=int, help="Number of timesteps for the simulation (e.g., 1000)")
+    parser.add_argument("compute_backend", type=str, choices=COMPUTE_BACKENDS, help=f"Backend for the simulation ({', '.join(COMPUTE_BACKENDS)})")
+    parser.add_argument("precision", type=str, choices=PRECISION_OPTIONS, help=f"Precision for the simulation ({', '.join(PRECISION_OPTIONS)})")
+
+    # Optional arguments
+    parser.add_argument("--gpu_devices", type=str, default=None, help="CUDA devices to use for Neon backend (e.g., [0,1,2] or [0])")
     parser.add_argument(
-        "--gpu_devices",
+        "--velocity_set",
         type=str,
-        default=None,
-        help="List of the CUDA devices to use (e.g., --gpu_devices=[0,1,2]). This is only used for Neon backend.",
+        default="D3Q19",
+        choices=VELOCITY_SETS,
+        help=f"Lattice velocity set (default: D3Q19, choices: {', '.join(VELOCITY_SETS)})",
     )
-    # add a flat to choose between 19 or 27 velocity set
-    parser.add_argument("--velocity_set", type=str, default="D3Q19", help="Lattice type: D3Q19 or D3Q27 (default: D3Q19)")
-    # add a flat to choose between multi-gpu occ options based on the neon occ:
     parser.add_argument(
-        "--occ", type=str, default="standard", help="Overlapping Communication and Computation option (standard, none) (default: standard)"
+        "--collision_model",
+        type=str,
+        default="BGK",
+        choices=COLLISION_MODELS,
+        help=f"Collision model (default: BGK, choices: {', '.join(COLLISION_MODELS)}, KBC requires D3Q27)",
     )
-    parser.add_argument("--report", action="store_true", help="Generate a neon report file (default: disabled)")
-    parser.add_argument("--export_final_velocity", action="store_true", help="Export the final velocity field to a vti file (default: disabled)")
-    parser.add_argument("--measure_scalability", action="store_true", help="Measure scalability of the simulation (default: disabled)")
     parser.add_argument(
-        "--repetitions",
-        type=int,
-        default=1,
-        help="Number of repetitions for the simulation (default: 1) to get the average MLUPs and standard deviation",
+        "--occ",
+        type=str,
+        default="standard",
+        choices=OCC_OPTIONS,
+        help=f"Overlapping Communication and Computation strategy (default: standard, choices: {', '.join(OCC_OPTIONS)})",
+    )
+    parser.add_argument("--report", action="store_true", help="Generate Neon performance report")
+    parser.add_argument("--export_final_velocity", action="store_true", help="Export final velocity field to VTI file")
+    parser.add_argument("--measure_scalability", action="store_true", help="Measure performance across different GPU counts")
+    parser.add_argument(
+        "--repetitions", type=int, default=1, metavar="N", help="Number of simulation repetitions for statistical analysis (default: 1)"
     )
 
     args = parser.parse_args()
@@ -56,29 +84,32 @@ def parse_arguments():
         except (ValueError, SyntaxError):
             raise ValueError("Invalid gpu_devices format. Use format like [0,1,2] or [0]")
 
-    # Checking the compute backend and covert it to the right type
-    compute_backend = None
-    if args.compute_backend == "jax":
-        compute_backend = ComputeBackend.JAX
-    elif args.compute_backend == "warp":
-        compute_backend = ComputeBackend.WARP
-    elif args.compute_backend == "neon":
-        compute_backend = ComputeBackend.NEON
-    else:
-        raise ValueError("Invalid compute backend specified. Use 'jax', 'warp', or 'neon'.")
+    # Validate and convert compute backend
+    compute_backend_map = {
+        "jax": ComputeBackend.JAX,
+        "warp": ComputeBackend.WARP,
+        "neon": ComputeBackend.NEON,
+    }
+    compute_backend = compute_backend_map.get(args.compute_backend)
+    if compute_backend is None:
+        raise ValueError(f"Invalid compute backend '{args.compute_backend}'. Use: {', '.join(COMPUTE_BACKENDS)}")
     args.compute_backend = compute_backend
 
-    # Checking OCC
-    if args.occ not in ["standard", "none"]:
-        raise ValueError("Invalid occupancy option. Use 'standard', or 'none'.")
-    if args.gpu_devices is None and args.compute_backend == ComputeBackend.NEON:
-        print("[Warning] No GPU devices specified. Using default device 0.")
-        args.gpu_devices = [0]
+    # Handle GPU devices for Neon backend
     if args.compute_backend == ComputeBackend.NEON:
+        if args.gpu_devices is None:
+            print("[INFO] No GPU devices specified. Using default device 0.")
+            args.gpu_devices = [0]
+
         import neon
 
-        occ = neon.SkeletonConfig.OCC.from_string(args.occ)
-        args.occ = occ
+        occ_enum = neon.SkeletonConfig.OCC.from_string(args.occ)
+        args.occ_enum = occ_enum  # Store the enum for Neon
+        args.occ_display = args.occ  # Store the original string for display
+    else:
+        if args.gpu_devices is not None:
+            raise ValueError(f"--gpu_devices can only be used with Neon backend, not {args.compute_backend.name}")
+        args.gpu_devices = [0]  # Default for non-Neon backends
 
     # Checking precision policy
     precision_policy_map = {
@@ -89,12 +120,12 @@ def parse_arguments():
     }
     precision_policy = precision_policy_map.get(args.precision)
     if precision_policy is None:
-        raise ValueError("Invalid precision specified.")
+        raise ValueError(f"Invalid precision '{args.precision}'. Use: {', '.join(PRECISION_OPTIONS)}")
     args.precision_policy = precision_policy
 
-    # Checking velocity set
-    if args.velocity_set not in ["D3Q19", "D3Q27"]:
-        raise ValueError("Invalid velocity set. Use 'D3Q19' or 'D3Q27'.")
+    # Validate collision model and velocity set compatibility
+    if args.collision_model == "KBC" and args.velocity_set != "D3Q27":
+        raise ValueError("KBC collision model requires D3Q27 velocity set. Use --velocity_set D3Q27")
 
     if args.velocity_set == "D3Q19":
         velocity_set = xlb.velocity_set.D3Q19(precision_policy=args.precision_policy, compute_backend=compute_backend)
@@ -102,42 +133,45 @@ def parse_arguments():
         velocity_set = xlb.velocity_set.D3Q27(precision_policy=args.precision_policy, compute_backend=compute_backend)
     args.velocity_set = velocity_set
 
-    if args.gpu_devices is not None and args.compute_backend != ComputeBackend.NEON:
-        raise ValueError("--gpu_devices can be used only with the Neon backend.")
-
-    if args.gpu_devices is None:
-        args.gpu_devices = [0]
-
     print_args(args)
 
     return args
 
 
 def print_args(args):
-    # Print simulation configuration
-    print("=" * 60)
-    print("           3D LATTICE BOLTZMANN SIMULATION CONFIG")
-    print("=" * 60)
-    print(f"Grid Size:            {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
-    print(f"Total Lattice Points: {args.cube_edge**3:,}")
-    print(f"Time Steps:           {args.num_steps:,}")
-    print(f"Compute Backend:      {args.compute_backend.name}")
-    print(f"Precision Policy:     {args.precision}")
-    print(f"Velocity Set:         {args.velocity_set.__class__.__name__}")
-    print(f"Generate Report:      {'Yes' if args.report else 'No'}")
-    print(f"Measure Scalability:  {'Yes' if args.measure_scalability else 'No'}")
-    print(f"Export Velocity:      {'Yes' if args.export_final_velocity else 'No'}")
-    print(f"Repetitions:          {args.repetitions}")
+    """Print simulation configuration in a clean, organized format"""
+    print("\n" + "=" * 70)
+    print("                    SIMULATION CONFIGURATION")
+    print("=" * 70)
 
+    # Grid and simulation parameters
+    print("GRID & SIMULATION:")
+    print(f"  Grid Size:              {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
+    print(f"  Total Lattice Points:   {args.cube_edge**3:,}")
+    print(f"  Time Steps:             {args.num_steps:,}")
+    print(f"  Repetitions:            {args.repetitions}")
+
+    # Computational settings
+    print("\nCOMPUTATIONAL SETTINGS:")
+    print(f"  Compute Backend:        {args.compute_backend.name}")
+    print(f"  Precision Policy:       {args.precision}")
+    print(f"  Velocity Set:           {args.velocity_set.__class__.__name__}")
+    print(f"  Collision Model:        {args.collision_model}")
+
+    # Backend-specific settings
     if args.compute_backend.name == "NEON":
-        print(f"GPU Devices:          {args.gpu_devices}")
-        # Convert the neon OCC enum back to string for display
-        occ_display = args.occ.to_string() if hasattr(args.occ, "__class__") else args.occ
-        print(f"OCC Strategy:         {occ_display}")
+        print("\nNEON BACKEND SETTINGS:")
+        print(f"  GPU Devices:            {args.gpu_devices}")
+        print(f"  OCC Strategy:           {args.occ_display}")
 
-    print("=" * 60)
-    print("Starting simulation...")
-    print()
+    # Output options
+    print("\nOUTPUT OPTIONS:")
+    print(f"  Generate Report:        {'Yes' if args.report else 'No'}")
+    print(f"  Measure Scalability:    {'Yes' if args.measure_scalability else 'No'}")
+    print(f"  Export Velocity:        {'Yes' if args.export_final_velocity else 'No'}")
+
+    print("=" * 70)
+    print("Starting simulation...\n")
 
 
 def init_xlb(args):
@@ -148,12 +182,14 @@ def init_xlb(args):
     )
     options = None
     if args.compute_backend == ComputeBackend.NEON:
-        neon_options = {"occ": args.occ, "device_list": args.gpu_devices}
+        neon_options = {"occ": args.occ_enum, "device_list": args.gpu_devices}
         options = neon_options
     return args.compute_backend, args.precision_policy, options
 
 
-def run_simulation(compute_backend, precision_policy, grid_shape, num_steps, options, export_final_velocity, repetitions, num_devices):
+def run_simulation(
+    compute_backend, precision_policy, grid_shape, num_steps, options, export_final_velocity, repetitions, num_devices, collision_model
+):
     grid = grid_factory(grid_shape, backend_config=options)
     box = grid.bounding_box_indices()
     box_no_edge = grid.bounding_box_indices(remove_edges=True)
@@ -170,7 +206,7 @@ def run_simulation(compute_backend, precision_policy, grid_shape, num_steps, opt
     stepper = IncompressibleNavierStokesStepper(
         grid=grid,
         boundary_conditions=boundary_conditions,
-        collision_type="BGK",
+        collision_type=collision_model,
         backend_config=options,
     )
 
@@ -232,50 +268,6 @@ def calculate_mlups(cube_edge, num_steps, elapsed_time):
     return mlups
 
 
-def print_summary(args, elapsed_time, mlups):
-    """Print comprehensive simulation summary with parameters and performance results"""
-    total_lattice_points = args.cube_edge**3
-    total_lattice_updates = total_lattice_points * args.num_steps
-    lattice_points_per_second = total_lattice_updates / elapsed_time
-
-    print("\n\n\n" + "=" * 70)
-    print("                    SIMULATION SUMMARY")
-    print("=" * 70)
-
-    # Simulation Parameters
-    print("SIMULATION PARAMETERS:")
-    print("-" * 25)
-    print(f"  Grid Size:              {args.cube_edge}³ ({args.cube_edge:,} × {args.cube_edge:,} × {args.cube_edge:,})")
-    print(f"  Total Lattice Points:   {total_lattice_points:,}")
-    print(f"  Time Steps:             {args.num_steps:,}")
-    print(f"  Total Lattice Updates:  {total_lattice_updates:,}")
-    print(f"  Compute Backend:        {args.compute_backend.name}")
-    print(f"  Precision Policy:       {args.precision}")
-    print(f"  Velocity Set:           {args.velocity_set.__class__.__name__}")
-    print(f"  Generate Report:        {'Yes' if args.report else 'No'}")
-    print(f"  Measure Scalability:    {'Yes' if args.measure_scalability else 'No'}")
-
-    if args.compute_backend.name == "NEON":
-        print(f"  GPU Devices:            {args.gpu_devices}")
-        occ_display = str(args.occ).split(".")[-1] if hasattr(args.occ, "__class__") else args.occ
-        print(f"  OCC Strategy:           {occ_display}")
-
-    print()
-
-    # Performance Results
-    print("PERFORMANCE RESULTS:")
-    print("-" * 20)
-    print(f"  Time in main loop:      {elapsed_time:.3f} seconds")
-    print(f"  MLUPs:                  {mlups:.2f}")
-    print(f"  Time per LBM step:      {elapsed_time / args.num_steps * 1000:.3f} ms")
-
-    if args.compute_backend.name == "NEON" and len(args.gpu_devices) > 1:
-        mlups_per_gpu = mlups / len(args.gpu_devices)
-        print(f"  MLUPs per GPU:          {mlups_per_gpu:.2f}")
-
-    print("=" * 70)
-
-
 def print_summary_with_stats(args, stats):
     """Print comprehensive simulation summary with statistics from multiple repetitions"""
     total_lattice_points = args.cube_edge**3
@@ -301,12 +293,13 @@ def print_summary_with_stats(args, stats):
     print(f"  Compute Backend:        {args.compute_backend.name}")
     print(f"  Precision Policy:       {args.precision}")
     print(f"  Velocity Set:           {args.velocity_set.__class__.__name__}")
+    print(f"  Collision Model:        {args.collision_model}")
     print(f"  Generate Report:        {'Yes' if args.report else 'No'}")
     print(f"  Measure Scalability:    {'Yes' if args.measure_scalability else 'No'}")
 
     if args.compute_backend.name == "NEON":
         print(f"  GPU Devices:            {args.gpu_devices}")
-        occ_display = str(args.occ).split(".")[-1] if hasattr(args.occ, "__class__") else args.occ
+        occ_display = args.occ_display
         print(f"  OCC Strategy:           {occ_display}")
 
     print()
@@ -371,9 +364,10 @@ def print_scalability_summary(args, stats_list):
     print(f"  Compute Backend:        {args.compute_backend.name}")
     print(f"  Precision Policy:       {args.precision}")
     print(f"  Velocity Set:           {args.velocity_set.__class__.__name__}")
+    print(f"  Collision Model:        {args.collision_model}")
 
     if args.compute_backend.name == "NEON":
-        occ_display = str(args.occ).split(".")[-1] if hasattr(args.occ, "__class__") else args.occ
+        occ_display = args.occ_display
         print(f"  OCC Strategy:           {occ_display}")
         print(f"  Available GPU Devices:  {args.gpu_devices}")
 
@@ -439,11 +433,18 @@ def print_scalability_summary(args, stats_list):
 
 def report(args, stats):
     import neon
+    import sys
 
     report = neon.Report("LBM MLUPS LDC")
+
+    # Save the full command line
+    command_line = " ".join(sys.argv)
+    report.add_member("command_line", command_line)
+
     report.add_member("velocity_set", args.velocity_set.__class__.__name__)
     report.add_member("compute_backend", args.compute_backend.name)
     report.add_member("precision_policy", args.precision)
+    report.add_member("collision_model", args.collision_model)
     report.add_member("grid_size", args.cube_edge)
     report.add_member("num_steps", args.num_steps)
     report.add_member("repetitions", args.repetitions)
@@ -463,16 +464,27 @@ def report(args, stats):
     report.add_member("elapsed_time", stats["mean_elapsed_time"])
     report.add_member("mlups", stats["mean_mlups"])
 
-    report.add_member("occ", (args.occ.to_string()))
+    report.add_member("occ", args.occ_display)
     report.add_member_vector("gpu_devices", args.gpu_devices)
     report.add_member("num_devices", len(args.gpu_devices))
     report.add_member("measure_scalability", args.measure_scalability)
 
-    report_name = "mlups_3d_" + f"size_{args.cube_edge}"
-    if args.measure_scalability:
-        report_name += f"_dev_{len(args.gpu_devices)}"
+    # Generate report name following the convention: script_name + parameters
+    report_name = "mlups_3d"
+    report_name += f"_velocity_set_{args.velocity_set.__class__.__name__}"
+    report_name += f"_compute_backend_{args.compute_backend.name}"
+    report_name += f"_precision_policy_{args.precision.replace('/', '_')}"
+    report_name += f"_collision_model_{args.collision_model}"
+    report_name += f"_grid_size_{args.cube_edge}"
+    report_name += f"_num_steps_{args.num_steps}"
+
+    if args.compute_backend.name == "NEON":
+        report_name += f"_occ_{args.occ_display}"
+        report_name += f"_num_devices_{len(args.gpu_devices)}"
+
     if args.repetitions > 1:
-        report_name += f"_rep_{args.repetitions}"
+        report_name += f"_repetitions_{args.repetitions}"
+
     report.write(report_name, True)
 
 
@@ -494,6 +506,7 @@ def benchmark(args):
         export_final_velocity=args.export_final_velocity,
         repetitions=args.repetitions,
         num_devices=len(args.gpu_devices),
+        collision_model=args.collision_model,
     )
 
     for elapsed_time in elapsed_time_list:
