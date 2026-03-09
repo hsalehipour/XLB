@@ -28,7 +28,7 @@ class SmagorinskyLESBGK(Collision):
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0,))
-    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, rho: jnp.ndarray, u: jnp.ndarray, omega):
+    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
         fneq = f - feq
 
         pi_neq = jnp.tensordot(self.velocity_set.cc, fneq, axes=(0, 0))
@@ -65,8 +65,6 @@ class SmagorinskyLESBGK(Collision):
         def functional(
             f: Any,
             feq: Any,
-            rho: Any,
-            u: Any,
             omega: Any,
         ):
             # Compute the non-equilibrium distribution
@@ -127,8 +125,6 @@ class SmagorinskyLESBGK(Collision):
         def kernel(
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
             omega: wp.float32,
         ):
@@ -142,13 +138,9 @@ class SmagorinskyLESBGK(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -157,15 +149,13 @@ class SmagorinskyLESBGK(Collision):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, rho, u, fout, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
             inputs=[
                 f,
                 feq,
-                rho,
-                u,
                 fout,
                 omega,
             ],
