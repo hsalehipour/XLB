@@ -31,17 +31,21 @@ class MultiresMomentumTransfer(MomentumTransfer):
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {compute_backend} backend.")
 
         # Set the sequence of operations based on the performance optimization type
-        if mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
-            operation_sequence = LBMOperationSequence.STREAM_THEN_COLLIDE
-        elif mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
+        if mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
             operation_sequence = LBMOperationSequence.COLLIDE_THEN_STREAM
+        elif mres_perf_opt in (
+            MresPerfOptimizationType.FUSION_AT_FINEST,
+            MresPerfOptimizationType.FUSION_AT_FINEST_SFV,
+            MresPerfOptimizationType.FUSION_AT_FINEST_SFV_ALL,
+        ):
+            operation_sequence = LBMOperationSequence.STREAM_THEN_COLLIDE
         else:
             raise ValueError(f"Unknown performance optimization type: {mres_perf_opt}")
 
         # Check if the performance optimization type is compatible with the use of mesh distance
-        if mres_perf_opt != MresPerfOptimizationType.FUSION_AT_FINEST:
+        if operation_sequence != LBMOperationSequence.STREAM_THEN_COLLIDE:
             assert not no_slip_bc_instance.needs_mesh_distance, (
-                "MultiresMomentumTransfer operator does not support mesh distance for performance optimization other than fusion at the finest level."
+                "Mesh distance is only supported in the MultiresMomentumTransfer operator when the LBM operation sequence is STREAM_THEN_COLLIDE."
             )
 
         # Print a warning to the user about the boundary voxels

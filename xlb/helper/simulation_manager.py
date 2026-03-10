@@ -88,311 +88,101 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         self.iteration_idx = self.iteration_idx + 1
         self.sk.run()
 
-    # Construct the stepper skeleton
+    def _build_recursion(self, level, app, config):
+        """Unified multi-resolution recursion builder.
+
+        config keys:
+            finest_ops:         list of (op_name, swap_fields, extra_kwargs) for level 0,
+                                or None to treat level 0 like any coarse level.
+            coarse_collide_ops: list of op_names for coarse collision.
+            coarse_stream_ops:  list of (op_name, extra_kwargs) for coarse streaming.
+            fuse_finest:        if True, recurse once (not twice) when child is at level 0.
+        """
+        if level < 0:
+            return
+
+        omega = self.omega_list[level]
+        fields = dict(f_0_fd=self.f_0, f_1_fd=self.f_1, bc_mask_fd=self.bc_mask, missing_mask_fd=self.missing_mask)
+        fields_swapped = dict(f_0_fd=self.f_1, f_1_fd=self.f_0, bc_mask_fd=self.bc_mask, missing_mask_fd=self.missing_mask)
+
+        if level == 0 and config["finest_ops"] is not None:
+            for op_name, swap, extra in config["finest_ops"]:
+                base = fields_swapped if swap else fields
+                self.add_to_app(app=app, op_name=op_name, level=level, **base, omega=omega, **extra)
+            return
+
+        for op_name in config["coarse_collide_ops"]:
+            self.add_to_app(app=app, op_name=op_name, level=level, **fields, omega=omega, timestep=0)
+
+        if config["fuse_finest"] and level - 1 == 0:
+            self._build_recursion(level - 1, app, config)
+        else:
+            self._build_recursion(level - 1, app, config)
+            self._build_recursion(level - 1, app, config)
+
+        for op_name, extra in config["coarse_stream_ops"]:
+            self.add_to_app(app=app, op_name=op_name, level=level, **fields_swapped, **extra)
+
     def _construct_stepper_skeleton(self):
         self.app = []
 
-        def recursion_reference(level, app):
-            if level < 0:
-                return
+        stream_abc = {"omega": self.coalescence_factor, "timestep": 0}
 
-            omega = self.omega_list[level]
+        # Finest-level op descriptors: (op_name, swap_f0_f1, extra_kwargs)
+        fused_pull_finest = [
+            ("finest_fused_pull", False, {"timestep": 0, "is_f1_the_explosion_src_field": True}),
+            ("finest_fused_pull", True, {"timestep": 0, "is_f1_the_explosion_src_field": False}),
+        ]
+        sfv_fused_pull_finest = [
+            ("CFV_finest_fused_pull", False, {"timestep": 0, "is_f1_the_explosion_src_field": True}),
+            ("SFV_finest_fused_pull", False, {}),
+            ("CFV_finest_fused_pull", True, {"timestep": 0, "is_f1_the_explosion_src_field": False}),
+            ("SFV_finest_fused_pull", True, {}),
+        ]
 
-            self.add_to_app(
-                app=app,
-                op_name="collide_coarse",
-                level=level,
-                f_0_fd=self.f_0,
-                f_1_fd=self.f_1,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=omega,
-                timestep=0,
-            )
+        configs = {
+            MresPerfOptimizationType.NAIVE_COLLIDE_STREAM: {
+                "finest_ops": None,
+                "coarse_collide_ops": ["collide_coarse"],
+                "coarse_stream_ops": [("stream_coarse_step_ABC", stream_abc)],
+                "fuse_finest": False,
+            },
+            MresPerfOptimizationType.FUSION_AT_FINEST: {
+                "finest_ops": fused_pull_finest,
+                "coarse_collide_ops": ["collide_coarse"],
+                "coarse_stream_ops": [("stream_coarse_step_ABC", stream_abc)],
+                "fuse_finest": True,
+            },
+            MresPerfOptimizationType.FUSION_AT_FINEST_SFV: {
+                "finest_ops": sfv_fused_pull_finest,
+                "coarse_collide_ops": ["collide_coarse"],
+                "coarse_stream_ops": [("stream_coarse_step_ABC", stream_abc)],
+                "fuse_finest": True,
+            },
+            MresPerfOptimizationType.FUSION_AT_FINEST_SFV_ALL: {
+                "finest_ops": sfv_fused_pull_finest,
+                "coarse_collide_ops": ["CFV_collide_coarse", "SFV_collide_coarse"],
+                "coarse_stream_ops": [("SFV_stream_coarse_step_ABC", stream_abc), ("SFV_stream_coarse_step", {})],
+                "fuse_finest": True,
+            },
+        }
 
-            recursion_reference(level - 1, app)
-            recursion_reference(level - 1, app)
+        config = configs.get(self.mres_perf_opt)
+        if config is None:
+            raise ValueError(f"Unknown optimization level: {self.mres_perf_opt}")
 
-            # Swapping of f_0 and f_1
-            self.add_to_app(
-                app=app,
-                op_name="stream_coarse_step_ABC",
-                level=level,
-                f_0=self.f_1,
-                f_1=self.f_0,
-                bc_mask=self.bc_mask,
-                missing_mask=self.missing_mask,
-                omega=self.coalescence_factor,
-                timestep=0,
-            )
-
-        def recursion_fused_finest(level, app):
-            if level < 0:
-                return
-
-            omega = self.omega_list[level]
-
-            if level == 0:
-                self.add_to_app(
-                    app=app,
-                    op_name="finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_0,
-                    f_1_fd=self.f_1,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=True,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_1,
-                    f_1_fd=self.f_0,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=False,
-                )
-                return
-
-            self.add_to_app(
-                app=app,
-                op_name="collide_coarse",
-                level=level,
-                f_0_fd=self.f_0,
-                f_1_fd=self.f_1,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=omega,
-                timestep=0,
-            )
-
-            if level - 1 == 0:
-                recursion_fused_finest(level - 1, app)
-            else:
-                recursion_fused_finest(level - 1, app)
-                recursion_fused_finest(level - 1, app)
-            # Swapping of f_0 and f_1
-            self.add_to_app(
-                app=app,
-                op_name="stream_coarse_step_ABC",
-                level=level,
-                f_0_fd=self.f_1,
-                f_1_fd=self.f_0,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=self.coalescence_factor,
-                timestep=0,
-            )
-
-        def recursion_fused_finest_SFV(level, app):
-            if level < 0:
-                return
-
-            omega = self.omega_list[level]
-
-            if level == 0:
-                self.add_to_app(
-                    app=app,
-                    op_name="CFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_0,
-                    f_1_fd=self.f_1,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=True,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="SFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_0,
-                    f_1_fd=self.f_1,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="CFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_1,
-                    f_1_fd=self.f_0,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=False,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="SFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_1,
-                    f_1_fd=self.f_0,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                )
-                return
-
-            self.add_to_app(
-                app=app,
-                op_name="collide_coarse",
-                level=level,
-                f_0_fd=self.f_0,
-                f_1_fd=self.f_1,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=omega,
-                timestep=0,
-            )
-
-            if level - 1 == 0:
-                recursion_fused_finest_SFV(level - 1, app)
-            else:
-                recursion_fused_finest_SFV(level - 1, app)
-                recursion_fused_finest_SFV(level - 1, app)
-            # Swapping of f_0 and f_1
-            self.add_to_app(
-                app=app,
-                op_name="stream_coarse_step_ABC",
-                level=level,
-                f_0_fd=self.f_1,
-                f_1_fd=self.f_0,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=self.coalescence_factor,
-                timestep=0,
-            )
-
-        def recursion_fused_finest_SFV_all(level, app):
-            if level < 0:
-                return
-
-            omega = self.omega_list[level]
-
-            if level == 0:
-                self.add_to_app(
-                    app=app,
-                    op_name="CFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_0,
-                    f_1_fd=self.f_1,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=True,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="SFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_0,
-                    f_1_fd=self.f_1,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="CFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_1,
-                    f_1_fd=self.f_0,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                    timestep=0,
-                    is_f1_the_explosion_src_field=False,
-                )
-                self.add_to_app(
-                    app=app,
-                    op_name="SFV_finest_fused_pull",
-                    level=level,
-                    f_0_fd=self.f_1,
-                    f_1_fd=self.f_0,
-                    bc_mask_fd=self.bc_mask,
-                    missing_mask_fd=self.missing_mask,
-                    omega=omega,
-                )
-                return
-
-            self.add_to_app(
-                app=app,
-                op_name="CFV_collide_coarse",
-                level=level,
-                f_0_fd=self.f_0,
-                f_1_fd=self.f_1,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=omega,
-                timestep=0,
-            )
-            self.add_to_app(
-                app=app,
-                op_name="SFV_collide_coarse",
-                level=level,
-                f_0_fd=self.f_0,
-                f_1_fd=self.f_1,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=omega,
-                timestep=0,
-            )
-
-            if level - 1 == 0:
-                recursion_fused_finest_SFV_all(level - 1, app)
-            else:
-                recursion_fused_finest_SFV_all(level - 1, app)
-                recursion_fused_finest_SFV_all(level - 1, app)
-            # Swapping of f_0 and f_1
-            self.add_to_app(
-                app=app,
-                op_name="SFV_stream_coarse_step_ABC",
-                level=level,
-                f_0_fd=self.f_1,
-                f_1_fd=self.f_0,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-                omega=self.coalescence_factor,
-                timestep=0,
-            )
-            self.add_to_app(
-                app=app,
-                op_name="SFV_stream_coarse_step",
-                level=level,
-                f_0_fd=self.f_1,
-                f_1_fd=self.f_0,
-                bc_mask_fd=self.bc_mask,
-                missing_mask_fd=self.missing_mask,
-            )
-
-        if self.mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
-            recursion_reference(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
-            recursion_fused_finest(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV:
+        # Pre-recursion SFV mask setup
+        if self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV:
             wp.synchronize()
             self.neon_container["SFV_reset_bc_mask"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            recursion_fused_finest_SFV(self.count_levels - 1, app=self.app)
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV_ALL:
             wp.synchronize()
-            num_levels = self.f_0.get_grid().num_levels
-            for l in range(num_levels):
+            for l in range(self.f_0.get_grid().num_levels):
                 self.neon_container["SFV_reset_bc_mask"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            recursion_fused_finest_SFV_all(self.count_levels - 1, app=self.app)
-        else:
-            raise ValueError(f"Unknown optimization level: {self.mres_perf_opt}")
+
+        self._build_recursion(self.count_levels - 1, self.app, config)
 
         bk = self.grid.get_neon_backend()
         self.sk = neon.Skeleton(backend=bk)
