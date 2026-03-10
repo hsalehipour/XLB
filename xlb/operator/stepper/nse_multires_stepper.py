@@ -358,7 +358,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 wp.neon_write(f_0_pn, index, _opp_indices[l], self.store_dtype(_f1_thread))
 
         @wp.func
-        def neon_collide_and_write(
+        def neon_collide_pipeline(
             index: Any,
             timestep: Any,
             _boundary_id: Any,
@@ -394,7 +394,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             return _f_post_collision
 
         @wp.func
-        def neon_stream_with_mres(
+        def neon_stream_explode_coalesce(
             index: Any,
             f_0_pn: Any,
             coalescence_factor_pn: Any,
@@ -447,7 +447,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         return
                     if not wp.neon_has_child(f_0_pn, index):
                         _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
-                        neon_collide_and_write(
+                        neon_collide_pipeline(
                             index,
                             timestep,
                             _boundary_id,
@@ -487,7 +487,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     if _boundary_id != wp.uint8(BC_SFV):
                         return
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
-                    neon_collide_and_write(
+                    neon_collide_pipeline(
                         index,
                         0,
                         _boundary_id,
@@ -532,7 +532,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         return
                     if not wp.neon_has_child(f_0_pn, index):
                         _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
-                        neon_collide_and_write(
+                        neon_collide_pipeline(
                             index,
                             timestep,
                             _boundary_id,
@@ -575,7 +575,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_collision = _f0_thread
-                    _f_post_stream = neon_stream_with_mres(index, f_0_pn, coalescence_factor_pn)
+                    _f_post_stream = neon_stream_explode_coalesce(index, f_0_pn, coalescence_factor_pn)
 
                     _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
                     neon_apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0_pn, f_1_pn)
@@ -611,7 +611,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_collision = _f0_thread
-                    _f_post_stream = neon_stream_with_mres(index, f_0_pn, coalescence_factor_pn)
+                    _f_post_stream = neon_stream_explode_coalesce(index, f_0_pn, coalescence_factor_pn)
 
                     _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
                     neon_apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0_pn, f_1_pn)
@@ -798,7 +798,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     # Post-streaming boundary conditions
                     _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
 
-                    neon_collide_and_write(
+                    neon_collide_pipeline(
                         index,
                         timestep,
                         _boundary_id,
@@ -864,7 +864,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     # Post-streaming boundary conditions
                     _f_post_stream = apply_bc(index, timestep, _boundary_id, _missing_mask, f_0_pn, f_1_pn, _f_post_collision, _f_post_stream, True)
 
-                    neon_collide_and_write(
+                    neon_collide_pipeline(
                         index,
                         timestep,
                         _boundary_id,
@@ -904,7 +904,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         return
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
                     _f_post_stream = self.stream.neon_functional(f_0_pn, index)
-                    neon_collide_and_write(
+                    neon_collide_pipeline(
                         index,
                         0,
                         _boundary_id,
