@@ -12,8 +12,8 @@ class MresPerfOptimizationType(Enum):
 
     NAIVE_COLLIDE_STREAM = auto()
     FUSION_AT_FINEST = auto()
-    FUSION_AT_FINEST_254 = auto()
-    FUSION_AT_FINEST_254_ALL = auto()
+    FUSION_AT_FINEST_SFV = auto()
+    FUSION_AT_FINEST_SFV_ALL = auto()
 
     @staticmethod
     def from_string(value: str) -> "MresPerfOptimizationType":

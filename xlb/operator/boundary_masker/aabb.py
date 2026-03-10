@@ -1,11 +1,12 @@
 import warp as wp
+import neon
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker.mesh_boundary_masker import MeshBoundaryMasker
 from xlb.operator.operator import Operator
-import neon
+from xlb.cell_type import BC_SOLID
 
 
 class MeshMaskerAABB(MeshBoundaryMasker):
@@ -49,9 +50,11 @@ class MeshMaskerAABB(MeshBoundaryMasker):
             cell_center_pos = self.helper_masker.index_to_position(bc_mask, index)
             HALF_VOXEL = wp.vec3(0.5, 0.5, 0.5)
 
-            if self.read_field(bc_mask, index, 0) == wp.uint8(255) or self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - HALF_VOXEL):
+            if self.read_field(bc_mask, index, 0) == wp.uint8(BC_SOLID) or self.mesh_voxel_intersect(
+                mesh_id=mesh_id, low=cell_center_pos - HALF_VOXEL
+            ):
                 # Make solid voxel
-                self.write_field(bc_mask, index, 0, wp.uint8(255))
+                self.write_field(bc_mask, index, 0, wp.uint8(BC_SOLID))
             else:
                 # Find the boundary voxels and their missing directions
                 for direction_idx in range(_q):

@@ -5,6 +5,7 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker.mesh_boundary_masker import MeshBoundaryMasker
 from xlb.operator.operator import Operator
+from xlb.cell_type import BC_SOLID
 
 
 class MeshMaskerWinding(MeshBoundaryMasker):
@@ -59,7 +60,7 @@ class MeshMaskerWinding(MeshBoundaryMasker):
                 # set point to be solid
                 if query.sign <= 0:  # TODO: fix this
                     # Make solid voxel
-                    bc_mask[0, index[0], index[1], index[2]] = wp.uint8(255)
+                    bc_mask[0, index[0], index[1], index[2]] = wp.uint8(BC_SOLID)
 
                     # Find the fractional distance to the mesh in each direction
                     for direction_idx in range(1, _q):

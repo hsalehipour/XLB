@@ -7,6 +7,7 @@ from typing import Any
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.macroscopic import Macroscopic, ZeroMoment, FirstMoment
+from xlb.cell_type import BC_SOLID
 
 
 class MultiresMacroscopic(Macroscopic):
@@ -55,7 +56,7 @@ class MultiresMacroscopic(Macroscopic):
 
                     _rho, _u = functional(_f)
 
-                    if _boundary_id == wp.uint8(255) or wp.neon_has_child(f, gIdx):
+                    if _boundary_id == wp.uint8(BC_SOLID) or wp.neon_has_child(f, gIdx):
                         _rho = self.compute_dtype(0.0)
                         for d in range(_d):
                             _u[d] = self.compute_dtype(0.0)
