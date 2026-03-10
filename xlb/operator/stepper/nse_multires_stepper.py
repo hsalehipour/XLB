@@ -709,7 +709,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             missing_mask_fd: Any,
         ):
             """
-            Setting the BC type to 254 for SFVs
+            Setting the BC type to BC_SFV
             """
 
             def ll_stream_coarse(loader: neon.Loader):
@@ -831,10 +831,10 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
                     if _boundary_id != wp.uint8(BC_SFV):
                         return
-                    # 254 voxel type:
-                    # They are not BC voxels
-                    # They are not on a resolution jump -> they do not do coalescence or explosion
-                    # They are not mr halo cells
+                    # BC_SFV voxel type:
+                    #   - They are not BC voxels
+                    #   - They are not on a resolution jump -> they do not do coalescence or explosion
+                    #   - They are not mr halo cells
 
                     _missing_mask = _missing_mask_vec()
                     _f0_thread, _missing_mask = neon_get_thread_data(f_0_pn, missing_mask_pn, index)
@@ -1143,7 +1143,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 _w = self.velocity_set.w
 
                 @wp.func
-                def finest_fused_pull_kernel_254(index: Any):
+                def finest_fused_pull_kernel_SFV(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
                     if _boundary_id != wp.uint8(BC_SFV):
                         return
@@ -1161,7 +1161,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     for l in range(self.velocity_set.q):
                         wp.neon_write(f_1_pn, index, l, _f_post_collision[l])
 
-                loader.declare_kernel(finest_fused_pull_kernel_254)
+                loader.declare_kernel(finest_fused_pull_kernel_SFV)
 
             return finest_fused_pull_launcher
 

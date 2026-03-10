@@ -154,7 +154,7 @@ class IndicesBoundaryMasker(Operator):
                     continue
 
                 if is_interior[ii] == wp.uint8(True):
-                    # If the index is in the interior, we set that index to be a solid node (identified by 255)
+                    # If the index is in the interior, we set that index to be a solid node (identified by BC_SOLID)
                     # This information will be used in the next kernel to identify missing directions using the
                     # padded indices of the solid node that are associated with the boundary condition.
                     self.write_field(bc_mask, index, 0, wp.uint8(BC_SOLID))

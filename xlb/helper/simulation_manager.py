@@ -189,7 +189,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        def recursion_fused_finest_254(level, app):
+        def recursion_fused_finest_SFV(level, app):
             if level < 0:
                 return
 
@@ -255,10 +255,10 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
 
             if level - 1 == 0:
-                recursion_fused_finest_254(level - 1, app)
+                recursion_fused_finest_SFV(level - 1, app)
             else:
-                recursion_fused_finest_254(level - 1, app)
-                recursion_fused_finest_254(level - 1, app)
+                recursion_fused_finest_SFV(level - 1, app)
+                recursion_fused_finest_SFV(level - 1, app)
             # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
@@ -272,7 +272,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        def recursion_fused_finest_254_all(level, app):
+        def recursion_fused_finest_SFV_all(level, app):
             if level < 0:
                 return
 
@@ -349,10 +349,10 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             )
 
             if level - 1 == 0:
-                recursion_fused_finest_254_all(level - 1, app)
+                recursion_fused_finest_SFV_all(level - 1, app)
             else:
-                recursion_fused_finest_254_all(level - 1, app)
-                recursion_fused_finest_254_all(level - 1, app)
+                recursion_fused_finest_SFV_all(level - 1, app)
+                recursion_fused_finest_SFV_all(level - 1, app)
             # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
@@ -379,18 +379,18 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             recursion_reference(self.count_levels - 1, app=self.app)
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
             recursion_fused_finest(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254:
+        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV:
             wp.synchronize()
             self.neon_container["SFV_reset_bc_mask"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            recursion_fused_finest_254(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254_ALL:
+            recursion_fused_finest_SFV(self.count_levels - 1, app=self.app)
+        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV_ALL:
             wp.synchronize()
             num_levels = self.f_0.get_grid().num_levels
             for l in range(num_levels):
                 self.neon_container["SFV_reset_bc_mask"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            recursion_fused_finest_254_all(self.count_levels - 1, app=self.app)
+            recursion_fused_finest_SFV_all(self.count_levels - 1, app=self.app)
         else:
             raise ValueError(f"Unknown optimization level: {self.mres_perf_opt}")
 
