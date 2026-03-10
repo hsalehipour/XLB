@@ -9,6 +9,7 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.boundary_masker.mesh_boundary_masker import MeshBoundaryMasker
+from xlb.cell_type import BC_SOLID
 
 
 class MeshMaskerAABBClose(MeshBoundaryMasker):
@@ -68,7 +69,7 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
         # Erode the solid mask in mask_field, removing a layer of outer solid voxels, storing output in mask_field_out
         @wp.func
         def functional_erode(index: Any, mask_field: Any, mask_field_out: Any):
-            min_val = wp.uint8(255)
+            min_val = wp.uint8(BC_SOLID)
             for l in range(_q):
                 if l == lattice_central_index:
                     continue
@@ -104,7 +105,7 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
 
             if self.mesh_voxel_intersect(mesh_id=mesh_id, low=cell_center_pos - half):
                 # Make solid voxel
-                self.write_field(solid_mask, index, 0, wp.uint8(255))
+                self.write_field(solid_mask, index, 0, wp.uint8(BC_SOLID))
 
         @wp.kernel
         def kernel_solid(
@@ -137,9 +138,9 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
             cell_center_pos = self.helper_masker.index_to_position(bc_mask, index)
             HALF_VOXEL = wp.vec3(0.5, 0.5, 0.5)
 
-            if self.read_field(solid_mask, index, 0) == wp.uint8(255) or self.read_field(bc_mask, index, 0) == wp.uint8(255):
+            if self.read_field(solid_mask, index, 0) == wp.uint8(BC_SOLID) or self.read_field(bc_mask, index, 0) == wp.uint8(BC_SOLID):
                 # Make solid voxel
-                self.write_field(bc_mask, index, 0, wp.uint8(255))
+                self.write_field(bc_mask, index, 0, wp.uint8(BC_SOLID))
             else:
                 # Find the boundary voxels and their missing directions
                 for direction_idx in range(_q):
@@ -152,7 +153,7 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
 
                     # Check to see if this neighbor is solid
                     if self.helper_masker.is_in_bounds(index, wp.vec3i(solid_mask.shape[0], solid_mask.shape[1], solid_mask.shape[2]), 1):
-                        if self.read_field(solid_mask, index + direction_idx, 0) == wp.uint8(255):
+                        if self.read_field(solid_mask, index + direction_idx, 0) == wp.uint8(BC_SOLID):
                             # We know we have a solid neighbor
                             # Set the boundary id and missing_mask
                             self.write_field(bc_mask, index, 0, wp.uint8(id_number))
@@ -198,9 +199,9 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
             # position of the point
             cell_center_pos = self.helper_masker.index_to_position(bc_mask, index)
 
-            if solid_mask[i, j, k] == wp.uint8(255) or bc_mask[0, index[0], index[1], index[2]] == wp.uint8(255):
+            if solid_mask[i, j, k] == wp.uint8(BC_SOLID) or bc_mask[0, index[0], index[1], index[2]] == wp.uint8(BC_SOLID):
                 # Make solid voxel
-                bc_mask[0, index[0], index[1], index[2]] = wp.uint8(255)
+                bc_mask[0, index[0], index[1], index[2]] = wp.uint8(BC_SOLID)
             else:
                 # Find the boundary voxels and their missing directions
                 for direction_idx in range(_q):
@@ -210,8 +211,8 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
                     direction_vec = wp.vec3f(wp.float32(_c[0, direction_idx]), wp.float32(_c[1, direction_idx]), wp.float32(_c[2, direction_idx]))
 
                     # Check to see if this neighbor is solid - this is super inefficient TODO: make it way better
-                    # if solid_mask[i,j,k] == wp.uint8(255):
-                    if solid_mask[i + _c[0, direction_idx], j + _c[1, direction_idx], k + _c[2, direction_idx]] == wp.uint8(255):
+                    # if solid_mask[i,j,k] == wp.uint8(BC_SOLID):
+                    if solid_mask[i + _c[0, direction_idx], j + _c[1, direction_idx], k + _c[2, direction_idx]] == wp.uint8(BC_SOLID):
                         # We know we have a solid neighbor
                         # Set the boundary id and missing_mask
                         bc_mask[0, index[0], index[1], index[2]] = wp.uint8(id_number)

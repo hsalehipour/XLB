@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import warp as wp
+import neon
 
 from xlb.compute_backend import ComputeBackend
 from xlb.grid import grid_factory
@@ -12,7 +13,7 @@ from xlb.operator.operator import Operator
 from xlb.operator.stream.stream import Stream
 from xlb.precision_policy import Precision
 from xlb.operator.boundary_masker.helper_functions_masker import HelperFunctionsMasker
-import neon
+from xlb.cell_type import BC_SOLID
 
 
 class IndicesBoundaryMasker(Operator):
@@ -153,10 +154,10 @@ class IndicesBoundaryMasker(Operator):
                     continue
 
                 if is_interior[ii] == wp.uint8(True):
-                    # If the index is in the interior, we set that index to be a solid node (identified by 255)
+                    # If the index is in the interior, we set that index to be a solid node (identified by BC_SOLID)
                     # This information will be used in the next kernel to identify missing directions using the
                     # padded indices of the solid node that are associated with the boundary condition.
-                    self.write_field(bc_mask, index, 0, wp.uint8(255))
+                    self.write_field(bc_mask, index, 0, wp.uint8(BC_SOLID))
                     return
 
                 # Set bc_mask for all bc indices
@@ -206,7 +207,7 @@ class IndicesBoundaryMasker(Operator):
 
                     # Check if pull index is a fluid node (bc_mask is zero for fluid nodes)
                     bc_mask_ngh = self.read_field_neighbor(bc_mask, index, offset, 0)
-                    if (self.helper_masker.is_in_bounds(pull_index, grid_shape)) and (bc_mask_ngh == wp.uint8(255)):
+                    if (self.helper_masker.is_in_bounds(pull_index, grid_shape)) and (bc_mask_ngh == wp.uint8(BC_SOLID)):
                         self.write_field(missing_mask, index, l, wp.uint8(True))
 
         # Construct the warp 3D kernel

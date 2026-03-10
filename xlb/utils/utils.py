@@ -83,7 +83,7 @@ def save_image(fld, timestep=None, prefix=None, **kwargs):
     if len(fld.shape) > 3:
         raise ValueError("The input field should be 2D!")
     if len(fld.shape) == 3:
-        fld = np.sqrt(fld[0, ...] ** 2 + fld[0, ...] ** 2)
+        fld = np.sqrt(fld[0, ...] ** 2 + fld[1, ...] ** 2 + fld[2, ...] ** 2)
 
     plt.clf()
     kwargs.pop("cmap", None)
@@ -237,7 +237,7 @@ def rotate_geometry(indices, origin, axis, angle):
     return tuple(jnp.rint(indices_rotated).astype("int32").T)
 
 
-def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, pitch=None):
+def voxelize_stl(stl_filename, length_lbm_unit=None, transformation_matrix=None, pitch=None):
     """
     Converts an STL file to a voxelized mesh.
 
@@ -247,7 +247,7 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
         The name of the STL file to be voxelized.
     length_lbm_unit : float, optional
         The unit length in LBM. Either this or 'pitch' must be provided.
-    tranformation_matrix : array-like, optional
+    transformation_matrix : array-like, optional
         A transformation matrix to be applied to the mesh before voxelization.
     pitch : float, optional
         The pitch of the voxel grid. Either this or 'length_lbm_unit' must be provided.
@@ -267,8 +267,8 @@ def voxelize_stl(stl_filename, length_lbm_unit=None, tranformation_matrix=None, 
         raise ValueError("Either 'length_lbm_unit' or 'pitch' must be provided!")
     mesh = trimesh.load_mesh(stl_filename, process=False)
     length_phys_unit = mesh.extents.max()
-    if tranformation_matrix is not None:
-        mesh.apply_transform(tranformation_matrix)
+    if transformation_matrix is not None:
+        mesh.apply_transform(transformation_matrix)
     if pitch is None:
         pitch = length_phys_unit / length_lbm_unit
     mesh_voxelized = mesh.voxelized(pitch=pitch)

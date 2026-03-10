@@ -56,7 +56,7 @@ class BoundaryCondition(Operator):
         self.implementation_step = implementation_step
 
         # A flag to indicate whether bc indices need to be padded in both normal directions to identify missing directions
-        # when inside/outside of the geoemtry is not known
+        # when inside/outside of the geometry is not known
         self.needs_padding = False
 
         # A flag for BCs that need normalized distance between the grid and a mesh (to be set to True if applicable inside each BC)

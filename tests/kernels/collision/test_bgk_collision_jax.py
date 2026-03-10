@@ -28,7 +28,7 @@ def init_xlb_env(velocity_set):
         (3, xlb.velocity_set.D3Q27, (50, 50, 50), 1.0),
     ],
 )
-def test_bgk_ollision(dim, velocity_set, grid_shape, omega):
+def test_bgk_collision(dim, velocity_set, grid_shape, omega):
     init_xlb_env(velocity_set)
     my_grid = grid_factory(grid_shape)
 

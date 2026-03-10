@@ -30,6 +30,7 @@ from xlb.operator.boundary_masker import (
 from xlb.helper import check_bc_overlaps
 from xlb.helper.nse_fields import create_nse_fields
 from xlb.operator.boundary_condition.helper_functions_bc import EncodeAuxiliaryData
+from xlb.cell_type import BC_SOLID
 
 
 class IncompressibleNavierStokesStepper(Stepper):
@@ -275,7 +276,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
         # Apply collision type boundary conditions
         for bc in self.boundary_conditions:
-            f_post_collision = bc.update_bc_auxilary_data(f_post_stream, f_post_collision, bc_mask, missing_mask)
+            f_post_collision = bc.update_bc_auxiliary_data(f_post_stream, f_post_collision, bc_mask, missing_mask)
             if bc.implementation_step == ImplementationStep.COLLISION:
                 f_post_collision = bc(
                     f_post_stream,
@@ -408,7 +409,7 @@ class IncompressibleNavierStokesStepper(Stepper):
             index = wp.vec3i(i, j, k)
 
             _boundary_id = bc_mask[0, index[0], index[1], index[2]]
-            if _boundary_id == wp.uint8(255):
+            if _boundary_id == wp.uint8(BC_SOLID):
                 return
 
             # Apply streaming
@@ -565,7 +566,7 @@ class IncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def nse_stepper_cl(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
                     # Apply streaming
                     _f_post_stream = self.stream.neon_functional(f_0_pn, index)

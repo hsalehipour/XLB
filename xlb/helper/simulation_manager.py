@@ -96,20 +96,16 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             if level < 0:
                 return
 
-            # Compute omega at the current level
             omega = self.omega_list[level]
-
-            print(f"RECURSION down to level {level}")
-            print(f"RECURSION Level {level}, COLLIDE")
 
             self.add_to_app(
                 app=app,
                 op_name="collide_coarse",
                 level=level,
-                f_0=self.f_0,
-                f_1=self.f_1,
-                bc_mask=self.bc_mask,
-                missing_mask=self.missing_mask,
+                f_0_fd=self.f_0,
+                f_1_fd=self.f_1,
+                bc_mask_fd=self.bc_mask,
+                missing_mask_fd=self.missing_mask,
                 omega=omega,
                 timestep=0,
             )
@@ -117,8 +113,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             recursion_reference(level - 1, app)
             recursion_reference(level - 1, app)
 
-            # Important: swapping of f_0 and f_1 is done here
-            print(f"RECURSION Level {level}, stream_coarse_step_ABC")
+            # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
                 op_name="stream_coarse_step_ABC",
@@ -135,12 +130,9 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             if level < 0:
                 return
 
-            # Compute omega at the current level
             omega = self.omega_list[level]
 
             if level == 0:
-                print(f"RECURSION down to the finest level {level}")
-                print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
                 self.add_to_app(
                     app=app,
                     op_name="finest_fused_pull",
@@ -167,9 +159,6 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 return
 
-            print(f"RECURSION down to level {level}")
-            print(f"RECURSION Level {level}, COLLIDE")
-
             self.add_to_app(
                 app=app,
                 op_name="collide_coarse",
@@ -181,18 +170,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 omega=omega,
                 timestep=0,
             )
-            # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
-            # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
-            # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
                 recursion_fused_finest(level - 1, app)
             else:
                 recursion_fused_finest(level - 1, app)
                 recursion_fused_finest(level - 1, app)
-            # Important: swapping of f_0 and f_1 is done here
-            print(f"RECURSION Level {level}, stream_coarse_step_ABC")
+            # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
                 op_name="stream_coarse_step_ABC",
@@ -205,16 +189,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        def recursion_fused_finest_254(level, app):
+        def recursion_fused_finest_SFV(level, app):
             if level < 0:
                 return
 
-            # Compute omega at the current level
             omega = self.omega_list[level]
 
             if level == 0:
-                print(f"RECURSION down to the finest level {level}")
-                print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
                 self.add_to_app(
                     app=app,
                     op_name="CFV_finest_fused_pull",
@@ -261,9 +242,6 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 )
                 return
 
-            print(f"RECURSION down to level {level}")
-            print(f"RECURSION Level {level}, COLLIDE")
-
             self.add_to_app(
                 app=app,
                 op_name="collide_coarse",
@@ -275,18 +253,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 omega=omega,
                 timestep=0,
             )
-            # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
-            # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
-            # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
-                recursion_fused_finest_254(level - 1, app)
+                recursion_fused_finest_SFV(level - 1, app)
             else:
-                recursion_fused_finest_254(level - 1, app)
-                recursion_fused_finest_254(level - 1, app)
-            # Important: swapping of f_0 and f_1 is done here
-            print(f"RECURSION Level {level}, stream_coarse_step_ABC")
+                recursion_fused_finest_SFV(level - 1, app)
+                recursion_fused_finest_SFV(level - 1, app)
+            # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
                 op_name="stream_coarse_step_ABC",
@@ -299,16 +272,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 timestep=0,
             )
 
-        def recursion_fused_finest_254_all(level, app):
+        def recursion_fused_finest_SFV_all(level, app):
             if level < 0:
                 return
 
-            # Compute omega at the current level
             omega = self.omega_list[level]
 
             if level == 0:
-                print(f"RECURSION down to the finest level {level}")
-                print(f"RECURSION Level {level}, Fused STREAM and COLLIDE")
                 self.add_to_app(
                     app=app,
                     op_name="CFV_finest_fused_pull",
@@ -354,9 +324,6 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                     omega=omega,
                 )
                 return
-
-            print(f"RECURSION down to level {level}")
-            print(f"RECURSION Level {level}, COLLIDE")
 
             self.add_to_app(
                 app=app,
@@ -380,18 +347,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 omega=omega,
                 timestep=0,
             )
-            # 1. Accumulation is read from f_0 in the streaming step, where f_0=self.f_1.
-            # so is_self_f1_the_coalescence_dst_field is True
-            # 2. Explision data is the output from the corser collide, which is f_1=self.f_1.
-            # so is_self_f1_the_explosion_src_field is True
 
             if level - 1 == 0:
-                recursion_fused_finest_254_all(level - 1, app)
+                recursion_fused_finest_SFV_all(level - 1, app)
             else:
-                recursion_fused_finest_254_all(level - 1, app)
-                recursion_fused_finest_254_all(level - 1, app)
-            # Important: swapping of f_0 and f_1 is done here
-            print(f"RECURSION Level {level}, stream_coarse_step_ABC")
+                recursion_fused_finest_SFV_all(level - 1, app)
+                recursion_fused_finest_SFV_all(level - 1, app)
+            # Swapping of f_0 and f_1
             self.add_to_app(
                 app=app,
                 op_name="SFV_stream_coarse_step_ABC",
@@ -412,42 +374,25 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
                 bc_mask_fd=self.bc_mask,
                 missing_mask_fd=self.missing_mask,
             )
-            return
 
         if self.mres_perf_opt == MresPerfOptimizationType.NAIVE_COLLIDE_STREAM:
             recursion_reference(self.count_levels - 1, app=self.app)
         elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST:
             recursion_fused_finest(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254:
-            # Run kernel that generates teh 254 value in the bc_mask
+        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV:
             wp.synchronize()
-            # self.bc_mask.update_host(0)
-            # wp.synchronize()
-            # self.bc_mask.export_vti(f"mask_before.vti", "u")
-
             self.neon_container["SFV_reset_bc_mask"](0, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
             wp.synchronize()
-            # self.bc_mask.update_host(0)
-            # wp.synchronize()
-            # self.bc_mask.export_vti(f"mask_after.vti", "u")
-            recursion_fused_finest_254(self.count_levels - 1, app=self.app)
-        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_254_ALL:
-            # Run kernel that generates teh 254 value in the bc_mask
+            recursion_fused_finest_SFV(self.count_levels - 1, app=self.app)
+        elif self.mres_perf_opt == MresPerfOptimizationType.FUSION_AT_FINEST_SFV_ALL:
             wp.synchronize()
-            # self.bc_mask.update_host(0)
-            # wp.synchronize()
-            # self.bc_mask.export_vti(f"mask_before.vti", "u")
-
             num_levels = self.f_0.get_grid().num_levels
             for l in range(num_levels):
                 self.neon_container["SFV_reset_bc_mask"](l, self.f_0, self.f_1, self.bc_mask, self.bc_mask).run(0)
-            # wp.synchronize()
-            # self.bc_mask.update_host(0)
             wp.synchronize()
-            # self.bc_mask.export_vti(f"mask_after.vti", "u")
-            recursion_fused_finest_254_all(self.count_levels - 1, app=self.app)
+            recursion_fused_finest_SFV_all(self.count_levels - 1, app=self.app)
         else:
-            raise ValueError(f"Unknown optimization level: {self.opt_level}")
+            raise ValueError(f"Unknown optimization level: {self.mres_perf_opt}")
 
         bk = self.grid.get_neon_backend()
         self.sk = neon.Skeleton(backend=bk)
