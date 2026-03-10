@@ -1,11 +1,12 @@
 import warp as wp
+import neon
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker import MeshMaskerAABBClose
 from xlb.operator.operator import Operator
-import neon
+from xlb.cell_type import BC_SOLID
 
 
 class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
@@ -66,8 +67,8 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
             # If already solid or bc, mark solid
             solid_val = wp.neon_read(solid_mask_pn, index, 0)
             bc_val = wp.neon_read(bc_mask_pn, index, 0)
-            if solid_val == wp.uint8(255) or bc_val == wp.uint8(255):
-                wp.neon_write(bc_mask_pn, index, 0, wp.uint8(255))
+            if solid_val == wp.uint8(BC_SOLID) or bc_val == wp.uint8(BC_SOLID):
+                wp.neon_write(bc_mask_pn, index, 0, wp.uint8(BC_SOLID))
                 return
 
             # loop lattice directions
@@ -81,7 +82,7 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
                 is_valid = wp.bool(False)
                 nval = wp.neon_read_ngh(solid_mask_pn, index, ngh, 0, wp.uint8(0), is_valid)
                 if is_valid:
-                    if nval == wp.uint8(255):
+                    if nval == wp.uint8(BC_SOLID):
                         # Found solid neighbor -> boundary cell
                         self.write_field(bc_mask_pn, index, 0, wp.uint8(id_number))
                         self.write_field(missing_mask_pn, index, _opp_indices[direction_idx], wp.uint8(True))

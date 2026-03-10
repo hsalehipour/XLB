@@ -25,6 +25,7 @@ from xlb.operator.boundary_masker import (
     MultiresMeshMaskerRay,
 )
 from xlb.operator.boundary_condition.helper_functions_bc import MultiresEncodeAuxiliaryData
+from xlb.cell_type import BC_SFV, BC_SOLID
 
 """
 SFV = Simple Fluid Voxel: a fluid voxel that is not a BC nor is involved in explosion or coalescence
@@ -122,7 +123,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_collide_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
                     if not wp.neon_has_child(coalescence_factor_pn, index):
                         for l in range(self.velocity_set.q):
@@ -153,7 +154,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def compute(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(coalescence_factor_pn, index):
@@ -384,7 +385,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def device(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if not wp.neon_has_child(f_0_pn, index):
@@ -449,7 +450,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def device(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id != wp.uint8(254):
+                    if _boundary_id != wp.uint8(BC_SFV):
                         return
 
                     # Read thread data for populations, these are post streaming
@@ -499,9 +500,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def device(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
-                    if _boundary_id == wp.uint8(254):
+                    if _boundary_id == wp.uint8(BC_SFV):
                         return
                     if not wp.neon_has_child(f_0_pn, index):
                         # Read thread data for populations, these are post streaming
@@ -565,7 +566,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -645,9 +646,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
 
-                    if _boundary_id == wp.uint8(254):
+                    if _boundary_id == wp.uint8(BC_SFV):
                         return
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -724,7 +725,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
                     if _boundary_id != 0:
                         return
@@ -762,7 +763,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 return
 
                     # Voxel is a pure fluid cell with no multi-resolution interactions — mark as SFV
-                    wp.neon_write(bc_mask_pn, index, 0, wp.uint8(254))
+                    wp.neon_write(bc_mask_pn, index, 0, wp.uint8(BC_SFV))
 
                 loader.declare_kernel(cl_stream_coarse)
 
@@ -792,7 +793,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -828,7 +829,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id != wp.uint8(254):
+                    if _boundary_id != wp.uint8(BC_SFV):
                         return
                     # 254 voxel type:
                     # They are not BC voxels
@@ -872,7 +873,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -944,7 +945,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def finest_fused_pull_kernel(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -1047,9 +1048,9 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def finest_fused_pull_kernel(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
-                    if _boundary_id == wp.uint8(254):
+                    if _boundary_id == wp.uint8(BC_SFV):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
@@ -1144,7 +1145,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def finest_fused_pull_kernel_254(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id != wp.uint8(254):
+                    if _boundary_id != wp.uint8(BC_SFV):
                         return
 
                     # do stream normally
@@ -1188,7 +1189,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 @wp.func
                 def cl_stream_coarse(index: Any):
                     _boundary_id = wp.neon_read(bc_mask_pn, index, 0)
-                    if _boundary_id == wp.uint8(255):
+                    if _boundary_id == wp.uint8(BC_SOLID):
                         return
 
                     if wp.neon_has_child(f_0_pn, index):
