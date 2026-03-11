@@ -1,3 +1,7 @@
+"""
+BGK collision operator with Smagorinsky large-eddy-simulation sub-grid model.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -12,8 +16,19 @@ from functools import partial
 
 
 class SmagorinskyLESBGK(Collision):
-    """
-    BGK collision operator for LBM with Smagorinsky LES model.
+    """BGK collision with Smagorinsky LES turbulence modelling.
+
+    Adjusts the effective relaxation time based on the local strain rate
+    estimated from the non-equilibrium stress tensor, using the
+    Smagorinsky model constant *C_s*.
+
+    Parameters
+    ----------
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    smagorinsky_coef : float
+        Smagorinsky model constant (default 0.17).
     """
 
     def __init__(
@@ -69,31 +84,6 @@ class SmagorinskyLESBGK(Collision):
         ):
             # Compute the non-equilibrium distribution
             fneq = f - feq
-
-            # Sailfish implementation
-            # {
-            #  float tmp, strain;
-
-            #  strain = 0.0f;
-
-            #  // Off-diagonal components, count twice for symmetry reasons.
-            #  %for a in range(0, dim):
-            #    %for b in range(a + 1, dim):
-            #       tmp = ${cex(sym.ex_flux(grid, 'd0', a, b, config), pointers=True)} -
-            #           ${cex(sym.ex_eq_flux(grid, a, b))};
-            #       strain += 2.0f * tmp * tmp;
-            #    %endfor
-            #  %endfor
-
-            #  // Diagonal components.
-            #  %for a in range(0, dim):
-            #    tmp = ${cex(sym.ex_flux(grid, 'd0', a, a, config), pointers=True)} -
-            #        ${cex(sym.ex_eq_flux(grid, a, a))};
-            #    strain += tmp * tmp;
-            #  %endfor
-
-            #  tau0 += 0.5f * (sqrtf(tau0 * tau0 + 36.0f * ${cex(smagorinsky_const**2)} * sqrtf(strain)) - tau0);
-            # }
 
             # Compute strain
             pi_neq = _pi_vec()

@@ -1,3 +1,10 @@
+"""
+Ray-cast mesh-based boundary masker.
+
+Voxelizes a mesh file by casting rays along each lattice direction using
+``warp.mesh_query_ray`` to detect surface crossings.
+"""
+
 import warp as wp
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
@@ -10,7 +17,7 @@ import neon
 
 class MeshMaskerRay(MeshBoundaryMasker):
     """
-    Operator for creating a boundary missing_mask from an STL file
+    Operator for creating a boundary missing_mask from a mesh file
     """
 
     def __init__(

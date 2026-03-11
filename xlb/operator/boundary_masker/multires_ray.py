@@ -1,3 +1,7 @@
+"""
+Multi-resolution ray-cast mesh-based boundary masker for the Neon backend.
+"""
+
 import warp as wp
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet

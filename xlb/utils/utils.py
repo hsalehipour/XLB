@@ -1,3 +1,11 @@
+"""
+General-purpose utilities for XLB.
+
+Includes helpers for field downsampling, VTK/image/USD I/O, geometry
+rotation, STL voxelization, Neon-to-JAX field transfer, and
+physical-to-lattice unit conversion.
+"""
+
 import numpy as np
 import matplotlib.pylab as plt
 from matplotlib import cm
@@ -320,9 +328,10 @@ def axangle2mat(axis, angle, is_normalized=False):
 
 
 class ToJAX(object):
+    """Convert a Neon field to a JAX array via an intermediate Warp grid."""
+
     def __init__(self, field_name, field_cardinality, grid_shape, store_precision=None):
-        """
-        Initialize the MultiresIO object.
+        """Initialise the Neon-to-JAX converter.
 
         Parameters
         ----------
@@ -332,8 +341,8 @@ class ToJAX(object):
             The cardinality of the field to be converted.
         grid_shape : tuple
             The shape of the grid on which the field is defined.
-        store_precision : str, optional
-            The precision policy for storing data.
+        store_precision : Precision, optional
+            Storage precision.  Defaults to the global config value.
         """
         from xlb.compute_backend import ComputeBackend
         from xlb.grid import grid_factory

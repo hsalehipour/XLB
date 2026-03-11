@@ -1,3 +1,16 @@
+"""
+Multi-resolution mesh utilities.
+
+Provides geometry preparation and I/O for multi-resolution LBM simulations:
+
+* :func:`make_cuboid_mesh` — builds a strongly-balanced cuboid mesh hierarchy
+  from an STL file and a sequence of domain multipliers.
+* :func:`prepare_sparsity_pattern` — converts level data into the sparsity
+  arrays required by :func:`multires_grid_factory`.
+* :class:`MultiresIO` — exports multi-resolution Neon field data to HDF5 /
+  XDMF, 2-D slice images, and 1-D line profiles.
+"""
+
 import numpy as np
 import trimesh
 from typing import Any, Optional
@@ -150,6 +163,17 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
 
 
 class MultiresIO(object):
+    """I/O helper for multi-resolution Neon field data.
+
+    Converts hierarchical Neon ``mGrid`` fields into merged unstructured
+    hexahedral meshes and exports them as HDF5 + XDMF (for ParaView),
+    2-D slice PNG images, or 1-D line CSV profiles.
+
+    The constructor precomputes the merged geometry (coordinates,
+    connectivity, centroids) and allocates intermediate Warp fields so
+    that repeated exports only need to transfer data from the Neon fields.
+    """
+
     def __init__(
         self,
         field_name_cardinality_dict,
@@ -213,6 +237,19 @@ class MultiresIO(object):
         self.container = self._construct_neon_container()
 
     def process_geometry(self, levels_data):
+        """Build merged coordinates and connectivity from all levels.
+
+        Returns
+        -------
+        coordinates : np.ndarray, shape (N, 3)
+            Vertex positions (8 per active voxel, before deduplication).
+        connectivity : np.ndarray, shape (M, 8)
+            Hexahedral connectivity (one row per active voxel).
+        level_id_field : np.ndarray, shape (M,)
+            Grid level index for each cell.
+        total_cells : int
+            Total number of active voxels across all levels.
+        """
         num_voxels_per_level = [np.sum(data) for data, _, _, _ in levels_data]
         num_points_per_level = [8 * nv for nv in num_voxels_per_level]
         point_id_offsets = np.cumsum([0] + num_points_per_level[:-1])
@@ -295,6 +332,7 @@ class MultiresIO(object):
         return corners, connectivity
 
     def save_xdmf(self, h5_filename, xmf_filename, total_cells, num_points, fields={}):
+        """Write an XDMF descriptor that references the companion HDF5 file."""
         # Generate an XDMF file to accompany the HDF5 file
         print(f"\tGenerating XDMF file: {xmf_filename}")
         hdf5_rel_path = h5_filename.split("/")[-1]
@@ -372,6 +410,11 @@ class MultiresIO(object):
                 fg.create_dataset(fname, data=fdata.astype(np.float32), compression=compression, compression_opts=compression_opts, chunks=True)
 
     def _merge_duplicates(self, coordinates, connectivity, levels_data):
+        """Deduplicate vertices shared between adjacent voxels.
+
+        Uses spatial hashing (grid-snapped coordinates) processed in
+        chunks to keep memory bounded.
+        """
         # Merging duplicate points
         tolerance = 0.01
         chunk_size = 10_000_000  # Adjust based on GPU memory
@@ -404,12 +447,14 @@ class MultiresIO(object):
         return coordinates, connectivity
 
     def _transform_coordinates(self, coordinates, offset):
+        """Convert lattice coordinates to physical units and apply offset."""
         offset = np.array(offset, dtype=np.float32)
         if self.unit_convertor is not None:
             coordinates = self.unit_convertor.length_to_physical(coordinates)
         return coordinates + offset
 
     def _prepare_container_inputs(self):
+        """Allocate dense Warp fields used as staging buffers for Neon-to-NumPy transfer."""
         # load necessary modules
         from xlb.compute_backend import ComputeBackend
         from xlb.grid import grid_factory

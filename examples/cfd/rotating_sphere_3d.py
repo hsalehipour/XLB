@@ -1,3 +1,11 @@
+"""
+Rotating sphere 3-D example (single-resolution).
+
+Simulates flow past a sphere rotating about the y-axis using the
+halfway bounce-back BC with a prescribed rotational-velocity profile.
+Computes drag and lift coefficients over time and saves VTK snapshots.
+"""
+
 import xlb
 import trimesh
 import time
@@ -86,7 +94,7 @@ walls = [box["bottom"][i] + box["top"][i] + box["front"][i] + box["back"][i] for
 walls = np.unique(np.array(walls), axis=-1).tolist()
 
 # Load the mesh (replace with your own mesh)
-stl_filename = "examples/cfd/stl-files/sphere.stl"
+stl_filename = "../stl-files/sphere.stl"
 mesh = trimesh.load_mesh(stl_filename, process=False)
 mesh_vertices = mesh.vertices
 
@@ -105,6 +113,7 @@ sphere_cross_section = np.pi * diam**2 / 4.0
 
 # Define rotating boundary profile
 def bc_profile():
+    """Build a Warp function returning the rotational wall velocity at a voxel."""
     dtype = precision_policy.compute_precision.wp_dtype
     _u_vec = wp.vec(velocity_set.d, dtype=dtype)
     angular_velocity = _u_vec(0.0, rot_rate, 0.0)
@@ -210,6 +219,7 @@ def post_process(
     lift_coefficients,
     time_steps,
 ):
+    """Compute macroscopic fields, force coefficients, and save VTK output."""
     """
     Post-process simulation data: save fields, compute forces, and plot drag coefficient.
 

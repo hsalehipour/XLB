@@ -1,4 +1,9 @@
-# Base class for all streaming operators
+"""
+Streaming operator for the Lattice Boltzmann Method.
+
+Implements the pull-scheme propagation step: each voxel reads populations
+from its lattice neighbours according to the velocity-set directions.
+"""
 
 from functools import partial
 import jax.numpy as jnp
@@ -11,8 +16,14 @@ from xlb.operator.operator import Operator
 
 
 class Stream(Operator):
-    """
-    Base class for all streaming operators. This is used for pulling the distribution
+    """Pull-scheme streaming operator.
+
+    Propagates distribution functions by reading each population from the
+    upstream neighbour along the corresponding lattice direction.  Periodic
+    boundaries are applied automatically when a pull index falls outside
+    the domain (Warp backend only; JAX uses ``jnp.roll``).
+
+    Supports JAX, Warp, and Neon backends.
     """
 
     @Operator.register_backend(ComputeBackend.JAX)

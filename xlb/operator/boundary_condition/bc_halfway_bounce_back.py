@@ -1,5 +1,10 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Halfway bounce-back boundary condition.
+
+Implements the standard halfway bounce-back scheme where the no-slip
+wall is located halfway between a solid node and a fluid node.
+Optionally supports prescribed wall velocity (moving walls) and
+interpolated variants that use wall-distance data.
 """
 
 import jax.numpy as jnp

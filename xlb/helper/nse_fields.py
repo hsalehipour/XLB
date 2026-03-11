@@ -1,3 +1,11 @@
+"""
+Factory function for creating the standard Navier-Stokes field arrays.
+
+Returns the distribution-function pair (*f_0*, *f_1*), the boundary-
+condition mask, and the missing-population mask, all allocated on the
+given grid and backend.
+"""
+
 from xlb import DefaultConfig
 from xlb.grid import grid_factory
 from xlb.precision_policy import Precision

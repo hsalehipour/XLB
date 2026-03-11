@@ -1,3 +1,10 @@
+"""
+AABB mesh-based boundary masker.
+
+Voxelizes an STL mesh using ``warp.mesh_query_aabb`` for approximate
+one-voxel-thick surface detection around the geometry.
+"""
+
 import warp as wp
 import neon
 from typing import Any

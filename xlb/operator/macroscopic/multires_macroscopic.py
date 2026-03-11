@@ -1,3 +1,7 @@
+"""
+Multi-resolution macroscopic moment computation for the Neon backend.
+"""
+
 from functools import partial
 import jax.numpy as jnp
 from jax import jit
@@ -11,7 +15,12 @@ from xlb.cell_type import BC_SOLID
 
 
 class MultiresMacroscopic(Macroscopic):
-    """A class to compute both zero and first moments of distribution functions (rho, u) on a multi-resolution grid."""
+    """Compute density and velocity on a multi-resolution grid (Neon only).
+
+    Iterates over all grid levels, computing zero-th and first moments of
+    the distribution function.  Solid voxels and voxels that have child
+    refinement (halo cells) are set to zero.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

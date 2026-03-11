@@ -1,4 +1,15 @@
-# Base class for all equilibriums
+"""
+AABB-Close boundary masker with morphological close operation.
+
+Identifies solid voxels via axis-aligned bounding-box (AABB) intersection,
+then applies a morphological *close* (dilate followed by erode) to fill
+thin gaps and small cavities in the mesh surface.  The resulting solid
+mask is used to determine boundary voxels and their missing population
+directions.
+
+Supports both Warp (single-resolution) and Neon (multi-resolution)
+backends.
+"""
 
 import numpy as np
 import warp as wp
@@ -13,8 +24,20 @@ from xlb.cell_type import BC_SOLID
 
 
 class MeshMaskerAABBClose(MeshBoundaryMasker):
-    """
-    Operator for creating a boundary missing_mask from an STL file
+    """Boundary masker using AABB voxelization with morphological close.
+
+    The *close* operation (dilate then erode) thickens the raw solid mask
+    by ``close_voxels`` layers before shrinking it back, sealing small
+    holes and thin slits in the mesh surface.
+
+    Parameters
+    ----------
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    close_voxels : int
+        Half-width of the morphological structuring element.  Must be
+        provided explicitly.
     """
 
     def __init__(

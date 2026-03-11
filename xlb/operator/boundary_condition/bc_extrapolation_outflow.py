@@ -1,5 +1,14 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Extrapolation outflow boundary condition.
+
+Uses first-order extrapolation from the interior to set the unknown
+populations at outflow boundaries, avoiding strong wave reflections.
+
+Reference
+---------
+Geier, M. et al. (2015). "The cumulant lattice Boltzmann equation in
+three dimensions: Theory and validation." *Computers & Mathematics
+with Applications*, 70(4), 507-547.
 """
 
 import jax.numpy as jnp

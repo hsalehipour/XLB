@@ -1,3 +1,13 @@
+"""
+Grid abstraction and factory functions for XLB.
+
+Defines the :class:`Grid` abstract base class that every backend-specific
+grid must implement, plus two factory helpers:
+
+* :func:`grid_factory` — creates a single-resolution grid for any backend.
+* :func:`multires_grid_factory` — creates a multi-resolution grid (Neon only).
+"""
+
 from abc import ABC, abstractmethod
 from typing import Tuple, List
 import numpy as np
@@ -13,6 +23,24 @@ def grid_factory(
     velocity_set=None,
     backend_config=None,
 ):
+    """Create a single-resolution grid for the specified backend.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Domain dimensions, e.g. ``(nx, ny, nz)``.
+    compute_backend : ComputeBackend, optional
+        Backend to use.  Defaults to ``DefaultConfig.default_backend``.
+    velocity_set : VelocitySet, optional
+        Required for the Neon backend.
+    backend_config : dict, optional
+        Backend-specific configuration (Neon only).
+
+    Returns
+    -------
+    Grid
+        A backend-specific grid instance.
+    """
     compute_backend = compute_backend or DefaultConfig.default_backend
     velocity_set = velocity_set or DefaultConfig.velocity_set
     if compute_backend == ComputeBackend.WARP:
@@ -38,6 +66,26 @@ def multires_grid_factory(
     sparsity_pattern_list: List[np.ndarray] = [],
     sparsity_pattern_origins: List[neon.Index_3d] = [],
 ):
+    """Create a multi-resolution grid (Neon backend only).
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Bounding-box dimensions at the finest level.
+    compute_backend : ComputeBackend, optional
+        Must be ``ComputeBackend.NEON``.
+    velocity_set : VelocitySet, optional
+        Lattice velocity set.
+    sparsity_pattern_list : list of np.ndarray
+        Active-voxel masks, one per level (finest first).
+    sparsity_pattern_origins : list of neon.Index_3d
+        Origin of each level's pattern in finest-level coordinates.
+
+    Returns
+    -------
+    NeonMultiresGrid
+        A multi-resolution Neon grid.
+    """
     compute_backend = compute_backend or DefaultConfig.default_backend
     velocity_set = velocity_set or DefaultConfig.velocity_set
     if compute_backend == ComputeBackend.NEON:
@@ -51,6 +99,20 @@ def multires_grid_factory(
 
 
 class Grid(ABC):
+    """Abstract base class for all XLB computational grids.
+
+    Subclasses must implement :meth:`_initialize_backend` to set up the
+    backend-specific data structures and :meth:`create_field` (not
+    enforced by ABC but expected by all operators).
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Domain dimensions.
+    compute_backend : ComputeBackend
+        The compute backend this grid is associated with.
+    """
+
     def __init__(
         self,
         shape: Tuple[int, ...],
@@ -66,6 +128,7 @@ class Grid(ABC):
         pass
 
     def get_compute_backend(self):
+        """Return the compute backend associated with this grid."""
         return self.compute_backend
 
     def bounding_box_indices(self, shape=None, remove_edges=False):

@@ -1,3 +1,19 @@
+"""
+MLUPS benchmark for the multi-resolution LBM solver.
+
+Runs a lid-driven cavity simulation on a multi-resolution Neon grid and
+reports the Equivalent Million Lattice Updates Per Second (EMLUPS).
+
+Usage::
+
+    python mlups_3d_multires.py <cube_edge> <num_steps> neon <precision> \\
+           <num_levels> <mres_perf_opt> [options]
+
+Example::
+
+    python mlups_3d_multires.py 100 1000 neon fp32/fp32 2 NAIVE_COLLIDE_STREAM
+"""
+
 import xlb
 import argparse
 import time
@@ -14,6 +30,7 @@ from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 def parse_arguments():
+    """Parse and validate command-line arguments."""
     parser = argparse.ArgumentParser(
         description="MLUPS for 3D Lattice Boltzmann Method Simulation with Multi-resolution Grid",
         epilog="""
@@ -82,6 +99,7 @@ Valid values:
 
 
 def print_args(args):
+    """Print the simulation configuration to stdout."""
     # Print simulation configuration
     print("=" * 60)
     print("           3D LATTICE BOLTZMANN SIMULATION CONFIG")
@@ -104,6 +122,13 @@ def print_args(args):
 
 
 def setup_simulation(args):
+    """Initialize XLB globals (velocity set, backend, precision) from CLI args.
+
+    Returns
+    -------
+    VelocitySet
+        The configured lattice velocity set.
+    """
     compute_backend = None
     if args.compute_backend == "neon":
         compute_backend = ComputeBackend.NEON
@@ -137,7 +162,28 @@ def setup_simulation(args):
     return velocity_set
 
 
-def problem1(grid_shape, velocity_set, num_levels):
+def ldc_multires_setup(grid_shape, velocity_set, num_levels):
+    """Lid-driven cavity with refinement peeling inward from the boundary.
+
+    Each finer level covers only the outermost shell of its parent,
+    concentrating resolution near the walls.
+
+    Parameters
+    ----------
+    grid_shape : tuple of int
+        Domain size at the finest level.
+    velocity_set : VelocitySet
+        Lattice velocity set.
+    num_levels : int
+        Number of refinement levels.
+
+    Returns
+    -------
+    grid : NeonMultiresGrid
+    lid : list of index arrays (per level)
+    walls : list of index arrays (per level)
+    """
+
     def peel(dim, idx, peel_level, outwards):
         if outwards:
             xIn = idx.x <= peel_level or idx.x >= dim.x - 1 - peel_level
@@ -204,43 +250,6 @@ def problem1(grid_shape, velocity_set, num_levels):
     return grid, lid, walls
 
 
-def problem2(grid_shape, velocity_set, num_levels):
-    # Example 2: Coarsest at the edges (2 level only)
-    level_origins = []
-    level_list = []
-    for lvl in range(num_levels):
-        divider = 2**lvl
-        growth = 1.5**lvl
-        shape = grid_shape[0] // divider, grid_shape[1] // divider, grid_shape[2] // divider
-        if lvl == num_levels - 1:
-            level = np.ascontiguousarray(np.ones(shape, dtype=int), dtype=np.int32)
-            box_origin = (0, 0, 0)  # The coarsest level has no origin offset
-        else:
-            box_size = tuple([int(shape[i] // 4 * growth) for i in range(3)])
-            box_origin = tuple([shape[i] // 2 - box_size[i] // 2 for i in range(3)])
-            level = np.ascontiguousarray(np.ones(box_size, dtype=int), dtype=np.int32)
-        level_list.append(level)
-        level_origins.append(neon.Index_3d(*box_origin))
-
-    # Create the multires grid
-    grid = multires_grid_factory(
-        grid_shape,
-        velocity_set=velocity_set,
-        sparsity_pattern_list=level_list,
-        sparsity_pattern_origins=level_origins,
-    )
-
-    box = grid.bounding_box_indices(shape=grid.level_to_shape(num_levels - 1))
-    box_no_edge = grid.bounding_box_indices(shape=grid.level_to_shape(1), remove_edges=True)
-    lid = box_no_edge["top"]
-    walls = [box["bottom"][i] + box["left"][i] + box["right"][i] + box["front"][i] + box["back"][i] for i in range(len(grid.shape))]
-    walls = np.unique(np.array(walls), axis=-1).tolist()
-    # convert bc indices to a list of list, where the first entry of the list corresponds to the finest level
-    lid = [[] for _ in range(num_levels - 1)] + [lid]
-    walls = [[] for _ in range(num_levels - 1)] + [walls]
-    return grid, lid, walls
-
-
 def run(
     velocity_set,
     grid_shape,
@@ -250,19 +259,15 @@ def run(
     export_final_velocity,
     mres_perf_opt,
 ):
+    """Set up and execute the benchmark simulation.
+
+    Returns
+    -------
+    dict
+        ``{"time": elapsed_seconds, "num_levels": int}``
+    """
     # Create grid and setup boundary conditions
-
-    # Convert indices to list of indices per level
-    # TODO: overlaps emerge if bc indices are orignally specified at the finest grid and they exist at the coarser levels
-    # levels_mask = [lvl.astype(bool) for lvl in levels]
-    # lid = construct_indices_per_level(grid_shape, lid, levels_mask, level_origins)
-    # walls = construct_indices_per_level(grid_shape, walls, levels_mask, level_origins)
-
-    # Example 1: fine to coarse
-    # grid, lid, walls = problem1(grid_shape, velocity_set, num_levels)
-
-    # Example 2: Coarse to fine:
-    grid, lid, walls = problem1(grid_shape, velocity_set, num_levels)
+    grid, lid, walls = ldc_multires_setup(grid_shape, velocity_set, num_levels)
 
     prescribed_vel = 0.1
     boundary_conditions = [
@@ -313,6 +318,16 @@ def run(
 
 
 def calculate_mlups(cube_edge, num_steps, elapsed_time, num_levels):
+    """Compute the Equivalent Million Lattice Updates Per Second (EMLUPS).
+
+    The metric accounts for the fact that finer levels are stepped
+    2^(num_levels-1) times per coarsest-level step.
+
+    Returns
+    -------
+    dict
+        ``{"EMLUPS": float, "finer_steps": int}``
+    """
     num_step_finer = num_steps * 2 ** (num_levels - 1)
     total_lattice_updates = cube_edge**3 * num_step_finer
     mlups = (total_lattice_updates / elapsed_time) / 1e6

@@ -1,3 +1,11 @@
+"""
+Single-resolution dense grid backed by the Neon multi-GPU runtime.
+
+This module wraps ``neon.dense.dGrid`` and exposes it through the
+:class:`Grid` interface so that XLB operators can allocate and operate on
+fields transparently.
+"""
+
 import neon
 from .grid import Grid
 from xlb.precision_policy import Precision
@@ -7,10 +15,28 @@ from xlb import DefaultConfig
 
 
 class NeonGrid(Grid):
+    """Dense single-resolution grid on the Neon backend.
+
+    Wraps a ``neon.dense.dGrid``.  The grid is initialized with the LBM
+    stencil derived from the provided *velocity_set* so that Neon can
+    set up the correct halo exchanges for neighbour communication.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Bounding-box dimensions of the domain ``(nx, ny, nz)`` (or
+        ``(nx, ny)`` for 2-D).
+    velocity_set : VelocitySet
+        Lattice velocity set whose stencil defines neighbour connectivity.
+    backend_config : dict, optional
+        Neon backend configuration.  Must contain ``"device_list"`` (list
+        of GPU device indices).  Defaults to ``{"device_list": [0]}``.
+    """
+
     def __init__(
         self,
-        shape,  # bounding box of the domain
-        velocity_set,  # velocity set for the grid
+        shape,
+        velocity_set,
         backend_config=None,
     ):
         from .warp_grid import WarpGrid
@@ -76,6 +102,24 @@ class NeonGrid(Grid):
         dtype: Literal[Precision.FP32, Precision.FP64, Precision.FP16] = None,
         fill_value=None,
     ):
+        """Allocate a new Neon field on this grid.
+
+        Parameters
+        ----------
+        cardinality : int
+            Number of components per voxel (e.g. ``q`` for populations).
+        dtype : Precision, optional
+            Element precision.  Defaults to the store precision from the
+            global config.
+        fill_value : float, optional
+            If provided every element is set to this value; otherwise the
+            field is zero-initialized.
+
+        Returns
+        -------
+        neon.dense.dField
+            The newly allocated field.
+        """
         dtype = dtype.wp_dtype if dtype else DefaultConfig.default_precision_policy.store_precision.wp_dtype
         field = self.grid.new_field(
             cardinality=cardinality,
@@ -89,4 +133,5 @@ class NeonGrid(Grid):
         return field
 
     def get_neon_backend(self):
+        """Return the underlying ``neon.Backend`` instance."""
         return self.bk

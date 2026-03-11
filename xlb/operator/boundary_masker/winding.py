@@ -1,3 +1,11 @@
+"""
+Winding-number mesh-based boundary masker.
+
+Uses the generalized winding-number test (``warp.mesh_query_point``) to
+classify voxels as inside or outside the mesh, providing a
+solid-detection method even for non-watertight geometries.
+"""
+
 import warp as wp
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
@@ -10,7 +18,7 @@ from xlb.cell_type import BC_SOLID
 
 class MeshMaskerWinding(MeshBoundaryMasker):
     """
-    Operator for creating a boundary missing_mask from an STL file
+    Operator for creating a boundary missing_mask from a mesh file
     """
 
     def __init__(

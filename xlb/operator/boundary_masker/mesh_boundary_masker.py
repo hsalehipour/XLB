@@ -1,4 +1,9 @@
-# Base class for mesh masker operators
+"""
+Abstract base class for mesh-based boundary maskers.
+
+Provides shared input preparation logic (mesh construction, kernel arrays)
+used by AABB, Ray, Winding, and AABB-Close masker subclasses.
+"""
 
 import numpy as np
 import warp as wp
@@ -12,7 +17,7 @@ from xlb.operator.boundary_masker.helper_functions_masker import HelperFunctions
 
 class MeshBoundaryMasker(Operator):
     """
-    Operator for creating a boundary missing_mask from an STL file
+    Operator for creating a boundary missing_mask from a mesh file
     """
 
     def __init__(

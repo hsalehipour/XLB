@@ -1,3 +1,7 @@
+"""
+Collision operator with external body-force correction.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -11,8 +15,19 @@ from xlb.operator.force import ExactDifference
 
 
 class ForcedCollision(Collision):
-    """
-    A collision operator for LBM with external force.
+    """Collision operator that wraps another collision with a forcing term.
+
+    After the inner collision the forcing operator is applied to
+    incorporate the effect of an external body force.
+
+    Parameters
+    ----------
+    collision_operator : Operator
+        The base collision operator (e.g. :class:`BGK`).
+    forcing_scheme : str
+        Forcing scheme.  Currently only ``"exact_difference"`` is supported.
+    force_vector : array-like
+        External force vector of length ``d`` (number of spatial dimensions).
     """
 
     def __init__(

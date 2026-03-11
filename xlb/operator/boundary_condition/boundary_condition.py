@@ -1,5 +1,9 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Base class for boundary conditions in a Lattice Boltzmann simulation.
+
+Every concrete BC inherits from :class:`BoundaryCondition`, which provides
+a registration mechanism, helper-function access, and the boilerplate
+needed to encode auxiliary data into the ``f_1`` buffer.
 """
 
 from enum import Enum, auto
@@ -20,15 +24,36 @@ from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizati
 import neon
 
 
-# Enum for implementation step
 class ImplementationStep(Enum):
+    """At which algorithmic stage the boundary condition is applied."""
+
     COLLISION = auto()
     STREAMING = auto()
 
 
 class BoundaryCondition(Operator):
-    """
-    Base class for boundary conditions in a LBM simulation.
+    """Abstract base class for all LBM boundary conditions.
+
+    Each BC is registered with a unique numeric *id* and annotated with:
+
+    * ``implementation_step`` - whether it executes after streaming or after
+      collision.
+    * ``needs_aux_recovery`` / ``needs_aux_init`` - whether the BC stores
+      auxiliary data in the ``f_1`` distribution buffer.
+
+    Parameters
+    ----------
+    implementation_step : ImplementationStep
+        Phase in the LBM algorithm where this BC is applied.
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    indices : array-like, optional
+        Explicit voxel indices for this BC.
+    mesh_vertices : array-like, optional
+        Mesh vertices for geometry-based BCs.
+    voxelization_method : MeshVoxelizationMethod, optional
+        Voxelization strategy when *mesh_vertices* is provided.
     """
 
     def __init__(

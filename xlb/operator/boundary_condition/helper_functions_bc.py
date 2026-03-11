@@ -1,3 +1,16 @@
+"""
+Warp/Neon helper functions shared by multiple boundary conditions.
+
+:class:`HelperFunctionsBC` exposes ``@wp.func`` helpers for bounce-back,
+regularization, Grad's approximation, moving-wall corrections,
+interpolated BCs, and BC thread-data loading.  These are used as building
+blocks by the concrete BC classes.
+
+Also contains :class:`EncodeAuxiliaryData` and
+:class:`MultiresEncodeAuxiliaryData` operators for writing user-prescribed
+BC profiles into the ``f_1`` buffer during initialization.
+"""
+
 import inspect
 from typing import Any, Callable
 
@@ -14,6 +27,18 @@ from xlb.operator.equilibrium import QuadraticEquilibrium
 
 
 class HelperFunctionsBC(object):
+    """Collection of Warp/Neon ``@wp.func`` helpers for boundary conditions.
+
+    Parameters
+    ----------
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+        Must be ``WARP`` or ``NEON`` (JAX not supported).
+    distance_decoder_function : callable, optional
+        Function to decode wall-distance data for interpolated BCs.
+    """
+
     def __init__(self, velocity_set=None, precision_policy=None, compute_backend=None, distance_decoder_function=None):
         if compute_backend == ComputeBackend.JAX:
             raise ValueError("This helper class contains helper functions only for the WARP implementation of some BCs not JAX!")

@@ -1,11 +1,18 @@
+"""
+Warp/Neon helper functions shared by boundary masker operators.
+"""
+
 import warp as wp
 from typing import Any
 from xlb import DefaultConfig, ComputeBackend
 
 
 class HelperFunctionsMasker(object):
-    """
-    A collection of helper functions used for the boundary masker operators.
+    """Warp ``@wp.func`` helpers for boundary masker operators.
+
+    Provides coordinate-conversion, bounds-checking, pull-index
+    computation, and BC-index membership tests used by the mesh and
+    indices boundary maskers on both Warp and Neon backends.
     """
 
     def __init__(self, velocity_set=None, precision_policy=None, compute_backend=None):

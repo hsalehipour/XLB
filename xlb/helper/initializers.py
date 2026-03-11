@@ -1,3 +1,17 @@
+"""
+Initializers for distribution function fields.
+
+Provides helper functions and Operator subclasses that populate
+distribution-function fields with equilibrium values.  Two usage patterns
+are supported:
+
+* **Functional helpers** (`initialize_eq`, `initialize_multires_eq`) —
+  one-shot initialization used during simulation setup.
+* **Operator classes** (`CustomInitializer`, `CustomMultiresInitializer`) —
+  reusable operators that can target the whole domain or a single boundary
+  condition region, with support for JAX, Warp, and Neon backends.
+"""
+
 import warp as wp
 from typing import Any
 from xlb import DefaultConfig
@@ -10,6 +24,35 @@ import neon
 
 
 def initialize_eq(f, grid, velocity_set, precision_policy, compute_backend, rho=None, u=None):
+    """Initialize a distribution-function field to equilibrium.
+
+    Computes the quadratic equilibrium for the given density and velocity
+    fields and writes it into *f*.  When *rho* or *u* are ``None`` the
+    defaults are uniform density 1 and zero velocity.
+
+    Parameters
+    ----------
+    f : field
+        Distribution-function field to populate (modified in-place for
+        Warp / Neon backends; replaced for JAX).
+    grid : Grid
+        Computational grid used to allocate temporary fields.
+    velocity_set : VelocitySet
+        Lattice velocity set (e.g. D3Q19).
+    precision_policy : PrecisionPolicy
+        Precision policy for compute / store dtypes.
+    compute_backend : ComputeBackend
+        Active compute backend (JAX, WARP, or NEON).
+    rho : field, optional
+        Density field.  Defaults to uniform 1.0.
+    u : field, optional
+        Velocity field.  Defaults to uniform 0.0.
+
+    Returns
+    -------
+    field
+        The initialized distribution-function field.
+    """
     if rho is None:
         rho = grid.create_field(cardinality=1, fill_value=1.0, dtype=precision_policy.compute_precision)
     if u is None:
@@ -31,12 +74,59 @@ def initialize_eq(f, grid, velocity_set, precision_policy, compute_backend, rho=
 
 
 def initialize_multires_eq(f, grid, velocity_set, precision_policy, backend, rho, u):
+    """Initialize a multi-resolution distribution-function field to equilibrium.
+
+    Parameters
+    ----------
+    f : field
+        Multi-resolution distribution-function field to populate.
+    grid : NeonMultiresGrid
+        Multi-resolution grid.
+    velocity_set : VelocitySet
+        Lattice velocity set.
+    precision_policy : PrecisionPolicy
+        Precision policy.
+    backend : ComputeBackend
+        Compute backend (expected to be NEON).
+    rho : field
+        Density field across all grid levels.
+    u : field
+        Velocity field across all grid levels.
+
+    Returns
+    -------
+    field
+        The initialized multi-resolution distribution-function field.
+    """
     equilibrium = MultiresQuadraticEquilibrium()
     return equilibrium(rho, u, f, stream=0)
 
 
-# Defining an initializer operator that initializes the entire domain or the specified BC to a constant velocity and density
 class CustomInitializer(Operator):
+    """Operator that initializes distribution functions to equilibrium.
+
+    When ``bc_id == -1`` (default) the entire domain is initialized with the
+    given constant velocity and density.  Otherwise only voxels whose
+    ``bc_mask`` matches *bc_id* are set while the rest receive the
+    weight-only equilibrium (zero velocity, unit density).
+
+    Supports JAX, Warp, and Neon backends.
+
+    Parameters
+    ----------
+    constant_velocity_vector : list of float
+        Macroscopic velocity [ux, uy, uz] used for initialization.
+    constant_density : float
+        Macroscopic density used for initialization.
+    bc_id : int
+        Boundary-condition ID to target.  ``-1`` means the whole domain.
+    initialization_operator : Operator, optional
+        Equilibrium operator to use.  Defaults to ``QuadraticEquilibrium``.
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    """
+
     def __init__(
         self,
         constant_velocity_vector=[0.0, 0.0, 0.0],
@@ -163,8 +253,13 @@ class CustomInitializer(Operator):
         return f_field
 
 
-# Defining an initializer for outlet only
 class CustomMultiresInitializer(CustomInitializer):
+    """Multi-resolution variant of :class:`CustomInitializer`.
+
+    Iterates over all grid levels and initializes distribution functions
+    using the Neon multi-resolution container API.
+    """
+
     def __init__(
         self,
         constant_velocity_vector=[0.0, 0.0, 0.0],

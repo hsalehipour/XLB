@@ -1,3 +1,10 @@
+"""
+Multi-resolution indices-based boundary masker for the Neon backend.
+
+Creates boundary masks from explicit voxel indices on multi-resolution
+grids, computing missing-population masks for each tagged voxel.
+"""
+
 from typing import Any
 import copy
 import numpy as np

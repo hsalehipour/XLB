@@ -1,3 +1,7 @@
+"""
+Multi-resolution quadratic equilibrium operator for the Neon backend.
+"""
+
 import warp as wp
 import neon
 from typing import Any
@@ -7,9 +11,11 @@ from xlb.operator import Operator
 
 
 class MultiresQuadraticEquilibrium(QuadraticEquilibrium):
-    """
-    Quadratic equilibrium of Boltzmann equation using hermite polynomials.
-    Standard equilibrium model for LBM.
+    """Quadratic equilibrium operator for multi-resolution grids (Neon only).
+
+    Computes the second-order Hermite-polynomial equilibrium distribution
+    from density and velocity at every active cell on each grid level.
+    Cells that have child refinement (halo cells) are zeroed out.
     """
 
     def __init__(self, *args, **kwargs):
