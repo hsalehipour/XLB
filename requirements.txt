@@ -11,3 +11,4 @@ nvtx
 pytest
 ruff
 usd-core
+h5py
