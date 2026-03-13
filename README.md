@@ -29,8 +29,7 @@ pip install "xlb[tpu]"
 ```
 
 ### Installation with Neon support 
-Neon backend enables multi-GPU dense and single-GPU multi-resolution representations.
-At the moment Neon depends on an ad-hoc fork of warp-lang, therefore we need to first remove any current warp installation before installing Neon. The Python interface for Neon can be fetched from a wheel stored on GitHub. 
+Neon backend enables multi-GPU dense and single-GPU multi-resolution representations. Neon depends on a custom fork of warp-lang, so any existing warp installation must be removed before installing Neon. The Python interface for Neon can be installed from a pre-built wheel hosted on GitHub. Note that the wheel currently requires GLIBC >= 2.38 (e.g., Ubuntu 24.04 or later).
 
 ```bash
 pip uninstall warp-lang

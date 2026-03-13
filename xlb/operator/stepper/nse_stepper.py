@@ -547,7 +547,6 @@ class IncompressibleNavierStokesStepper(Stepper):
             f_0_pn: Any,
             f_1_pn: Any,
         ):
-
             # Note:
             # In XLB, the BC auxiliary data (e.g. prescribed values of pressure or normal velocity) are stored in (i) central index of f_1 and/or
             # (ii) missing directions of f_1. Some BCs may or may not need all these available storage space. This function checks whether

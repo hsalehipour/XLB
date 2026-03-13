@@ -115,9 +115,12 @@ class IndicesBoundaryMasker(Operator):
 
                 # The missing mask is set to True meaning (exterior or solid nodes) using the original indices.
                 # This is because of the following streaming step which will assign missing directions for the boundary nodes.
-                missing_mask_extended = missing_mask_extended.at[:, solid_indices_shifted[0], solid_indices_shifted[1], solid_indices_shifted[2]].set(
-                    True
-                )
+                if dim == 2:
+                    missing_mask_extended = missing_mask_extended.at[:, solid_indices_shifted[0], solid_indices_shifted[1]].set(True)
+                else:
+                    missing_mask_extended = missing_mask_extended.at[
+                        :, solid_indices_shifted[0], solid_indices_shifted[1], solid_indices_shifted[2]
+                    ].set(True)
             else:
                 indices_shifted = bc_indices - indices_origin + shift
 
