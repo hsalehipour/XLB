@@ -61,7 +61,7 @@ class MultiresMacroscopic(Macroscopic):
                     _boundary_id = wp.neon_read(bc_mask_pn, gIdx, 0)
 
                     for l in range(self.velocity_set.q):
-                        _f[l] = wp.neon_read(f, gIdx, l)
+                        _f[l] = self.compute_dtype(wp.neon_read(f, gIdx, l))
 
                     _rho, _u = functional(_f)
 
@@ -70,9 +70,9 @@ class MultiresMacroscopic(Macroscopic):
                         for d in range(_d):
                             _u[d] = self.compute_dtype(0.0)
 
-                    wp.neon_write(rho, gIdx, 0, _rho)
+                    wp.neon_write(rho, gIdx, 0, self.store_dtype(_rho))
                     for d in range(_d):
-                        wp.neon_write(u, gIdx, d, _u[d])
+                        wp.neon_write(u, gIdx, d, self.store_dtype(_u[d]))
 
                 loader.declare_kernel(macroscopic_cl)
 

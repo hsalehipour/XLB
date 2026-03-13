@@ -94,11 +94,11 @@ class Macroscopic(Operator):
                 def macroscopic_cl(gIdx: typing.Any):
                     _f = _f_vec()
                     for l in range(self.velocity_set.q):
-                        _f[l] = wp.neon_read(f, gIdx, l)
+                        _f[l] = self.compute_dtype(wp.neon_read(f, gIdx, l))
                     _rho, _u = functional(_f)
-                    wp.neon_write(rho, gIdx, 0, _rho)
+                    wp.neon_write(rho, gIdx, 0, self.store_dtype(_rho))
                     for d in range(_d):
-                        wp.neon_write(u, gIdx, d, _u[d])
+                        wp.neon_write(u, gIdx, d, self.store_dtype(_u[d]))
 
                 loader.declare_kernel(macroscopic_cl)
 

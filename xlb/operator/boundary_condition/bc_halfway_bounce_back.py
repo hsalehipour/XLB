@@ -89,7 +89,7 @@ class HalfwayBounceBackBC(BoundaryCondition):
             if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
                 if self.velocity_set.d == 2:
                     prescribed_value = np.array([prescribed_value[0], prescribed_value[1], 0.0], dtype=np.float64)
-                prescribed_value = wp.vec(3, dtype=self.store_dtype)(prescribed_value)
+                prescribed_value = wp.vec(3, dtype=self.compute_dtype)(prescribed_value)
             self.profile = self._create_constant_prescribed_profile(prescribed_value)
 
     def _create_constant_prescribed_profile(self, prescribed_value):

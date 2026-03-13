@@ -143,7 +143,7 @@ class Stream(Operator):
                 unused_is_valid = wp.bool(False)
 
                 # Read the distribution function from the neighboring cell in the pull direction
-                _f[l] = wp.neon_read_ngh(f, index, ngh, l, self.compute_dtype(0), unused_is_valid)
+                _f[l] = self.compute_dtype(wp.neon_read_ngh(f, index, ngh, l, self.store_dtype(0), unused_is_valid))
             return _f
 
         return functional, None

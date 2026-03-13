@@ -481,7 +481,6 @@ class IncompressibleNavierStokesStepper(Stepper):
         _missing_mask_vec = wp.vec(self.velocity_set.q, dtype=wp.uint8)
         _opp_indices = self.velocity_set.opp_indices
         lattice_central_index = self.velocity_set.center_index
-        # _cast_to_store_dtype = self.store_dtype()
 
         # Read the list of bc_to_id created upon instantiation
         bc_to_id = boundary_condition_registry.bc_to_id
@@ -577,8 +576,6 @@ class IncompressibleNavierStokesStepper(Stepper):
             omega: Any,
             timestep: int,
         ):
-            cast_to_store_dtype = self.store_dtype
-
             def nse_stepper_ll(loader: neon.Loader):
                 loader.set_grid(bc_mask_fd.get_grid())
 
@@ -620,7 +617,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
                     # Store the result in f_1
                     for l in range(self.velocity_set.q):
-                        wp.neon_write(f_1_pn, index, l, _f_post_collision[l])
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_collision[l]))
 
                 loader.declare_kernel(nse_stepper_cl)
 

@@ -179,18 +179,18 @@ class CustomInitializer(Operator):
             if self.read_field(bc_mask, index, 0) == bc_id:
                 _f_init = self.initialization_operator.warp_functional(_rho, _u)
                 for l in range(_q):
-                    self.write_field(f_field, index, l, _f_init[l])
+                    self.write_field(f_field, index, l, self.store_dtype(_f_init[l]))
             else:
                 # In the rest of the domain, we assume zero velocity and equilibrium distribution.
                 for l in range(_q):
-                    self.write_field(f_field, index, l, _w[l])
+                    self.write_field(f_field, index, l, self.store_dtype(_w[l]))
 
         @wp.func
         def functional_domain(index: Any, bc_mask: Any, f_field: Any):
             # If bc_id is -1, initialize the entire domain according to the custom initialization operator for the given velocity
             _f_init = self.initialization_operator.warp_functional(_rho, _u)
             for l in range(_q):
-                self.write_field(f_field, index, l, _f_init[l])
+                self.write_field(f_field, index, l, self.store_dtype(_f_init[l]))
 
         # Set the functional based on whether we are initializing a specific BC or the entire domain
         functional = functional_local if self.bc_id != -1 else functional_domain
