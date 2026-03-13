@@ -290,7 +290,7 @@ class MomentumTransfer(Operator):
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, f_0, f_1, bc_mask, missing_mask):
         # Ensure the force is initialized to zero
-        self.force *= 0.0
+        self.force *= self.compute_dtype(0.0)
 
         # Define the warp functionals needed for this operation
         self.fetcher_functional = self.fetcher.warp_functional
@@ -350,7 +350,7 @@ class MomentumTransfer(Operator):
         stream=0,
     ):
         # Ensure the force is initialized to zero
-        self.force *= 0.0
+        self.force *= self.compute_dtype(0.0)
 
         # Define the neon functionals needed for this operation
         self.fetcher_functional = self.fetcher.neon_functional

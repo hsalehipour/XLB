@@ -238,7 +238,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
                     # The following is the post-streaming values of the neighbor cell
                     # This function reads a field value at a given neighboring index and direction.
                     unused_is_valid = wp.bool(False)
-                    f_aux = self.compute_dtype(wp.neon_read_ngh(f_0, index, offset_pull_index, lattice_dir, self.compute_dtype(0.0), unused_is_valid))
+                    f_aux = self.compute_dtype(wp.neon_read_ngh(f_0, index, offset_pull_index, lattice_dir, self.store_dtype(0.0), unused_is_valid))
                     _f[_opp_indices[lattice_dir]] = (self.compute_dtype(1.0) - sound_speed) * _f_pre[lattice_dir] + sound_speed * f_aux
             return _f
 
