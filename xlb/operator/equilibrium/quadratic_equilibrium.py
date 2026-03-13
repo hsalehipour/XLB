@@ -4,7 +4,6 @@ from jax import jit
 import warp as wp
 import os
 
-import neon
 from typing import Any
 
 from xlb.compute_backend import ComputeBackend
@@ -104,7 +103,7 @@ class QuadraticEquilibrium(Equilibrium):
         return f
 
     def _construct_neon(self):
-        import neon, typing
+        import neon
 
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()

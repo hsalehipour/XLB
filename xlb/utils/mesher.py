@@ -15,7 +15,6 @@ import numpy as np
 import trimesh
 from typing import Any, Optional
 
-import neon
 import warp as wp
 from xlb.utils.utils import UnitConvertor
 
@@ -483,6 +482,7 @@ class MultiresIO(object):
         Constructs a NEON container for exporting multi-resolution data to HDF5.
         This container will be used to transfer multi-resolution NEON fields into stacked warp fields.
         """
+        import neon
 
         @neon.Container.factory(name="HDF5MultiresExporter")
         def container(

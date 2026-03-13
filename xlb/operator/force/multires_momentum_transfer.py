@@ -5,7 +5,6 @@ Multi-resolution momentum-transfer force operator for the Neon backend.
 from typing import Any
 
 import warp as wp
-import neon
 
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -76,6 +75,8 @@ class MultiresMomentumTransfer(MomentumTransfer):
         super().__init__(no_slip_bc_instance, operation_sequence, velocity_set, precision_policy, compute_backend)
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 

@@ -28,6 +28,17 @@ This installation is for the JAX backend with TPU support:
 pip install "xlb[tpu]"
 ```
 
+### Installation with Neon support 
+Neon backend enables multi-GPU dense and single-GPU multi-resolution representations.
+At the moment Neon depends on an ad-hoc fork of warp-lang, therefore we need to first remove any current warp installation before installing Neon. The Python interface for Neon can be fetched from a wheel stored on GitHub. 
+
+```bash
+pip uninstall warp-lang
+pip install https://github.com/Autodesk/Neon/releases/download/v0.5.2a1/neon_gpu-0.5.2a1-cp312-cp312-linux_x86_64.whl
+```
+
+
+
 ### Notes:
 - For Mac users: Use the basic CPU installation command as JAX's GPU support is not available on MacOS
 - The NVIDIA Warp backend is included in all installation options and supports CUDA automatically when available

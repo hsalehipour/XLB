@@ -21,7 +21,6 @@ from xlb import DefaultConfig
 from xlb.operator.boundary_condition.boundary_condition_registry import boundary_condition_registry
 from xlb.operator.boundary_condition import HelperFunctionsBC
 from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
-import neon
 
 
 class ImplementationStep(Enum):

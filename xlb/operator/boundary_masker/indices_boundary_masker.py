@@ -12,7 +12,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import warp as wp
-import neon
 
 from xlb.compute_backend import ComputeBackend
 from xlb.grid import grid_factory
@@ -414,6 +413,8 @@ class IndicesBoundaryMasker(Operator):
         return bc_mask, missing_mask
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional_dict, _ = self._construct_warp()
         functional_domain_bounds = functional_dict.get("functional_domain_bounds")

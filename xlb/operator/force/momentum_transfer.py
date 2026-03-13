@@ -10,7 +10,6 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.stream import Stream
-import neon
 
 
 # Enum used to keep track of LBM operations
@@ -304,6 +303,8 @@ class MomentumTransfer(Operator):
         return self.force.numpy()[0]
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 

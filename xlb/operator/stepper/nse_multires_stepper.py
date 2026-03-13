@@ -68,7 +68,6 @@ Cell types are defined in `xlb.cell_type`:
 
 import nvtx
 import warp as wp
-import neon
 from typing import Any
 
 from xlb import DefaultConfig
@@ -157,6 +156,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         self.macroscopic = MultiresMacroscopic(self.velocity_set, self.precision_policy, self.compute_backend)
 
     def prepare_fields(self, rho, u, initializer=None):
+        import neon
+
         """Prepare the fields required for the stepper.
 
         Args:

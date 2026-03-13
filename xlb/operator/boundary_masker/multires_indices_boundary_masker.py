@@ -16,7 +16,6 @@ from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker import IndicesBoundaryMasker
-import neon
 
 
 class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
@@ -139,6 +138,8 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, bclist, bc_mask, missing_mask, start_index=None):
+        import neon
+
         grid = bc_mask.get_grid()
         num_levels = grid.num_levels
         grid_shape_finest = self.helper_masker.get_grid_shape(bc_mask)

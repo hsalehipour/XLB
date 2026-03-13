@@ -64,7 +64,7 @@ class Macroscopic(Operator):
         return rho, u
 
     def _construct_neon(self):
-        import neon, typing
+        import neon
 
         # Redefine the zero and first moment operators for the neon backend
         # This is because the neon backend relies on the warp functionals for its operations.

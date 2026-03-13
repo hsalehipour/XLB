@@ -9,7 +9,6 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker import MeshMaskerRay
 from xlb.operator.operator import Operator
-import neon
 
 
 class MultiresMeshMaskerRay(MeshMaskerRay):
@@ -78,6 +77,8 @@ class MultiresMeshMaskerRay(MeshMaskerRay):
         missing_mask,
         stream=0,
     ):
+        import neon
+
         # Prepare inputs
         mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
 

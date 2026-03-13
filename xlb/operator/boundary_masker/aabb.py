@@ -6,7 +6,6 @@ one-voxel-thick surface detection around the geometry.
 """
 
 import warp as wp
-import neon
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -143,6 +142,8 @@ class MeshMaskerAABB(MeshBoundaryMasker):
         )
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 

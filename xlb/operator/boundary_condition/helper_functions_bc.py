@@ -15,7 +15,6 @@ import inspect
 from typing import Any, Callable
 
 import warp as wp
-import neon
 
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -500,6 +499,8 @@ class EncodeAuxiliaryData(Operator):
         return functional_dict, kernel
 
     def _construct_neon(self):
+        import neon
+
         """
         Constructs the Neon container for encoding auxiliary data recovery.
         """

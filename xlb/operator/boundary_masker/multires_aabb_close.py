@@ -6,7 +6,6 @@ dilate-then-erode operations to fill narrow channels with solid voxels.
 """
 
 import warp as wp
-import neon
 from typing import Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -40,6 +39,8 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
         self.neon_functional_dict, self.neon_container_dict = self._construct_neon()
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functionals from the base (for reference), but implement NEON variants here
         functional_dict_warp, _ = self._construct_warp()
         functional_erode_warp = functional_dict_warp.get("functional_erode")

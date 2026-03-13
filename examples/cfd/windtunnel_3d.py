@@ -21,7 +21,6 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
 
-import neon
 
 # -------------------------- Simulation Setup --------------------------
 
@@ -30,7 +29,7 @@ grid_size_x, grid_size_y, grid_size_z = 512, 128, 128
 grid_shape = (grid_size_x, grid_size_y, grid_size_z)
 
 # Simulation Configuration
-compute_backend = ComputeBackend.NEON
+compute_backend = ComputeBackend.WARP
 precision_policy = PrecisionPolicy.FP32FP32
 
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
@@ -111,7 +110,8 @@ boundary_conditions = [bc_walls, bc_left, bc_do_nothing, bc_car]
 
 
 # Configure backend options:
-backend_config = {"occ": neon.SkeletonConfig.OCC.from_string("standard"), "device_list": [0, 1]} if compute_backend == ComputeBackend.NEON else {}
+# backend_config = {"occ": neon.SkeletonConfig.OCC.from_string("standard"), "device_list": [0, 1]} if compute_backend == ComputeBackend.NEON else {}
+backend_config = {}
 
 # Setup Stepper
 stepper = IncompressibleNavierStokesStepper(
