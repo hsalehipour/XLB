@@ -7,7 +7,6 @@ precomputation, and the recursive time-stepping skeleton that correctly
 interleaves coarse and fine grid updates.
 """
 
-import neon
 import warp as wp
 from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
 from xlb.operator.macroscopic import MultiresMacroscopic
@@ -171,6 +170,8 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             self.add_to_app(app=app, op_name=op_name, level=level, **fields_swapped, **extra)
 
     def _construct_stepper_skeleton(self):
+        import neon
+
         """Build the Neon skeleton that encodes the recursive time-stepping order.
 
         The skeleton is a list of Neon container invocations that, when

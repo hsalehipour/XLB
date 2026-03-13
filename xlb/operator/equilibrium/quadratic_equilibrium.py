@@ -4,7 +4,6 @@ from jax import jit
 import warp as wp
 import os
 
-import neon
 from typing import Any
 
 from xlb.compute_backend import ComputeBackend

@@ -20,7 +20,6 @@ from xlb.velocity_set import VelocitySet
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator.equilibrium import MultiresQuadraticEquilibrium
-import neon
 
 
 def initialize_eq(f, grid, velocity_set, precision_policy, compute_backend, rho=None, u=None):
@@ -221,6 +220,8 @@ class CustomInitializer(Operator):
         return f_field
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 

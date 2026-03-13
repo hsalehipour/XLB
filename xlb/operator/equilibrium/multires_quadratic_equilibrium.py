@@ -3,7 +3,6 @@ Multi-resolution quadratic equilibrium operator for the Neon backend.
 """
 
 import warp as wp
-import neon
 from typing import Any
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.equilibrium import QuadraticEquilibrium
@@ -24,6 +23,8 @@ class MultiresQuadraticEquilibrium(QuadraticEquilibrium):
             raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
 
     def _construct_neon(self):
+        import neon, typing
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 

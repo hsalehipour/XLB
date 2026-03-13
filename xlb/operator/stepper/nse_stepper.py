@@ -10,7 +10,6 @@ from functools import partial
 
 from jax import jit
 import warp as wp
-import neon
 from typing import Any
 
 from xlb import DefaultConfig
@@ -476,6 +475,8 @@ class IncompressibleNavierStokesStepper(Stepper):
         return f_0, f_1
 
     def _construct_neon(self):
+        import neon
+
         # Set local constants
         _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
         _missing_mask_vec = wp.vec(self.velocity_set.q, dtype=wp.uint8)
@@ -546,6 +547,7 @@ class IncompressibleNavierStokesStepper(Stepper):
             f_0_pn: Any,
             f_1_pn: Any,
         ):
+
             # Note:
             # In XLB, the BC auxiliary data (e.g. prescribed values of pressure or normal velocity) are stored in (i) central index of f_1 and/or
             # (ii) missing directions of f_1. Some BCs may or may not need all these available storage space. This function checks whether

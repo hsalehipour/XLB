@@ -14,7 +14,6 @@ import numpy as np
 
 from xlb import DefaultConfig
 from xlb.compute_backend import ComputeBackend
-import neon
 
 
 def grid_factory(
@@ -64,8 +63,10 @@ def multires_grid_factory(
     compute_backend: ComputeBackend = None,
     velocity_set=None,
     sparsity_pattern_list: List[np.ndarray] = [],
-    sparsity_pattern_origins: List[neon.Index_3d] = [],
+    sparsity_pattern_origins=[],
 ):
+    import neon, typing
+
     """Create a multi-resolution grid (Neon backend only).
 
     Parameters

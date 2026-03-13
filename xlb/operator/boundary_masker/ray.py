@@ -12,7 +12,6 @@ from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker.mesh_boundary_masker import MeshBoundaryMasker
 from xlb.operator.operator import Operator
-import neon
 
 
 class MeshMaskerRay(MeshBoundaryMasker):
@@ -120,6 +119,8 @@ class MeshMaskerRay(MeshBoundaryMasker):
         )
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 
