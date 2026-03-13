@@ -65,7 +65,7 @@ def multires_grid_factory(
     sparsity_pattern_list: List[np.ndarray] = [],
     sparsity_pattern_origins=[],
 ):
-    import neon, typing
+    import neon
 
     """Create a multi-resolution grid (Neon backend only).
 
