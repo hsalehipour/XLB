@@ -131,7 +131,7 @@ class QuadraticEquilibrium(Equilibrium):
                 def quadratic_equilibrium_cl(index: typing.Any):
                     _u = _u_vec()
                     for d in range(self.velocity_set.d):
-                        _u[d] = wp.neon_read(u_pn, index, d)
+                        _u[d] = self.compute_dtype(wp.neon_read(u_pn, index, d))
                     _rho = wp.neon_read(rho_pn, index, 0)
                     feq = functional(_rho, _u)
 
