@@ -1,5 +1,8 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Full-way bounce-back boundary condition.
+
+Reverses every population at tagged solid voxels, effectively
+imposing a no-slip wall located *on* the grid node.
 """
 
 import jax.numpy as jnp

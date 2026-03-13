@@ -1,3 +1,12 @@
+"""
+Multi-resolution sparse grid backed by the Neon ``mGrid`` runtime.
+
+This module wraps ``neon.multires.mGrid`` and exposes it through the
+:class:`Grid` interface.  The grid is hierarchical: level 0 is the finest
+and level *N-1* is the coarsest.  Each coarser level has half the
+resolution of the level below it (refinement factor 2).
+"""
+
 import numpy as np
 import warp as wp
 import neon
@@ -9,6 +18,26 @@ from xlb import DefaultConfig
 
 
 class NeonMultiresGrid(Grid):
+    """Hierarchical multi-resolution grid on the Neon backend.
+
+    Wraps ``neon.multires.mGrid``.  Each level is described by a boolean
+    sparsity pattern (active-voxel mask) and an integer origin that
+    places it within the finest-level coordinate system.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Bounding-box dimensions at the **finest** level ``(nx, ny, nz)``.
+    velocity_set : VelocitySet
+        Lattice velocity set defining neighbour connectivity.
+    sparsity_pattern_list : list of np.ndarray
+        One boolean/int array per level indicating which voxels are active.
+        Index 0 = finest level, index *N-1* = coarsest.
+    sparsity_pattern_origins : list of neon.Index_3d
+        Origin offset for each level's pattern in the finest-level
+        coordinate system.
+    """
+
     def __init__(
         self,
         shape,
@@ -54,12 +83,6 @@ class NeonMultiresGrid(Grid):
 
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
 
-        """
-         backend: neon.Backend,
-         dim,
-         sparsity_pattern_list: List[np.ndarray],
-         sparsity_pattern_origins: List[neon.Index_3d],
-         stencil: List[List[int]]):"""
         self.grid = neon.multires.mGrid(
             backend=self.bk,
             dim=self.dim,
@@ -78,6 +101,28 @@ class NeonMultiresGrid(Grid):
         fill_value=None,
         neon_memory_type: neon.MemoryType = neon.MemoryType.host_device(),
     ):
+        """Allocate a new multi-resolution Neon field.
+
+        The field spans all grid levels.  Each level is either zero-filled
+        or filled with *fill_value*.
+
+        Parameters
+        ----------
+        cardinality : int
+            Number of components per voxel.
+        dtype : Precision, optional
+            Element precision.  Defaults to the store precision from the
+            global config.
+        fill_value : float, optional
+            Value to fill every element with.  ``None`` means zero.
+        neon_memory_type : neon.MemoryType
+            Memory residency (host, device, or both).
+
+        Returns
+        -------
+        neon.multires.mField
+            The newly allocated multi-resolution field.
+        """
         dtype = dtype.wp_dtype if dtype else DefaultConfig.default_precision_policy.store_precision.wp_dtype
         field = self.grid.new_field(
             cardinality=cardinality,
@@ -92,9 +137,15 @@ class NeonMultiresGrid(Grid):
         return field
 
     def get_neon_backend(self):
+        """Return the underlying ``neon.Backend`` instance."""
         return self.bk
 
     def level_to_shape(self, level):
+        """Return the bounding-box shape at the given grid level.
+
+        Level 0 is the finest and has shape ``self.shape``.  Each subsequent
+        level halves each dimension.
+        """
         # level = 0 corresponds to the finest level
         return tuple(x // self.refinement_factor**level for x in self.shape)
 

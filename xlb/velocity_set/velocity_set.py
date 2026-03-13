@@ -1,4 +1,10 @@
-# Base Velocity Set class
+"""
+Base velocity-set class for the Lattice Boltzmann Method.
+
+Defines lattice directions, weights, and derived properties (opposite
+indices, moments, etc.) for any DdQq stencil.  Backend-specific constants
+(Warp vectors, JAX arrays, Neon lattice objects) are initialised lazily.
+"""
 
 import math
 import numpy as np

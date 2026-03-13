@@ -1,3 +1,10 @@
+"""
+Indices-based boundary masker.
+
+Creates boundary masks from explicit arrays of voxel indices, computing
+missing-population masks via pull-index tests for each tagged voxel.
+"""
+
 from typing import Any
 import copy
 

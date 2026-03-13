@@ -1,3 +1,10 @@
+"""
+Multi-resolution performance-optimization strategies.
+
+Defines the kernel-fusion levels available for the multi-resolution LBM
+stepper and provides CLI argument parsing helpers.
+"""
+
 import argparse
 from enum import Enum, auto
 

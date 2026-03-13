@@ -1,3 +1,12 @@
+"""
+3D fow past a sphere with multi-resolution LBM.
+
+Demonstrates the multi-resolution Neon backend for a 3-D Poiseuille-
+inlet flow past a sphere inside a nested cuboid multi-resolution domain.
+Uses AABB-Close voxelization with halfway bounce-back on the sphere surface and
+computes lift/drag via momentum transfer.
+"""
+
 import neon
 import warp as wp
 import numpy as np
@@ -32,10 +41,10 @@ def generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part):
     # First entry should be full domain size
     # Domain multipliers
     domainMultiplier = [
-        [15, 15, 7, 7, 7, 7],  # -x, x, -y, y, -z, z
-        [6, 8, 5, 5, 5, 5],  # -x, x, -y, y, -z, z
-        [4, 6, 4, 4, 4, 4],
-        [2, 4, 2, 2, 2, 2],
+        [7, 22, 7, 7, 7, 7],  # -x, x, -y, y, -z, z  (sphere at 1/4 domain from inlet)
+        [3, 12, 5, 5, 5, 5],  # -x, x, -y, y, -z, z  (wake-biased)
+        [2, 8, 4, 4, 4, 4],
+        [1, 5, 2, 2, 2, 2],
         # [1, 2, 1, 1, 1, 1],
         # [0.4, 1, 0.4, 0.4, 0.4, 0.4],
         # [0.2, 0.4, 0.2, 0.2, 0.2, 0.2],
@@ -105,7 +114,7 @@ xlb.init(
 )
 
 # Generate the cuboid mesh and sphere vertices
-stl_filename = "examples/cfd/stl-files/sphere.stl"
+stl_filename = "../stl-files/sphere.stl"
 level_data, sphere, grid_shape_finest = generate_cuboid_mesh(stl_filename, num_finest_voxels_across_part)
 
 
@@ -141,6 +150,7 @@ walls = np.unique(np.array(walls), axis=-1).tolist()
 
 # Define Boundary Conditions
 def bc_profile():
+    """Build a Warp function for a Poiseuille parabolic inlet velocity profile."""
     assert compute_backend == ComputeBackend.NEON
     # IMPORTANT NOTE: the user defined functional must be defined in terms of the indices at the finest level
     _, ny, nz = grid_shape_finest
@@ -183,17 +193,16 @@ walls = [[] for _ in range(num_levels - 1)] + [walls]
 
 # Initialize Boundary Conditions
 bc_left = RegularizedBC("velocity", profile=bc_profile(), indices=inlet)
+# Alternatives:
 # bc_left = HybridBC(bc_method="bounceback_regularized", profile=bc_profile(), indices=inlet)
-# Alternatively, use a prescribed velocity profile
 # bc_left = RegularizedBC("velocity", prescribed_value=(u_max, 0.0, 0.0), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)
-# bc_ground = FullwayBounceBackBC(indices=grid.boundary_indices_across_levels(level_data, box_side="front"))
-# bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_outlet = DoNothingBC(indices=outlet)
-# bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod('AABB'))
+# bc_outlet = ExtrapolationOutflowBC(indices=outlet)
 bc_sphere = HybridBC(
     bc_method="nonequilibrium_regularized", mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod("AABB"), use_mesh_distance=True
 )
+# bc_sphere = HalfwayBounceBackBC(mesh_vertices=sphere, voxelization_method=MeshVoxelizationMethod('AABB'))
 
 boundary_conditions = [bc_walls, bc_left, bc_outlet, bc_sphere]
 
@@ -228,7 +237,7 @@ momentum_transfer = MultiresMomentumTransfer(bc_sphere, mres_perf_opt=sim.mres_p
 
 
 def print_lift_drag(sim):
-    # Compute lift and drag
+    """Compute and print drag and lift coefficients from the simulation state."""
     boundary_force = momentum_transfer(sim.f_0, sim.f_1, sim.bc_mask, sim.missing_mask)
     drag = boundary_force[0]  # x-direction
     lift = boundary_force[2]
@@ -259,7 +268,7 @@ for step in range(num_steps):
 
         # Call the exporter to save the current state
         nx, ny, nz = grid_shape_finest
-        filename = f"multires_flow_over_sphere_3d_{step:04d}"
+        filename = f"multires_flow_past_sphere_3d_{step:04d}"
         wp.synchronize()
         exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=2)
         exporter.to_slice_image(
@@ -269,7 +278,7 @@ for step in range(num_steps):
             plane_normal=(0, 0, 1),
             grid_res=256,
             slice_thickness=2 ** (num_levels - 1),
-            bounds=(0.4, 0.6, 0.4, 0.6),
+            bounds=(0.1, 0.6, 0.3, 0.7),
         )
 
         # Print lift and drag coefficients

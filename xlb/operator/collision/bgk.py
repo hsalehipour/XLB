@@ -1,3 +1,7 @@
+"""
+Bhatnagar-Gross-Krook (BGK) single-relaxation-time collision operator.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -10,8 +14,14 @@ from functools import partial
 
 
 class BGK(Collision):
-    """
-    BGK collision operator for LBM.
+    """Single-relaxation-time BGK collision operator.
+
+    Relaxes the distribution function toward equilibrium at a rate
+    controlled by the relaxation parameter *omega*::
+
+        f_out = f - omega * (f - f_eq)
+
+    Supports JAX, Warp, and Neon backends.
     """
 
     @Operator.register_backend(ComputeBackend.JAX)

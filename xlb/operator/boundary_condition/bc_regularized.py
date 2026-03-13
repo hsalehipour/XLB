@@ -1,5 +1,13 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Regularized boundary condition.
+
+A non-equilibrium bounce-back scheme with additional regularization of the
+distribution function.  Applicable as velocity or pressure boundary conditions.
+
+Reference
+---------
+Latt, J. et al. (2008). "Straight velocity boundaries in the lattice
+Boltzmann method." *Physical Review E*, 77(5), 056703.
 """
 
 import jax.numpy as jnp

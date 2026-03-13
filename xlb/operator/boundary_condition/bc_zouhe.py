@@ -1,5 +1,14 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Zou-He boundary condition.
+
+Sets unknown populations at velocity or pressure boundaries using
+mass and momentum conservation combined with non-equilibrium
+bounce-back.  Commonly used for inlets and outlets.
+
+Reference
+---------
+Zou, Q. & He, X. (1997). "On pressure and velocity boundary conditions
+for the lattice Boltzmann BGK model." *Physics of Fluids*, 9(6), 1591.
 """
 
 import jax.numpy as jnp

@@ -1,5 +1,8 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Do-nothing boundary condition.
+
+Skips the streaming step at tagged boundary voxels, leaving the
+populations unchanged.
 """
 
 import jax.numpy as jnp

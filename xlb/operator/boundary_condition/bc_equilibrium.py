@@ -22,8 +22,20 @@ from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizati
 
 
 class EquilibriumBC(BoundaryCondition):
-    """
-    Full Bounce-back boundary condition for a lattice Boltzmann method simulation.
+    """Equilibrium boundary condition.
+
+    Sets populations at tagged voxels to the equilibrium distribution
+    computed from the prescribed macroscopic density *rho* and velocity
+    *u*.  Commonly used as an inlet or outlet condition.
+
+    Parameters
+    ----------
+    rho : float
+        Prescribed macroscopic density.
+    u : tuple of float
+        Prescribed macroscopic velocity ``(ux, uy, uz)``.
+    equilibrium_operator : Operator, optional
+        Equilibrium operator.  Defaults to ``QuadraticEquilibrium``.
     """
 
     def __init__(

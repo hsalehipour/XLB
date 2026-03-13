@@ -1,3 +1,12 @@
+"""
+High-level simulation manager for multi-resolution LBM on the Neon backend.
+
+:class:`MultiresSimulationManager` orchestrates the complete simulation
+lifecycle: field allocation, boundary-condition setup, coalescence-factor
+precomputation, and the recursive time-stepping skeleton that correctly
+interleaves coarse and fine grid updates.
+"""
+
 import neon
 import warp as wp
 from xlb.operator.stepper import MultiresIncompressibleNavierStokesStepper
@@ -6,8 +15,32 @@ from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
-    """
-    A simulation manager for multiresolution simulations using the Neon backend in XLB.
+    """Orchestrates multi-resolution LBM simulations on the Neon backend.
+
+    Inherits from :class:`MultiresIncompressibleNavierStokesStepper` and
+    adds field management, omega computation across levels, and the
+    recursive skeleton builder that encodes the multi-resolution
+    time-stepping order.
+
+    Parameters
+    ----------
+    omega_finest : float
+        Relaxation parameter at the finest grid level.
+    grid : NeonMultiresGrid
+        Multi-resolution grid.
+    boundary_conditions : list of BoundaryCondition
+        Boundary conditions to apply.
+    collision_type : str
+        ``"BGK"`` or ``"KBC"``.
+    forcing_scheme : str
+        Forcing scheme (used only when *force_vector* is given).
+    force_vector : array-like, optional
+        External body force.
+    initializer : Operator, optional
+        Custom initializer for distribution functions.  If ``None``
+        the default equilibrium initialization is used.
+    mres_perf_opt : MresPerfOptimizationType
+        Performance optimization strategy.
     """
 
     def __init__(
@@ -73,6 +106,14 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         return 2 ** (level + 1) * omega0 / ((2**level - 1.0) * omega0 + 2.0)
 
     def export_macroscopic(self, fname_prefix):
+        """Compute macroscopic fields and export velocity to a VTI file.
+
+        Parameters
+        ----------
+        fname_prefix : str
+            Output filename prefix.  The iteration index is appended
+            automatically (e.g. ``"u_"`` → ``"u_42.vti"``).
+        """
         print(f"exporting macroscopic: #levels {self.count_levels}")
         self.macro(self.f_0, self.bc_mask, self.rho, self.u, streamId=0)
 
@@ -85,6 +126,12 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         return
 
     def step(self):
+        """Advance the simulation by one coarsest-level timestep.
+
+        Internally this executes the pre-compiled Neon skeleton which
+        performs the correct number of sub-steps at each finer level
+        according to the acoustic-scaling time refinement ratio.
+        """
         self.iteration_idx = self.iteration_idx + 1
         self.sk.run()
 
@@ -124,6 +171,13 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
             self.add_to_app(app=app, op_name=op_name, level=level, **fields_swapped, **extra)
 
     def _construct_stepper_skeleton(self):
+        """Build the Neon skeleton that encodes the recursive time-stepping order.
+
+        The skeleton is a list of Neon container invocations that, when
+        executed in sequence, perform one coarsest-level timestep with the
+        correct sub-cycling at finer levels.  The structure depends on
+        ``self.mres_perf_opt``.
+        """
         self.app = []
 
         stream_abc = {"omega": self.coalescence_factor, "timestep": 0}

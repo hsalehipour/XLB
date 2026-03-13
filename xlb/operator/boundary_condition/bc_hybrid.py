@@ -1,3 +1,20 @@
+"""
+Hybrid boundary condition combining interpolated bounce-back with regularization.
+
+Provides three wall-treatment strategies, selectable via *bc_method*:
+
+* ``"bounceback_regularized"`` — interpolated bounce-back + Latt regularization.
+* ``"bounceback_grads"`` — interpolated bounce-back + Grad's approximation.
+* ``"nonequilibrium_regularized"`` — Tao non-equilibrium bounce-back + Latt
+  regularization.
+
+All variants optionally support:
+
+* Moving walls (via *prescribed_value* or *profile*).
+* Curved boundaries with fractional distance to the mesh surface (via
+  *use_mesh_distance*).
+"""
+
 import inspect
 from jax import jit
 from functools import partial
@@ -42,6 +59,31 @@ class HybridBC(BoundaryCondition):
         voxelization_method: MeshVoxelizationMethod = None,
         use_mesh_distance=False,
     ):
+        """
+        Parameters
+        ----------
+        bc_method : str
+            Wall-treatment strategy.  One of ``"bounceback_regularized"``,
+            ``"bounceback_grads"``, or ``"nonequilibrium_regularized"``.
+        profile : callable, optional
+            Warp function ``(index) -> u_vec`` or ``(index, timestep) -> u_vec``
+            defining the wall velocity.  Mutually exclusive with *prescribed_value*.
+        prescribed_value : float or array-like, optional
+            Constant wall velocity vector.  Mutually exclusive with *profile*.
+            If neither is given, a no-slip wall is assumed.
+        velocity_set : VelocitySet, optional
+        precision_policy : PrecisionPolicy, optional
+        compute_backend : ComputeBackend, optional
+        indices : list of array-like, optional
+            Boundary voxel indices (use this **or** *mesh_vertices*, not both).
+        mesh_vertices : np.ndarray, optional
+            Mesh triangle vertices for mesh-based voxelization.
+        voxelization_method : MeshVoxelizationMethod, optional
+            Voxelization strategy (AABB, RAY, AABB_CLOSE, etc.).
+        use_mesh_distance : bool
+            If ``True``, fractional distances to the mesh surface are
+            computed and stored for interpolated boundary schemes.
+        """
         assert bc_method in [
             "bounceback_regularized",
             "bounceback_grads",

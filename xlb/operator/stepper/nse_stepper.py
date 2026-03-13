@@ -1,4 +1,10 @@
-# Base class for all stepper operators
+"""
+Single-resolution incompressible Navier-Stokes stepper.
+
+Implements the full LBM step (stream, collide, apply BCs) for a single-
+resolution grid.  Supports pull and push streaming schemes on JAX, a
+pull-only fused kernel on Warp, and a pull-only Neon container.
+"""
 
 from functools import partial
 
@@ -34,6 +40,29 @@ from xlb.cell_type import BC_SOLID
 
 
 class IncompressibleNavierStokesStepper(Stepper):
+    """Single-resolution incompressible Navier-Stokes LBM stepper.
+
+    Composes streaming, collision, equilibrium, macroscopic, and boundary-
+    condition operators into a complete timestep.
+
+    Parameters
+    ----------
+    grid : Grid
+        Computational grid.
+    boundary_conditions : list of BoundaryCondition
+        Boundary conditions to apply each step.
+    collision_type : str
+        ``"BGK"``, ``"KBC"``, or ``"SmagorinskyLESBGK"``.
+    streaming_scheme : str
+        ``"pull"`` (default) or ``"push"`` (JAX only).
+    forcing_scheme : str
+        Forcing scheme name (used when *force_vector* is given).
+    force_vector : array-like, optional
+        External body force vector.
+    backend_config : dict
+        Backend-specific options (e.g. Neon OCC configuration).
+    """
+
     def __init__(
         self,
         grid,
@@ -608,6 +637,7 @@ class IncompressibleNavierStokesStepper(Stepper):
         return f_0, f_1
 
     def prepare_skeleton(self, f_0, f_1, bc_mask, missing_mask, omega):
+        """Build the Neon odd/even skeletons for double-buffered time stepping."""
         grid = f_0.get_grid()
         bk = grid.backend
         self.neon_skeleton = {"odd": {}, "even": {}}

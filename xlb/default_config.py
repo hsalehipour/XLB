@@ -1,3 +1,11 @@
+"""
+Global configuration for XLB.
+
+Call :func:`init` once at the start of every script to select the velocity
+set, compute backend, and precision policy.  All operators read their
+defaults from :class:`DefaultConfig` when explicit arguments are omitted.
+"""
+
 from xlb.compute_backend import ComputeBackend
 from dataclasses import dataclass
 from xlb.precision_policy import PrecisionPolicy
@@ -5,12 +13,40 @@ from xlb.precision_policy import PrecisionPolicy
 
 @dataclass
 class DefaultConfig:
+    """Singleton holding the active global configuration.
+
+    Attributes are set by :func:`init` and read by operators, grids, and
+    helpers throughout XLB.
+
+    Attributes
+    ----------
+    default_precision_policy : PrecisionPolicy or None
+        Active precision policy (compute / store dtype pair).
+    velocity_set : VelocitySet or None
+        Active lattice velocity set.
+    default_backend : ComputeBackend or None
+        Active compute backend.
+    """
+
     default_precision_policy = None
     velocity_set = None
     default_backend = None
 
 
 def init(velocity_set, default_backend, default_precision_policy):
+    """Initialize the global XLB configuration.
+
+    Must be called before creating any grid, operator, or field.
+
+    Parameters
+    ----------
+    velocity_set : VelocitySet
+        Lattice velocity set (e.g. ``D3Q19``).
+    default_backend : ComputeBackend
+        Compute backend to use (JAX, WARP, or NEON).
+    default_precision_policy : PrecisionPolicy
+        Precision policy for compute and storage dtypes.
+    """
     DefaultConfig.velocity_set = velocity_set
     DefaultConfig.default_backend = default_backend
     DefaultConfig.default_precision_policy = default_precision_policy
@@ -43,10 +79,12 @@ def init(velocity_set, default_backend, default_precision_policy):
 
 
 def default_backend() -> ComputeBackend:
+    """Return the currently configured compute backend."""
     return DefaultConfig.default_backend
 
 
 def check_backend_support():
+    """Print a summary of available JAX hardware accelerators."""
     import jax
 
     if jax.devices()[0].platform == "gpu":

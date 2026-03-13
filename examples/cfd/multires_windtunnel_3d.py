@@ -1,3 +1,12 @@
+"""
+Ahmed body aerodynamics with multi-resolution LBM.
+
+Simulates turbulent flow around the Ahmed body (25-degree slant angle)
+using the XLB multi-resolution Neon backend.  Computes drag and lift
+coefficients via momentum transfer and exports HDF5/XDMF data for
+post-processing.
+"""
+
 import neon
 import warp as wp
 import numpy as np
@@ -35,7 +44,7 @@ kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s 1.508e-5
 voxel_size = 0.005  # Finest voxel size in meters
 
 # STL filename
-stl_filename = "examples/cfd/stl-files/Ahmed_25_NoLegs.stl"
+stl_filename = "../stl-files/Ahmed_25_NoLegs.stl"
 script_name = "Ahmed"
 
 # I/O settings
@@ -165,7 +174,7 @@ def initialize_simulation(
 
 # Utility Functions
 # =================
-def print_lift_drag(sim, step, momentum_transfer, wind_speed_lbm, reference_area):
+def compute_force_coefficients(sim, step, momentum_transfer, wind_speed_lbm, reference_area):
     """
     Calculate and print lift and drag coefficients.
     """
@@ -181,7 +190,7 @@ def print_lift_drag(sim, step, momentum_transfer, wind_speed_lbm, reference_area
     return cd, cl, drag
 
 
-def plot_drag_lift(drag_values, output_dir, print_interval, script_name, percentile_range=(15, 85), use_log_scale=False):
+def plot_force_coefficients(drag_values, output_dir, print_interval, script_name, percentile_range=(15, 85), use_log_scale=False):
     """
     Plot CD and CL over time and save the plot to the output directory.
     """
@@ -495,7 +504,7 @@ for step in range(num_steps):
     if step % print_interval == 0 or step == num_steps - 1:
         sim.macro(sim.f_0, sim.bc_mask, sim.rho, sim.u, streamId=0)
         wp.synchronize()
-        cd, cl, drag = print_lift_drag(sim, step, momentum_transfer, wind_speed_lbm, reference_area)
+        cd, cl, drag = compute_force_coefficients(sim, step, momentum_transfer, wind_speed_lbm, reference_area)
         filename = os.path.join(output_dir, f"{script_name}_{step:04d}")
         h5exporter.to_hdf5(filename, {"velocity": sim.u, "density": sim.rho}, compression="gzip", compression_opts=0)
         h5exporter.to_slice_image(
@@ -548,7 +557,7 @@ if len(drag_values) > 0:
         fd.write("Step,Cd,Cl\n")
         for i, (cd, cl) in enumerate(drag_values):
             fd.write(f"{i * print_interval},{cd},{cl}\n")
-    plot_drag_lift(drag_values, output_dir, print_interval, script_name)
+    plot_force_coefficients(drag_values, output_dir, print_interval, script_name)
 
 # Calculate and print average Cd and Cl for the last 50%
 drag_values_array = np.array(drag_values)

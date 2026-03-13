@@ -1,3 +1,17 @@
+"""
+Base operator module for XLB.
+
+Every LBM operator (collision, streaming, equilibrium, boundary condition,
+masker, stepper, etc.) inherits from :class:`Operator`.  The class provides:
+
+* **Backend dispatch** — ``__call__`` automatically selects the registered
+  implementation for the active compute backend.
+* **Precision management** — ``compute_dtype`` and ``store_dtype`` properties
+  return the correct type for the active backend and precision policy.
+* **Kernel construction hooks** — ``_construct_warp()`` / ``_construct_neon()``
+  are called at init time to compile backend-specific kernels and functionals.
+"""
+
 import inspect
 import traceback
 import jax
@@ -19,6 +33,17 @@ class Operator:
     _backends = {}
 
     def __init__(self, velocity_set=None, precision_policy=None, compute_backend=None):
+        """Initialize the operator.
+
+        Parameters
+        ----------
+        velocity_set : VelocitySet, optional
+            Lattice velocity set.  Defaults to ``DefaultConfig.velocity_set``.
+        precision_policy : PrecisionPolicy, optional
+            Precision policy.  Defaults to ``DefaultConfig.default_precision_policy``.
+        compute_backend : ComputeBackend, optional
+            Compute backend.  Defaults to ``DefaultConfig.default_backend``.
+        """
         # Set the default values from the global config
         self.velocity_set = velocity_set or DefaultConfig.velocity_set
         self.precision_policy = precision_policy or DefaultConfig.default_precision_policy
@@ -62,6 +87,20 @@ class Operator:
         return decorator
 
     def __call__(self, *args, callback=None, **kwargs):
+        """Dispatch to the registered backend implementation.
+
+        Iterates over all registered implementations for this operator class
+        and the active backend, attempts to bind the provided arguments, and
+        executes the first matching signature.  An optional *callback* is
+        invoked with the result after successful execution.
+
+        Raises
+        ------
+        NotImplementedError
+            If no implementation is registered for the active backend.
+        Exception
+            If all candidate implementations raise errors.
+        """
         method_candidates = [
             (key, method) for key, method in self._backends.items() if key[0] == self.__class__.__name__ and key[1] == self.compute_backend
         ]
@@ -179,6 +218,16 @@ class Operator:
         return None, None
 
     def _construct_read_write_functions(self):
+        """Build backend-specific ``read_field`` / ``write_field`` helpers.
+
+        For the Warp backend these are direct 4-D array accesses.  For the
+        Neon backend they wrap ``wp.neon_read`` / ``wp.neon_write``.
+
+        Returns
+        -------
+        tuple of wp.func
+            ``(read_field, write_field)``
+        """
         if self.compute_backend == ComputeBackend.WARP:
 
             @wp.func

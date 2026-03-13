@@ -1,3 +1,10 @@
+"""
+Multi-resolution AABB-Close boundary masker with morphological closing.
+
+Extends the AABB-Close masker for Neon multi-resolution grids, applying
+dilate-then-erode operations to fill narrow channels with solid voxels.
+"""
+
 import warp as wp
 import neon
 from typing import Any

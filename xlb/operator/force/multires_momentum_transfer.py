@@ -1,3 +1,7 @@
+"""
+Multi-resolution momentum-transfer force operator for the Neon backend.
+"""
+
 from typing import Any
 
 import warp as wp
@@ -12,9 +16,23 @@ from xlb.mres_perf_optimization_type import MresPerfOptimizationType
 
 
 class MultiresMomentumTransfer(MomentumTransfer):
-    """
-    Multiresolution Momentum Transfer operator for computing the force on a multiresolution grid.
-    This operator computes uses the same approach as its parent class for computing the forces.
+    """Momentum-transfer force computation on a multi-resolution grid.
+
+    Extends :class:`MomentumTransfer` with Neon-specific container code that
+    iterates over all grid levels.  The LBM operation sequence (collide-then-
+    stream vs. stream-then-collide) is inferred from the performance
+    optimization type.
+
+    Parameters
+    ----------
+    no_slip_bc_instance : BoundaryCondition
+        The no-slip BC whose tagged voxels define the force integration
+        surface.
+    mres_perf_opt : MresPerfOptimizationType
+        Multi-resolution performance strategy.
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
     """
 
     def __init__(
