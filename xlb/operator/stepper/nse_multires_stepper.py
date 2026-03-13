@@ -242,7 +242,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         for l in range(self.velocity_set.q):
                             if level < num_levels - 1:
                                 push_direction = wp.neon_ngh_idx(wp.int8(_c[0, l]), wp.int8(_c[1, l]), wp.int8(_c[2, l]))
-                                val = self.compute_dtype(1)
+                                val = self.store_dtype(1)
                                 wp.neon_mres_lbm_store_op(coalescence_factor_pn, index, l, push_direction, val)
 
                 loader.declare_kernel(cl_collide_coarse)
@@ -281,8 +281,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                         has_ngh_at_same_level = wp.bool(False)
-                        coalescence_factor = wp.neon_read_ngh(
-                            coalescence_factor_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level
+                        coalescence_factor = self.compute_dtype(
+                            wp.neon_read_ngh(coalescence_factor_pn, index, pull_direction, l, self.store_dtype(0), has_ngh_at_same_level)
                         )
 
                         if not wp.neon_has_finer_ngh(coalescence_factor_pn, index, pull_direction):
@@ -296,7 +296,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                                 # Compute coalescence factor
                                 if coalescence_factor > self.compute_dtype(0):
                                     coalescence_factor = self.compute_dtype(1) / (self.compute_dtype(2) * coalescence_factor)
-                                    wp.neon_write(coalescence_factor_pn, index, l, coalescence_factor)
+                                    wp.neon_write(coalescence_factor_pn, index, l, self.store_dtype(coalescence_factor))
 
                 loader.declare_kernel(compute)
 
@@ -514,11 +514,11 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     for l in range(self.velocity_set.q):
                         push_direction = wp.neon_ngh_idx(wp.int8(_c[0, l]), wp.int8(_c[1, l]), wp.int8(_c[2, l]))
                         if level < num_levels - 1:
-                            wp.neon_mres_lbm_store_op(accumulation_pn, index, l, push_direction, _f_post_collision[l])
-                        wp.neon_write(f_1_pn, index, l, _f_post_collision[l])
+                            wp.neon_mres_lbm_store_op(accumulation_pn, index, l, push_direction, self.store_dtype(_f_post_collision[l]))
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_collision[l]))
                 else:
                     for l in range(self.velocity_set.q):
-                        wp.neon_write(f_1_pn, index, l, _f_post_collision[l])
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_collision[l]))
 
                 return _f_post_collision
 
@@ -544,7 +544,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                 has_ngh_at_same_level = wp.bool(False)
-                accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
+                accumulated = wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.store_dtype(0), has_ngh_at_same_level)
 
                 if not wp.neon_has_finer_ngh(f_0_pn, index, pull_direction):
                     # No finer ngh in the pull direction (opposite of l)
@@ -553,13 +553,13 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         if wp.neon_has_parent(f_0_pn, index):
                             # Halo cell on top of us (parent exists)
                             has_a_coarser_ngh = wp.bool(False)
-                            exploded_pop = wp.neon_lbm_read_coarser_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh)
+                            exploded_pop = wp.neon_lbm_read_coarser_ngh(f_0_pn, index, pull_direction, l, self.store_dtype(0), has_a_coarser_ngh)
                             if has_a_coarser_ngh:
                                 # No finer ngh in pull direction, no same-level ngh,
                                 # but a parent (ghost cell) exists with a coarser ngh
                                 # -> Explosion: read the exploded population from the
                                 #    coarser level's halo.
-                                _f_post_stream[l] = exploded_pop
+                                _f_post_stream[l] = self.compute_dtype(exploded_pop)
                 else:
                     # Finer ngh exists in the pull direction (opposite of l).
                     # Read from the halo on top of that finer ngh.
@@ -569,7 +569,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         # -> Coalescence
                         coalescence_factor = wp.neon_read(coalescence_factor_pn, index, l)
                         accumulated = accumulated * coalescence_factor
-                        _f_post_stream[l] = accumulated
+                        _f_post_stream[l] = self.compute_dtype(accumulated)
 
             return _f_post_stream
 
@@ -610,7 +610,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         )
                     else:
                         for l in range(self.velocity_set.q):
-                            wp.neon_write(f_1_pn, index, l, self.compute_dtype(0))
+                            wp.neon_write(f_1_pn, index, l, self.store_dtype(0))
 
                 loader.declare_kernel(device)
 
@@ -691,7 +691,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         )
                     else:
                         for l in range(self.velocity_set.q):
-                            wp.neon_write(f_1_pn, index, l, self.compute_dtype(0))
+                            wp.neon_write(f_1_pn, index, l, self.store_dtype(0))
 
                 loader.declare_kernel(device)
 
@@ -725,7 +725,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     neon_apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0_pn, f_1_pn)
 
                     for l in range(self.velocity_set.q):
-                        wp.neon_write(f_1_pn, index, l, _f_post_stream[l])
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_stream[l]))
 
                 loader.declare_kernel(device)
 
@@ -763,7 +763,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     neon_apply_aux_recovery_bc(index, _boundary_id, _missing_mask, f_0_pn, f_1_pn)
 
                     for l in range(self.velocity_set.q):
-                        wp.neon_write(f_1_pn, index, l, _f_post_stream[l])
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_stream[l]))
 
                 loader.declare_kernel(device)
 
@@ -816,13 +816,13 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                         has_ngh_at_same_level = wp.bool(False)
-                        wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
+                        wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.store_dtype(0), has_ngh_at_same_level)
 
                         if not wp.neon_has_finer_ngh(f_0_pn, index, pull_direction):
                             if not has_ngh_at_same_level:
                                 if wp.neon_has_parent(f_0_pn, index):
                                     has_a_coarser_ngh = wp.bool(False)
-                                    wp.neon_lbm_read_coarser_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh)
+                                    wp.neon_lbm_read_coarser_ngh(f_0_pn, index, pull_direction, l, self.store_dtype(0), has_a_coarser_ngh)
                                     if has_a_coarser_ngh:
                                         # Explosion: not an SFV
                                         return
@@ -867,7 +867,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                     _f_post_stream = self.stream.neon_functional(f_0_pn, index)
 
                     for l in range(self.velocity_set.q):
-                        wp.neon_write(f_1_pn, index, l, _f_post_stream[l])
+                        wp.neon_write(f_1_pn, index, l, self.store_dtype(_f_post_stream[l]))
 
                 loader.declare_kernel(cl_stream_coarse)
 
@@ -888,7 +888,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 pull_direction = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
 
                 has_ngh_at_same_level = wp.bool(False)
-                wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.compute_dtype(0), has_ngh_at_same_level)
+                wp.neon_read_ngh(f_0_pn, index, pull_direction, l, self.store_dtype(0), has_ngh_at_same_level)
 
                 if not has_ngh_at_same_level:
                     # No same-level ngh — could we have a coarser-level ngh?
@@ -896,14 +896,14 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                         # Parent exists — try to read the exploded population from the coarser level
                         has_a_coarser_ngh = wp.bool(False)
                         exploded_pop = wp.neon_lbm_read_coarser_ngh(
-                            explosion_src_pn, index, pull_direction, l, self.compute_dtype(0), has_a_coarser_ngh
+                            explosion_src_pn, index, pull_direction, l, self.store_dtype(0), has_a_coarser_ngh
                         )
                         if has_a_coarser_ngh:
                             # No finer ngh in pull direction, no same-level ngh,
                             # but a parent (ghost cell) exists with a coarser ngh
                             # -> Explosion: read the exploded population from the
                             #    coarser level's halo.
-                            _f_post_stream[l] = exploded_pop
+                            _f_post_stream[l] = self.compute_dtype(exploded_pop)
 
             return _f_post_stream
 
