@@ -91,7 +91,7 @@ class Macroscopic(Operator):
                 f = loader.get_read_handle(f_field)
 
                 @wp.func
-                def macroscopic_cl(gIdx: typing.Any):
+                def macroscopic_cl(gIdx: Any):
                     _f = _f_vec()
                     for l in range(self.velocity_set.q):
                         _f[l] = self.compute_dtype(wp.neon_read(f, gIdx, l))

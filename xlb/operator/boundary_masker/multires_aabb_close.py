@@ -227,6 +227,8 @@ class MultiresMeshMaskerAABBClose(MeshMaskerAABBClose):
         missing_mask,
         stream=0,
     ):
+        import neon
+
         # Prepare inputs
         mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
 

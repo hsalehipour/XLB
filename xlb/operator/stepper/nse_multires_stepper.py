@@ -220,6 +220,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         bc_mask : field
             Boundary-condition mask used to skip solid voxels.
         """
+        import neon
         lattice_central_index = self.velocity_set.center_index
         num_levels = coalescence_factor.get_grid().num_levels
 
@@ -380,6 +381,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         return f_1
 
     def _construct_neon(self):
+        import neon
+
         # Pre-capture self attributes that Warp cannot resolve inside @wp.func bodies.
         # Warp rejects `self` as an "Invalid external reference type" when it appears
         # in a plain assignment (e.g. `_c = self.velocity_set.c`).  Capturing here

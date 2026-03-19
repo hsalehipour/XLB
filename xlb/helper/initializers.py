@@ -248,6 +248,8 @@ class CustomInitializer(Operator):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, bc_mask, f_field, stream=0):
+        import neon
+
         # Launch the neon container
         c = self.neon_container(bc_mask, f_field)
         c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
@@ -274,6 +276,8 @@ class CustomMultiresInitializer(CustomInitializer):
         super().__init__(constant_velocity_vector, constant_density, bc_id, initialization_operator, velocity_set, precision_policy, compute_backend)
 
     def _construct_neon(self):
+        import neon
+
         # Use the warp functional for the NEON backend
         functional, _ = self._construct_warp()
 
@@ -301,6 +305,7 @@ class CustomMultiresInitializer(CustomInitializer):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, bc_mask, f_field, stream=0):
+        import neon
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):
             # Launch the neon container

@@ -124,7 +124,7 @@ class QuadraticEquilibrium(Equilibrium):
                 f_pn = loader.get_write_handle(f)
 
                 @wp.func
-                def quadratic_equilibrium_cl(index: typing.Any):
+                def quadratic_equilibrium_cl(index: Any):
                     _u = _u_vec()
                     for d in range(self.velocity_set.d):
                         _u[d] = self.compute_dtype(wp.neon_read(u_pn, index, d))
@@ -143,6 +143,8 @@ class QuadraticEquilibrium(Equilibrium):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, rho, u, f):
+        import neon
+
         c = self.neon_container(rho, u, f)
         c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
         return f

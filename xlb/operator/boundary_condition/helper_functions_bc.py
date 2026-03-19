@@ -555,6 +555,8 @@ class EncodeAuxiliaryData(Operator):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask):
+        import neon
+
         c = self.neon_container(f_1, bc_mask, missing_mask)
         c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
         return f_1
@@ -589,6 +591,7 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
         """
         Constructs the Neon container for encoding auxiliary data recovery.
         """
+        import neon
 
         # Borrow the functional from the warp implementation
         functional_dict, _ = self._construct_warp()
@@ -635,6 +638,7 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask, stream):
+        import neon
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):
             c = self.neon_container(f_1, bc_mask, missing_mask, level)
