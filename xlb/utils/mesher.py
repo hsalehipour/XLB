@@ -521,6 +521,7 @@ class MultiresIO(object):
         Extracts and prepares the fields data from the NEON fields for export.
         """
         import neon
+
         # Check if the field_neon_dict is empty
         if not field_neon_dict:
             return {}

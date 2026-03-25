@@ -11,6 +11,7 @@ try:
     import neon
 except ModuleNotFoundError:
     import sys
+
     raise ModuleNotFoundError(
         "The 'neon' module is required for this example (Neon backend). "
         "Install with: pip install 'xlb[neon]'. "

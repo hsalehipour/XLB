@@ -221,6 +221,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             Boundary-condition mask used to skip solid voxels.
         """
         import neon
+
         lattice_central_index = self.velocity_set.center_index
         num_levels = coalescence_factor.get_grid().num_levels
 

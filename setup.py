@@ -28,20 +28,19 @@ def _uninstall_warp_lang():
         pass
 
 
-_NEON_WHEEL_DIR = "/home/max/repo/neon_warp_testing/neon/dist-multi"
+_NEON_VERSION = "0.5.2a1"
+_NEON_RELEASE_URL = f"https://github.com/Autodesk/Neon/releases/download/v{_NEON_VERSION}"
 
 
 def _neon_wheel_requirement():
-    """Build a direct-reference requirement for the neon_gpu wheel matching the running Python.
-
-    Always returns a file:// URL. If the wheel doesn't exist, pip will error
-    at install time with a clear "file not found" when the [neon] extra is
-    requested. Non-neon installs never trigger the download so they are safe.
-    """
+    """Build a direct-reference requirement for the neon_gpu wheel matching the running Python."""
     tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    wheel = f"neon_gpu-0.5.2a1-{tag}-{tag}-linux_x86_64.whl"
-    path = os.path.join(_NEON_WHEEL_DIR, wheel)
-    return f"neon_gpu @ file://{path}"
+    wheel = f"neon_gpu-{_NEON_VERSION}-{tag}-{tag}-linux_x86_64.whl"
+    url = f"{_NEON_RELEASE_URL}/{wheel}"
+    req = f"neon_gpu @ {url}"
+    print(f"[xlb] Neon wheel for Python {sys.version_info.major}.{sys.version_info.minor}: {url}")
+    print(f"[xlb] Neon requirement: {req}")
+    return req
 
 
 class InstallWithNeonHooks(install):
@@ -83,7 +82,6 @@ setup(
         "warp": ["warp-lang>=1.10.0"],  # Warp backend (single-GPU); included by default for full backend support
         "cuda": ["jax[cuda13]>=0.8.2"],  # For CUDA installations (pip install -U "jax[cuda13]")
         "tpu": ["jax[tpu]>=0.8.2"],  # For TPU installations
-        # TEMPORARY: local wheel resolved dynamically for the running Python version.
         "neon": [_neon_wheel_requirement()],
         "test": ["pytest>=8.0.0"],
     },

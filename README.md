@@ -35,15 +35,16 @@ pip install "xlb[tpu]"
 ```
 
 ### Installation with Neon support
-Neon backend enables multi-GPU dense and single-GPU multi-resolution representations. Install XLB with Neon support using:
+Neon backend enables multi-GPU dense and single-GPU multi-resolution representations. 
+Install XLB with Neon support using:
 
 ```bash
 pip install "xlb[neon]"
 ```
 
-**Requirements:** The Neon wheel is built only for **Python 3.12** on **Linux x86_64**. If you see "not a supported wheel on this platform", switch to Python 3.12 (e.g. `pyenv install 3.12` or a conda env with Python 3.12). The wheel also requires GLIBC >= 2.38 (e.g., Ubuntu 24.04 or later).
+**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.11** on **Linux x86_64**. Porting on ARM is on the way.
 
-**Note:** Neon uses a custom fork of warp. When you install from source, `warp-lang` is uninstalled automatically if present. When installing from a pre-built wheel, uninstall warp first if needed: `pip uninstall warp-lang`. Set `XLB_NEON_SKIP_UNINSTALL_WARP=1` to skip automatic uninstall.
+**Note:** Neon uses a custom fork of warp.
 
 ### Notes:
 - For Mac users: Use the basic CPU installation command as JAX's GPU support is not available on MacOS
