@@ -45,7 +45,7 @@ pip install -r requirements.txt
 pip install '.[neon]'
 ```
 
-**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.11** on **Linux x86_64** and **Linux ARM**. 
+**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.14** on **Linux x86_64** and **Linux ARM**. 
 
 **Note:** Neon uses a custom fork of warp.
 
