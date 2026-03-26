@@ -1,4 +1,5 @@
 import os
+import platform
 import subprocess
 import sys
 
@@ -35,10 +36,12 @@ _NEON_RELEASE_URL = f"https://github.com/Autodesk/Neon/releases/download/v{_NEON
 def _neon_wheel_requirement():
     """Build a direct-reference requirement for the neon_gpu wheel matching the running Python."""
     tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    wheel = f"neon_gpu-{_NEON_VERSION}-{tag}-{tag}-linux_x86_64.whl"
+    machine = platform.machine()
+    plat = "linux_aarch64" if machine == "aarch64" else "linux_x86_64"
+    wheel = f"neon_gpu-{_NEON_VERSION}-{tag}-{tag}-{plat}.whl"
     url = f"{_NEON_RELEASE_URL}/{wheel}"
     req = f"neon_gpu @ {url}"
-    print(f"[xlb] Neon wheel for Python {sys.version_info.major}.{sys.version_info.minor}: {url}")
+    print(f"[xlb] Neon wheel for Python {sys.version_info.major}.{sys.version_info.minor} ({plat}): {url}")
     print(f"[xlb] Neon requirement: {req}")
     return req
 
