@@ -39,10 +39,13 @@ Neon backend enables multi-GPU dense and single-GPU multi-resolution representat
 Install XLB with Neon support using:
 
 ```bash
-pip install "xlb[neon]"
+git clone https://github.com/Autodesk/XLB.git
+cd XLB
+pip install -r requirements.txt
+pip install '.[neon]'
 ```
 
-**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.11** on **Linux x86_64**. Porting on ARM is on the way.
+**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.11** on **Linux x86_64** and **Linux ARM**. 
 
 **Note:** Neon uses a custom fork of warp.
 
