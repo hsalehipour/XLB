@@ -16,6 +16,12 @@ To get started with XLB, you can install it using pip. There are different insta
 pip install xlb
 ```
 
+### Installation with Warp support (single-GPU)
+For the NVIDIA Warp backend (single-GPU, state-of-the-art performance):
+```bash
+pip install "xlb[warp]"
+```
+
 ### Installation with CUDA support (for NVIDIA GPUs)
 This installation is for the JAX backend with CUDA support:
 ```bash
@@ -28,19 +34,24 @@ This installation is for the JAX backend with TPU support:
 pip install "xlb[tpu]"
 ```
 
-### Installation with Neon support 
-Neon backend enables multi-GPU dense and single-GPU multi-resolution representations. Neon depends on a custom fork of warp-lang, so any existing warp installation must be removed before installing Neon. The Python interface for Neon can be installed from a pre-built wheel hosted on GitHub. Note that the wheel currently requires GLIBC >= 2.38 (e.g., Ubuntu 24.04 or later).
+### Installation with Neon support
+Neon backend enables multi-GPU dense and single-GPU multi-resolution representations. 
+Install XLB with Neon support using:
 
 ```bash
-pip uninstall warp-lang
-pip install https://github.com/Autodesk/Neon/releases/download/v0.5.2a1/neon_gpu-0.5.2a1-cp312-cp312-linux_x86_64.whl
+git clone https://github.com/Autodesk/XLB.git
+cd XLB
+pip install -r requirements.txt
+pip install '.[neon]'
 ```
 
+**Requirements:** The Neon wheel supports **Python 3.11** to **Python 3.14** on **Linux x86_64** and **Linux ARM**. 
 
+**Note:** Neon uses a custom fork of warp.
 
 ### Notes:
 - For Mac users: Use the basic CPU installation command as JAX's GPU support is not available on MacOS
-- The NVIDIA Warp backend is included in all installation options and supports CUDA automatically when available
+- Use `xlb[warp]` for the Warp backend (single-GPU) or `xlb[neon]` for the Neon backend (multi-GPU / multi-resolution). Do not install both in the same environment.
 - The installation options for CUDA and TPU only affect the JAX backend
 
 To install the latest development version from source:

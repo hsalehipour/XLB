@@ -56,7 +56,7 @@ class MultiresMacroscopic(Macroscopic):
                 bc_mask_pn = loader.get_mres_read_handle(bc_mask)
 
                 @wp.func
-                def macroscopic_cl(gIdx: typing.Any):
+                def macroscopic_cl(gIdx: Any):
                     _f = _f_vec()
                     _boundary_id = wp.neon_read(bc_mask_pn, gIdx, 0)
 

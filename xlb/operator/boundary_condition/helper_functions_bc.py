@@ -555,6 +555,8 @@ class EncodeAuxiliaryData(Operator):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask):
+        import neon
+
         c = self.neon_container(f_1, bc_mask, missing_mask)
         c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
         return f_1
@@ -589,6 +591,7 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
         """
         Constructs the Neon container for encoding auxiliary data recovery.
         """
+        import neon
 
         # Borrow the functional from the warp implementation
         functional_dict, _ = self._construct_warp()
@@ -617,9 +620,9 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
 
                     # Apply the functional
                     if _boundary_id == _id:
-                        # IMPORTANT NOTE:
-                        # It is assumed in XLB that the user_defined_functional in multi-res simulations is defined in terms of the indices at the finest level.
-                        # This assumption enables handling of BCs whose indices span multiple levels
+                        # IMPORTANT: XLB assumes the user_defined_functional in multi-res
+                        # simulations uses finest-level indices, enabling BCs that span
+                        # multiple levels.
                         warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
                         prescribed_values = self.user_defined_functional(warp_index)
 
@@ -635,6 +638,8 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, f_1, bc_mask, missing_mask, stream):
+        import neon
+
         grid = bc_mask.get_grid()
         for level in range(grid.num_levels):
             c = self.neon_container(f_1, bc_mask, missing_mask, level)

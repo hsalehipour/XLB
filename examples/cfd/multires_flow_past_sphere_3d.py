@@ -7,7 +7,17 @@ Uses AABB-Close voxelization with halfway bounce-back on the sphere surface and
 computes lift/drag via momentum transfer.
 """
 
-import neon
+try:
+    import neon
+except ModuleNotFoundError:
+    import sys
+
+    raise ModuleNotFoundError(
+        "The 'neon' module is required for this example (Neon backend). "
+        "Install with: pip install 'xlb[neon]'. "
+        f"You are on Python {sys.version_info.major}.{sys.version_info.minor}; "
+        "the current Neon wheel requires Python 3.11 or 3.12. Use an appropriate environment (e.g. pyenv, conda, or venv)."
+    ) from None
 import warp as wp
 import numpy as np
 import time

@@ -350,6 +350,8 @@ class MomentumTransfer(Operator):
         missing_mask,
         stream=0,
     ):
+        import neon
+
         # Ensure the force is initialized to zero
         self.force *= self.compute_dtype(0.0)
 

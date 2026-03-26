@@ -636,6 +636,7 @@ class IncompressibleNavierStokesStepper(Stepper):
 
     def prepare_skeleton(self, f_0, f_1, bc_mask, missing_mask, omega):
         """Build the Neon odd/even skeletons for double-buffered time stepping."""
+        import neon
         grid = f_0.get_grid()
         bk = grid.backend
         self.neon_skeleton = {"odd": {}, "even": {}}
