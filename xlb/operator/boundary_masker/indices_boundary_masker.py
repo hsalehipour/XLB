@@ -528,6 +528,7 @@ class IndicesBoundaryMasker(Operator):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_implementation(self, bclist, bc_mask, missing_mask, start_index=None):
+        import neon
         # get the grid shape
         grid_shape = self.helper_masker.get_grid_shape(bc_mask)
 

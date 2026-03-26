@@ -25,7 +25,7 @@ def parse_arguments():
 
     parser = argparse.ArgumentParser(
         description="MLUPS Benchmark for 3D Lattice Boltzmann Method Simulation",
-        epilog=f"""
+        epilog="""
 Examples:
   %(prog)s 100 1000 neon fp32/fp32
   %(prog)s 200 500 neon fp64/fp64 --collision_model KBC --velocity_set D3Q27

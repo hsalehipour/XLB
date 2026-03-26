@@ -24,8 +24,8 @@ def _uninstall_warp_lang():
             check=False,
             capture_output=True,
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[xlb] Warning: failed to uninstall warp-lang: {exc}")
 
 
 _NEON_VERSION = "0.5.2a1"

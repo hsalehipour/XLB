@@ -1176,7 +1176,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
         try:
             op_name = kwargs.pop("op_name")
             app = kwargs.pop("app")
-        except:
+        except KeyError:
             raise ValueError("op_name and app must be provided as keyword arguments")
 
         try:

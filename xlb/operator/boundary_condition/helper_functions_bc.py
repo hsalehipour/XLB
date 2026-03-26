@@ -620,9 +620,9 @@ class MultiresEncodeAuxiliaryData(EncodeAuxiliaryData):
 
                     # Apply the functional
                     if _boundary_id == _id:
-                        # IMPORTANT NOTE:
-                        # It is assumed in XLB that the user_defined_functional in multi-res simulations is defined in terms of the indices at the finest level.
-                        # This assumption enables handling of BCs whose indices span multiple levels
+                        # IMPORTANT: XLB assumes the user_defined_functional in multi-res
+                        # simulations uses finest-level indices, enabling BCs that span
+                        # multiple levels.
                         warp_index = self.bc_helper.neon_index_to_warp(f_1_pn, index)
                         prescribed_values = self.user_defined_functional(warp_index)
 
