@@ -94,7 +94,6 @@ class NeonGrid(Grid):
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
         self.bk.info_print()
         self.grid = neon.dense.dGrid(backend=self.bk, dim=self.dim, sparsity=None, stencil=self.neon_stencil)
-        pass
 
     def create_field(
         self,
