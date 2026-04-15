@@ -327,6 +327,31 @@ def axangle2mat(axis, angle, is_normalized=False):
     ])
 
 
+def jax_has_gpu_devices() -> bool:
+    """Return True if JAX can use at least one GPU (CUDA/ROCm) device."""
+    import jax
+
+    try:
+        return any(getattr(d, "platform", None) == "gpu" for d in jax.devices())
+    except Exception:
+        return False
+
+
+def warp_array_to_jax(warp_array):
+    """Convert a Warp array to a JAX array.
+
+    ``warp.to_jax`` uses DLPack and expects JAX to support the same device
+    (e.g. CUDA). If Warp data is on GPU but only a **CPU** ``jaxlib`` is
+    installed, DLPack triggers ``RuntimeError: Unknown backend cuda``. In
+    that case we copy via the host with :meth:`warp.array.numpy`.
+    """
+    dev = warp_array.device
+    if dev is not None and getattr(dev, "is_cuda", False) and not jax_has_gpu_devices():
+        wp.synchronize()
+        return jnp.asarray(warp_array.numpy())
+    return wp.to_jax(warp_array)
+
+
 class ToJAX(object):
     """Convert a Neon field to a JAX array via an intermediate Warp grid."""
 
@@ -411,12 +436,12 @@ class ToJAX(object):
         if self.compute_backend == ComputeBackend.JAX:
             return field
         elif self.compute_backend == ComputeBackend.WARP:
-            return wp.to_jax(field)
+            return warp_array_to_jax(field)
         elif self.compute_backend == ComputeBackend.NEON:
             assert field.cardinality == self.field_cardinality, (
                 f"Field cardinality mismatch! Expected {self.field_cardinality}, got {field.cardinality}!"
             )
-            return wp.to_jax(self.copy_neon_to_warp(field))
+            return warp_array_to_jax(self.copy_neon_to_warp(field))
 
         else:
             raise ValueError("Unsupported compute backend!")
