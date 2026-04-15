@@ -93,21 +93,27 @@ class HalfwayBounceBackBC(BoundaryCondition):
             self.profile = self._create_constant_prescribed_profile(prescribed_value)
 
     def _create_constant_prescribed_profile(self, prescribed_value):
+        # JAX uses jnp dtypes; wp.vec requires Warp dtypes — build Warp helpers only for WARP/NEON.
+        if self.compute_backend == ComputeBackend.JAX:
+
+            def prescribed_profile_jax():
+                return jnp.array(prescribed_value, dtype=self.precision_policy.store_precision.jax_dtype).reshape(-1, 1)
+
+            return prescribed_profile_jax
+
         _u_vec = wp.vec(3, dtype=self.compute_dtype)
 
         @wp.func
         def prescribed_profile_warp(index: Any, time: Any):
             return _u_vec(prescribed_value[0], prescribed_value[1], prescribed_value[2])
 
-        def prescribed_profile_jax():
-            return jnp.array(prescribed_value, dtype=self.precision_policy.store_precision.jax_dtype).reshape(-1, 1)
-
-        if self.compute_backend == ComputeBackend.JAX:
-            return prescribed_profile_jax
-        elif self.compute_backend == ComputeBackend.WARP:
+        if self.compute_backend == ComputeBackend.WARP:
             return prescribed_profile_warp
-        elif self.compute_backend == ComputeBackend.NEON:
+        if self.compute_backend == ComputeBackend.NEON:
             return prescribed_profile_warp
+        raise ValueError(
+            f"Constant prescribed profile unsupported for backend {self.compute_backend}"
+        )
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
