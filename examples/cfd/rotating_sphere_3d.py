@@ -27,7 +27,7 @@ from xlb.operator.boundary_condition import (
 )
 from xlb.operator.force.momentum_transfer import MomentumTransfer
 from xlb.operator.macroscopic import Macroscopic
-from xlb.utils import save_fields_vtk, save_image
+from xlb.utils import save_fields_vtk, save_image, warp_array_to_jax
 import matplotlib.pyplot as plt
 from xlb.operator.equilibrium import QuadraticEquilibrium
 from xlb.operator import Operator
@@ -240,7 +240,7 @@ def post_process(
     wp.synchronize()
     # Convert to JAX array if necessary
     if not isinstance(f_0, jnp.ndarray):
-        f_0_jax = wp.to_jax(f_0)
+        f_0_jax = warp_array_to_jax(f_0)
     else:
         f_0_jax = f_0
 
