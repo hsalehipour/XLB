@@ -60,7 +60,6 @@ class NeonMultiresGrid(Grid):
         return self.velocity_set
 
     def _initialize_backend(self):
-        # FIXME@max: for now we hardcode the number of devices to 0
         num_devs = 1
         dev_idx_list = list(range(num_devs))
 
