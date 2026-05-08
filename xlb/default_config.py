@@ -6,6 +6,8 @@ set, compute backend, and precision policy.  All operators read their
 defaults from :class:`DefaultConfig` when explicit arguments are omitted.
 """
 
+import os
+
 from xlb.compute_backend import ComputeBackend
 from dataclasses import dataclass
 from xlb.precision_policy import PrecisionPolicy
@@ -33,6 +35,28 @@ class DefaultConfig:
     default_backend = None
 
 
+def _warp_init_and_select_cuda_device():
+    """Initialize Warp and pin the default CUDA device for single-GPU XLB runs.
+
+    With multiple GPUs, Warp's default device for allocations and launches can
+    otherwise diverge. Set ``XLB_WARP_DEVICE`` (e.g. ``cuda:0`` or ``cuda:1``)
+    to choose which GPU Warp uses; defaults to ``cuda:0`` when unset.
+    """
+    import warp as wp
+
+    wp.init()  # TODO: Must be removed in the future versions of WARP
+    if wp.get_cuda_device_count() == 0:
+        return
+    choice = os.environ.get("XLB_WARP_DEVICE", "cuda:0").strip()
+    try:
+        wp.set_device(choice)
+    except Exception:
+        try:
+            wp.set_device("cuda:0")
+        except Exception:
+            pass
+
+
 def init(velocity_set, default_backend, default_precision_policy):
     """Initialize the global XLB configuration.
 
@@ -52,9 +76,7 @@ def init(velocity_set, default_backend, default_precision_policy):
     DefaultConfig.default_precision_policy = default_precision_policy
 
     if default_backend == ComputeBackend.WARP:
-        import warp as wp
-
-        wp.init()  # TODO: Must be removed in the future versions of WARP
+        _warp_init_and_select_cuda_device()
     elif default_backend == ComputeBackend.NEON:
         import warp as wp
         import neon
@@ -64,7 +86,7 @@ def init(velocity_set, default_backend, default_precision_policy):
         # wp.config.verbose = True
         # wp.verbose_warnings = True
 
-        wp.init()
+        _warp_init_and_select_cuda_device()
 
         # It's a good idea to always clear the kernel cache when developing new native or codegen features
         wp.build.clear_kernel_cache()

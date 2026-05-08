@@ -1,5 +1,7 @@
 from .utils import (
     downsample_field,
+    warp_array_to_jax,
+    jax_has_gpu_devices,
     save_image,
     save_fields_vtk,
     save_BCs_vtk,

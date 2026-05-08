@@ -11,7 +11,7 @@ from xlb.operator.boundary_condition import FullwayBounceBackBC, RegularizedBC, 
 from xlb.operator.macroscopic import Macroscopic
 from xlb.helper.ibm_helper import prepare_immersed_boundary
 from xlb.grid import grid_factory
-from xlb.utils import save_image
+from xlb.utils import save_image, warp_array_to_jax
 
 
 def generate_naca_profile(chord_length, thickness_ratio, n_points=400):
@@ -119,7 +119,7 @@ def post_process(
     areas_np,
 ):
     if not isinstance(f_current, jnp.ndarray):
-        f_jax = wp.to_jax(f_current)
+        f_jax = warp_array_to_jax(f_current)
     else:
         f_jax = f_current
     macro_jax = Macroscopic(

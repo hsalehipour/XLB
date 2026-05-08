@@ -80,9 +80,11 @@ setup(
         "pydantic>=2.9.1",
         "ruff>=0.14.1",
         "jax>=0.8.2",  # Base JAX CPU-only requirement
+        "warp-lang>=1.10.0",  # Required at import time (core modules import warp)
+        "nvtx>=0.2.0",  # NVTX ranges (e.g. nse_multires_stepper); listed in requirements.txt
     ],
     extras_require={
-        "warp": ["warp-lang>=1.10.0"],  # Warp backend (single-GPU); included by default for full backend support
+        "warp": ["warp-lang>=1.10.0"],  # Kept for explicit `pip install xlb[warp]` / Neon uninstall hook docs
         "cuda": ["jax[cuda13]>=0.8.2"],  # For CUDA installations (pip install -U "jax[cuda13]")
         "tpu": ["jax[tpu]>=0.8.2"],  # For TPU installations
         "neon": [_neon_wheel_requirement()],

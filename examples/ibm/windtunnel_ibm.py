@@ -19,6 +19,7 @@ from xlb.utils import (
     save_usd_q_criterion,
     update_usd_lagrangian_parts,
     plot_object_placement,
+    warp_array_to_jax,
 )
 import warp as wp
 import numpy as np
@@ -365,7 +366,7 @@ def post_process(
     areas_wp=None,
 ):
     if not isinstance(f_current, jnp.ndarray):
-        f_jax = wp.to_jax(f_current)
+        f_jax = warp_array_to_jax(f_current)
     else:
         f_jax = f_current
 

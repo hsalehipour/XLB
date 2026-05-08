@@ -471,6 +471,7 @@ class IncompressibleNavierStokesStepper(Stepper):
             self.warp_kernel,
             inputs=[f_0, f_1, bc_mask, missing_mask, omega, timestep],
             dim=f_0.shape[1:],
+            device=f_0.device,
         )
         return f_0, f_1
 
