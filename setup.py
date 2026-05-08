@@ -15,10 +15,11 @@ def _neon_extra_requested():
     return False
 
 
-def _uninstall_warp_lang():
-    """Uninstall warp-lang so Neon's custom warp fork can be used."""
+def _uninstall_warp_lang(*, reason: str) -> None:
+    """Uninstall the ``warp-lang`` distribution so Neon's bundled warp fork is used."""
     if os.environ.get("XLB_NEON_SKIP_UNINSTALL_WARP", "").lower() in ("1", "true", "yes"):
         return
+    print(f"[xlb] {reason}")
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "uninstall", "warp-lang", "-y"],
@@ -47,7 +48,13 @@ def _neon_wheel_requirement():
 
 
 class InstallWithNeonHooks(install):
-    """After install, uninstall warp-lang when [neon] extra was requested.
+    """Uninstall ``warp-lang`` before and after install when ``[neon]`` is requested.
+
+    * **Before** ``pip``/setuptools install dependencies: removes any previously
+      installed ``warp-lang`` so an older or PyPI build does not linger next to
+      Neon's fork (``neon_gpu`` ships its own warp).
+    * **After** install: removes the ``warp-lang`` pulled in by ``install_requires``,
+      leaving Neon's warp as the one on the path.
 
     Only runs when installing from source (e.g. sdist or git). Wheel installs
     do not run setup.py, so for ``pip install xlb[neon]`` from PyPI you may
@@ -56,9 +63,21 @@ class InstallWithNeonHooks(install):
     """
 
     def run(self):
+        if _neon_extra_requested():
+            _uninstall_warp_lang(
+                reason=(
+                    "Removing any existing warp-lang before Neon install "
+                    "(neon_gpu provides its own warp fork)."
+                ),
+            )
         install.run(self)
         if _neon_extra_requested():
-            _uninstall_warp_lang()
+            _uninstall_warp_lang(
+                reason=(
+                    "Removing PyPI warp-lang after install (core deps); "
+                    "use the warp bundled with neon_gpu."
+                ),
+            )
 
 
 setup(

@@ -139,7 +139,8 @@ def main() -> int:
             "neon",
             "NEON: editable install with neon + test extras",
             "[neon,test]",
-            "Installs neon_gpu wheel per setup.py (Linux x86_64/aarch64, Python 3.11+). Uninstalls warp-lang for Neon's fork.",
+            "Installs neon_gpu wheel per setup.py (Linux x86_64/aarch64, Python 3.11+). "
+            "Uninstalls any existing warp-lang before install and PyPI warp-lang after (Neon's fork).",
         ),
     ]
 
