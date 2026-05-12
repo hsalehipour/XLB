@@ -152,3 +152,7 @@ class SmagorinskyLESBGK(Collision):
             dim=f.shape[1:],
         )
         return fout
+
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None

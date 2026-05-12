@@ -65,18 +65,12 @@ class InstallWithNeonHooks(install):
     def run(self):
         if _neon_extra_requested():
             _uninstall_warp_lang(
-                reason=(
-                    "Removing any existing warp-lang before Neon install "
-                    "(neon_gpu provides its own warp fork)."
-                ),
+                reason=("Removing any existing warp-lang before Neon install (neon_gpu provides its own warp fork)."),
             )
         install.run(self)
         if _neon_extra_requested():
             _uninstall_warp_lang(
-                reason=(
-                    "Removing PyPI warp-lang after install (core deps); "
-                    "use the warp bundled with neon_gpu."
-                ),
+                reason=("Removing PyPI warp-lang after install (core deps); use the warp bundled with neon_gpu."),
             )
 
 

@@ -75,7 +75,7 @@ from xlb.compute_backend import ComputeBackend
 from xlb.precision_policy import Precision
 from xlb.operator import Operator
 from xlb.operator.stream import Stream
-from xlb.operator.collision import BGK, KBC
+from xlb.operator.collision import BGK, KBC, SmagorinskyLESBGK
 from xlb.operator.equilibrium import MultiresQuadraticEquilibrium
 from xlb.operator.macroscopic import MultiresMacroscopic
 from xlb.operator.stepper import Stepper
@@ -124,7 +124,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
     boundary_conditions : list of BoundaryCondition
         Boundary conditions to apply.
     collision_type : str
-        Collision operator type: ``"BGK"`` or ``"KBC"``.
+        Collision operator type: ``"BGK"`` or ``"KBC"`` or ``"SmagorinskyLESBGK"``.
     forcing_scheme : str
         Forcing scheme name (only used when *force_vector* is given).
     force_vector : array-like, optional
@@ -146,6 +146,8 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             self.collision = BGK(self.velocity_set, self.precision_policy, self.compute_backend)
         elif collision_type == "KBC":
             self.collision = KBC(self.velocity_set, self.precision_policy, self.compute_backend)
+        elif collision_type == "SmagorinskyLESBGK":
+            self.collision = SmagorinskyLESBGK(self.velocity_set, self.precision_policy, self.compute_backend)
 
         if force_vector is not None:
             self.collision = ForcedCollision(collision_operator=self.collision, forcing_scheme=forcing_scheme, force_vector=force_vector)
@@ -1090,28 +1092,6 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             "SFV_stream_coarse_step": SFV_stream_coarse_step,
         }
 
-    def launch_container(self, streamId, op_name, mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep):
-        """Immediately launch a single Neon container by name.
-
-        Parameters
-        ----------
-        streamId : int
-            CUDA stream index.
-        op_name : str
-            Key into the container dictionary returned by ``_construct_neon``.
-        mres_level : int
-            Grid level to execute on.
-        f_0, f_1 : field
-            Double-buffered distribution-function fields.
-        bc_mask, missing_mask : field
-            Boundary condition and missing-population masks.
-        omega : float
-            Relaxation parameter at this level.
-        timestep : int
-            Current simulation timestep.
-        """
-        self.neon_container[op_name](mres_level, f_0, f_1, bc_mask, missing_mask, omega, timestep).run(0)
-
     def add_to_app(self, **kwargs):
         """Append a container invocation to the Neon skeleton application list.
 
@@ -1194,7 +1174,4 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
 
     @Operator.register_backend(ComputeBackend.NEON)
     def neon_launch(self, f_0, f_1, bc_mask, missing_mask, omega, timestep):
-        """Execute a single LBM step through the Neon backend (direct launch)."""
-        c = self.neon_container(f_0, f_1, bc_mask, missing_mask, omega, timestep)
-        c.run(0)
-        return f_0, f_1
+        raise NotImplementedError("Use MultiresSimulationManager.step() instead of launching this stepper directly.")

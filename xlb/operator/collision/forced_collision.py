@@ -9,6 +9,7 @@ from typing import Any
 
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.collision.collision import Collision
+from xlb.operator.macroscopic import Macroscopic
 from xlb.operator import Operator
 from functools import partial
 from xlb.operator.force import ExactDifference
@@ -38,6 +39,7 @@ class ForcedCollision(Collision):
     ):
         assert collision_operator is not None
         self.collision_operator = collision_operator
+        self.macroscopic = Macroscopic()
         super().__init__()
 
         assert forcing_scheme == "exact_difference", NotImplementedError(f"Force model {forcing_scheme} not implemented!")
@@ -50,7 +52,8 @@ class ForcedCollision(Collision):
     @partial(jit, static_argnums=(0,))
     def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
         fout = self.collision_operator(f, feq, omega)
-        fout = self.forcing_operator(fout, feq)
+        rho, u = self.macroscopic(fout)
+        fout = self.forcing_operator(fout, feq, rho, u)
         return fout
 
     def _construct_warp(self):
@@ -62,7 +65,8 @@ class ForcedCollision(Collision):
         @wp.func
         def functional(f: Any, feq: Any, omega: Any):
             fout = self.collision_operator.warp_functional(f, feq, omega)
-            fout = self.forcing_operator.warp_functional(fout, feq)
+            rho, u = self.macroscopic.warp_functional(fout)
+            fout = self.forcing_operator.warp_functional(fout, feq, rho, u)
             return fout
 
         # Construct the warp kernel
@@ -108,3 +112,14 @@ class ForcedCollision(Collision):
             dim=f.shape[1:],
         )
         return fout
+
+    def _construct_neon(self):
+        # Construct the functional
+        @wp.func
+        def functional(f: Any, feq: Any, omega: Any):
+            fout = self.collision_operator.neon_functional(f, feq, omega)
+            rho, u = self.macroscopic.neon_functional(fout)
+            fout = self.forcing_operator.neon_functional(fout, feq, rho, u)
+            return fout
+
+        return functional, None

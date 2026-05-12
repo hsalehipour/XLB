@@ -168,6 +168,7 @@ class MeshMaskerRay(MeshBoundaryMasker):
     ):
         # Prepare inputs
         import neon
+
         mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
 
         # Launch the appropriate neon container
