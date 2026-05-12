@@ -224,8 +224,6 @@ The stages of a fluid density field from an initial state to the emergence of th
 
 - **Hybrid BC:** Combines regularized and bounce-back methods with optional wall-distance interpolation for improved accuracy on curved geometries.
 
-- **Grad's Approximation BC:** Boundary condition based on Grad's approximation of the non-equilibrium distribution.
-
 ## Roadmap
 
 ### Recently Completed
