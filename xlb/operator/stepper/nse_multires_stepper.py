@@ -705,14 +705,22 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             return ll
 
         @neon.Container.factory(name="stream_coarse_step_ABC")
-        def stream_coarse_step_ABC(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any, omega: Any, timestep: int):
+        def stream_coarse_step_ABC(
+            level: int,
+            f_0_fd: Any,
+            f_1_fd: Any,
+            bc_mask_fd: Any,
+            missing_mask_fd: Any,
+            coalescence_factor: Any,
+            timestep: int,
+        ):
             def ll(loader: neon.Loader):
                 loader.set_mres_grid(bc_mask_fd.get_grid(), level)
                 f_0_pn = loader.get_mres_read_handle(f_0_fd)
                 f_1_pn = loader.get_mres_write_handle(f_1_fd)
                 bc_mask_pn = loader.get_mres_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_mres_read_handle(missing_mask_fd)
-                coalescence_factor_pn = loader.get_mres_read_handle(omega)
+                coalescence_factor_pn = loader.get_mres_read_handle(coalescence_factor)
 
                 @wp.func
                 def device(index: Any):
@@ -739,7 +747,15 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
             return ll
 
         @neon.Container.factory(name="SFV_stream_coarse_step_ABC")
-        def SFV_stream_coarse_step_ABC(level: int, f_0_fd: Any, f_1_fd: Any, bc_mask_fd: Any, missing_mask_fd: Any, omega: Any, timestep: int):
+        def SFV_stream_coarse_step_ABC(
+            level: int,
+            f_0_fd: Any,
+            f_1_fd: Any,
+            bc_mask_fd: Any,
+            missing_mask_fd: Any,
+            coalescence_factor: Any,
+            timestep: int,
+        ):
             """Stream on CFV voxels only — skips SFV and solid."""
 
             def ll(loader: neon.Loader):
@@ -748,7 +764,7 @@ class MultiresIncompressibleNavierStokesStepper(Stepper):
                 f_1_pn = loader.get_mres_write_handle(f_1_fd)
                 bc_mask_pn = loader.get_mres_read_handle(bc_mask_fd)
                 missing_mask_pn = loader.get_mres_read_handle(missing_mask_fd)
-                coalescence_factor_pn = loader.get_mres_read_handle(omega)
+                coalescence_factor_pn = loader.get_mres_read_handle(coalescence_factor)
 
                 @wp.func
                 def device(index: Any):
