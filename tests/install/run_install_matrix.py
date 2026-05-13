@@ -140,6 +140,7 @@ def main() -> int:
             "NEON: editable install with neon + test extras",
             "[neon,test]",
             "Installs neon_gpu wheel per setup.py (Linux x86_64/aarch64, Python 3.11+). "
+            "Includes h5py for Neon multires HDF5 export. "
             "Uninstalls any existing warp-lang before install and PyPI warp-lang after (Neon's fork).",
         ),
     ]

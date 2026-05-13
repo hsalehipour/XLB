@@ -190,6 +190,7 @@ class MeshMaskerAABB(MeshBoundaryMasker):
         missing_mask,
     ):
         import neon
+
         # Prepare inputs
         mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
 

@@ -139,7 +139,6 @@ class RegularizedBC(ZouHeBC):
         bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=ComputeBackend.WARP)
         # Set local constants
         _d = self.velocity_set.d
-        lattice_central_index = self.velocity_set.center_index
 
         @wp.func
         def functional_velocity(

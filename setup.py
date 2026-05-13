@@ -65,18 +65,12 @@ class InstallWithNeonHooks(install):
     def run(self):
         if _neon_extra_requested():
             _uninstall_warp_lang(
-                reason=(
-                    "Removing any existing warp-lang before Neon install "
-                    "(neon_gpu provides its own warp fork)."
-                ),
+                reason=("Removing any existing warp-lang before Neon install (neon_gpu provides its own warp fork)."),
             )
         install.run(self)
         if _neon_extra_requested():
             _uninstall_warp_lang(
-                reason=(
-                    "Removing PyPI warp-lang after install (core deps); "
-                    "use the warp bundled with neon_gpu."
-                ),
+                reason=("Removing PyPI warp-lang after install (core deps); use the warp bundled with neon_gpu."),
             )
 
 
@@ -106,7 +100,8 @@ setup(
         "warp": ["warp-lang>=1.10.0"],  # Kept for explicit `pip install xlb[warp]` / Neon uninstall hook docs
         "cuda": ["jax[cuda13]>=0.8.2"],  # For CUDA installations (pip install -U "jax[cuda13]")
         "tpu": ["jax[tpu]>=0.8.2"],  # For TPU installations
-        "neon": [_neon_wheel_requirement()],
+        # h5py: MultiresIO / Neon multi-resolution export to HDF5 (see xlb.utils.mesher).
+        "neon": [_neon_wheel_requirement(), "h5py>=3.10.0"],
         "test": ["pytest>=8.0.0"],
     },
     python_requires=">=3.11",

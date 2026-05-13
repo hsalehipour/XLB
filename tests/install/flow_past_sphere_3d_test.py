@@ -70,9 +70,7 @@ def _run_flow_past_sphere_for_backend(compute_backend: ComputeBackend) -> None:
     y = np.arange(grid_shape[1])
     z = np.arange(grid_shape[2])
     X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
-    indices = np.where(
-        (X - grid_shape[0] // 6) ** 2 + (Y - grid_shape[1] // 2) ** 2 + (Z - grid_shape[2] // 2) ** 2 < sphere_radius**2
-    )
+    indices = np.where((X - grid_shape[0] // 6) ** 2 + (Y - grid_shape[1] // 2) ** 2 + (Z - grid_shape[2] // 2) ** 2 < sphere_radius**2)
     sphere = [tuple(indices[i].tolist()) for i in range(velocity_set.d)]
 
     def bc_profile():
@@ -198,10 +196,7 @@ def run_flow_past_sphere_smoke() -> dict[str, Any]:
     for backend in backends_order:
         print(f"\n--- Backend: {backend.name} ---")
         if backend == ComputeBackend.NEON:
-            reason = (
-                "HalfwayBounceBackBC on the sphere has no NEON implementation in XLB "
-                "(see bc_halfway_bounce_back.neon_implementation)."
-            )
+            reason = "HalfwayBounceBackBC on the sphere has no NEON implementation in XLB (see bc_halfway_bounce_back.neon_implementation)."
             print(f"SKIP (unsupported): NEON — {reason}")
             skipped_unsupported.append(f"NEON ({reason})")
             continue
@@ -220,11 +215,7 @@ def run_flow_past_sphere_smoke() -> dict[str, Any]:
     print("\n=== Summary ===")
     print(f"Executed: {', '.join(executed) if executed else '(none)'}")
     if skipped_not_installed:
-        print(
-            "Skipped (not installed): "
-            + ", ".join(skipped_not_installed)
-            + " — required package not available."
-        )
+        print("Skipped (not installed): " + ", ".join(skipped_not_installed) + " — required package not available.")
     else:
         print("Skipped (not installed): (none)")
     if skipped_unsupported:

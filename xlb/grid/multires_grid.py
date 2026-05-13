@@ -187,32 +187,46 @@ class NeonMultiresGrid(Grid):
         if box_side not in side_config:
             raise ValueError(f"Unsupported box_side: {box_side}")
 
+        # Compare in a single coordinate system: finest-level (global) units.
+        # `origin` (from `make_cuboid_mesh`) is stored in **level-local cell units**,
+        # so a level-`level` cell at local index `i` has finest-level lower corner
+        # `(origin + i) * cell_size` and covers the interval
+        # `[(origin + i) * cell_size, (origin + i + 1) * cell_size - 1]`.
+        finest_shape = self.shape  # tuple of length d, in finest-level units
+
+        conf = side_config[box_side]
+        dim_idx = conf["dim"]
+        # `global_bound` is the global box face position in finest-level units.
+        global_bound = conf["value"](finest_shape) if callable(conf["value"]) else conf["value"]
+        is_high_side = callable(conf["value"])  # high side uses s-1, low side uses 0
+
         for level in range(num_levels):
             mask = level_data[level][0]
-            origin = level_data[level][2]  # Assume np.array of shape (d,)
-            grid_shape = self.level_to_shape(level)  # tuple of length d
-
-            conf = side_config[box_side]
-            dim_idx = conf["dim"]
-            grid_bounds = conf["value"](grid_shape) if callable(conf["value"]) else conf["value"]
+            origin = level_data[level][2]  # level-local cell units, shape (d,)
+            cell_size = self.refinement_factor**level
 
             # Get local indices of active voxels
-            local_coords = np.nonzero(mask)  # Tuple of d arrays, each of length num_active
+            local_coords = np.nonzero(mask)  # tuple of d arrays in level-local cell indices
             if not local_coords[0].size:
                 bc_indices_list.append([])
                 continue
 
-            # Compute global coords (list of d arrays)
-            global_coords = [local_coords[i] + origin[i] for i in range(d)]
+            # Cell lower corners in finest-level (global) units.
+            global_coords = [(local_coords[i] + origin[i]) * cell_size for i in range(d)]
 
-            # Filter: must match grid_bounds along the dimension associated with the selected box_side
-            cond = global_coords[dim_idx] == grid_bounds
+            # A cell is on the requested face if any of its finest-level cells
+            # lies on that face. Lower corner is `gc`, upper corner is `gc + cell_size - 1`.
+            if is_high_side:
+                cond = (global_coords[dim_idx] + (cell_size - 1)) == global_bound
+            else:
+                cond = global_coords[dim_idx] == global_bound
 
-            # If remove_edges, exclude perimeter of the face
+            # If remove_edges, exclude perimeter of the face (in finest-level units).
             if remove_edges:
                 for i in range(d):
                     if i != dim_idx:
-                        cond &= (global_coords[i] > 0) & (global_coords[i] < grid_shape[i] - 1)
+                        cell_high_i = global_coords[i] + (cell_size - 1)
+                        cond &= (global_coords[i] > 0) & (cell_high_i < finest_shape[i] - 1)
 
             # Collect filtered indices
             if np.any(cond):

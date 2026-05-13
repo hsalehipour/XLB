@@ -106,8 +106,12 @@ class ZouHeBC(BoundaryCondition):
             # a vector of zeros associated with no-slip BC.
             # Accounting for all scenarios here.
             if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
-                idx = np.nonzero(prescribed_value)[0]
-                prescribed_value = prescribed_value[idx][0] if idx.size else 0.0
+                if bc_type == "velocity":
+                    # Collapse the velocity vector down to its single non-zero
+                    # normal component (or 0.0 for no-slip).
+                    idx = np.nonzero(prescribed_value)[0]
+                    prescribed_value = prescribed_value[idx][0] if idx.size else 0.0
+                # Pressure already arrives as a Python float; nothing to collapse.
                 prescribed_value = self.precision_policy.store_precision.wp_dtype(prescribed_value)
             self.prescribed_value = prescribed_value
             self.profile = self._create_constant_prescribed_profile()

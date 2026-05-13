@@ -3,6 +3,7 @@ from jax import jit, lax
 import warp as wp
 from typing import Any
 
+from xlb import DefaultConfig
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
@@ -26,14 +27,20 @@ class ExactDifference(Operator):
     def __init__(
         self,
         force_vector,
-        equilibrium: Operator = None,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
     ):
         # TODO: currently we are limited to a single force vector not a spatially dependent forcing field
         self.force_vector = force_vector
-        self.equilibrium = QuadraticEquilibrium() if equilibrium is None else equilibrium
+
+        # Resolve compute_backend the same way Operator.__init__ does, so we
+        # know which equilibrium backend to use before super().__init__ runs.
+        # Neon kernels reuse Warp functionals, so sub-operators on the Neon
+        # backend are built on Warp.
+        resolved_backend = compute_backend or DefaultConfig.default_backend
+        eq_backend = ComputeBackend.WARP if resolved_backend == ComputeBackend.NEON else resolved_backend
+        self.equilibrium = QuadraticEquilibrium(compute_backend=eq_backend)
 
         # Call the parent constructor
         super().__init__(
@@ -121,3 +128,8 @@ class ExactDifference(Operator):
             dim=f_postcollision.shape[1:],
         )
         return fout
+
+    def _construct_neon(self):
+        # The neon backend relies on the warp functionals for its operations.
+        functional, _ = self._construct_warp()
+        return functional, None

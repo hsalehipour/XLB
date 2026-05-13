@@ -1,5 +1,5 @@
 """
-3D fow past a sphere with multi-resolution LBM.
+3D flow past a sphere with multi-resolution LBM.
 
 Demonstrates the multi-resolution Neon backend for a 3-D Poiseuille-
 inlet flow past a sphere inside a nested cuboid multi-resolution domain.

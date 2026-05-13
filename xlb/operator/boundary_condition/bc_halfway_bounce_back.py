@@ -111,9 +111,7 @@ class HalfwayBounceBackBC(BoundaryCondition):
             return prescribed_profile_warp
         if self.compute_backend == ComputeBackend.NEON:
             return prescribed_profile_warp
-        raise ValueError(
-            f"Constant prescribed profile unsupported for backend {self.compute_backend}"
-        )
+        raise ValueError(f"Constant prescribed profile unsupported for backend {self.compute_backend}")
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
