@@ -10,7 +10,7 @@ class ComputeBackend(Enum):
 
     ``JAX``  — single-res, multi-GPU/TPU via JAX.
     ``WARP`` — single-res, single-GPU CUDA via NVIDIA Warp.
-    ``NEON`` — single-res and multi-res, single-GPU CUDA via Neon (uses Warp kernels internally).
+    ``NEON`` — single-res, multi-GPU or multi-res single-GPU via Neon (uses Warp kernels internally).
     """
 
     JAX = auto()

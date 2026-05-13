@@ -23,7 +23,7 @@ class Stream(Operator):
     boundaries are applied automatically when a pull index falls outside
     the domain (Warp backend only; JAX uses ``jnp.roll``).
 
-    Supports JAX, Warp, and Neon backends.
+    Supports JAX, Warp backends.
     """
 
     @Operator.register_backend(ComputeBackend.JAX)
