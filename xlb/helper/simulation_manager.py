@@ -181,7 +181,7 @@ class MultiresSimulationManager(MultiresIncompressibleNavierStokesStepper):
         """
         self.app = []
 
-        stream_abc = {"omega": self.coalescence_factor, "timestep": 0}
+        stream_abc = {"coalescence_factor": self.coalescence_factor, "timestep": 0}
 
         # Finest-level op descriptors: (op_name, swap_f0_f1, extra_kwargs)
         fused_pull_finest = [
