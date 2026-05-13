@@ -62,8 +62,8 @@ def multires_grid_factory(
     shape: Tuple[int, ...],
     compute_backend: ComputeBackend = None,
     velocity_set=None,
-    sparsity_pattern_list: List[np.ndarray] = [],
-    sparsity_pattern_origins=[],
+    sparsity_pattern_list: List[np.ndarray] = None,
+    sparsity_pattern_origins = None,
 ):
     import neon
 
