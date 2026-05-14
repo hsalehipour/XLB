@@ -1,5 +1,9 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Base class for boundary conditions in a Lattice Boltzmann simulation.
+
+Every concrete BC inherits from :class:`BoundaryCondition`, which provides
+a registration mechanism, helper-function access, and the boilerplate
+needed to encode auxiliary data into the ``f_1`` buffer.
 """
 
 from enum import Enum, auto
@@ -7,8 +11,7 @@ import warp as wp
 from typing import Any
 from jax import jit
 from functools import partial
-import jax
-import jax.numpy as jnp
+import numpy as np
 
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
@@ -17,17 +20,39 @@ from xlb.operator.operator import Operator
 from xlb import DefaultConfig
 from xlb.operator.boundary_condition.boundary_condition_registry import boundary_condition_registry
 from xlb.operator.boundary_condition import HelperFunctionsBC
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
-# Enum for implementation step
 class ImplementationStep(Enum):
+    """At which algorithmic stage the boundary condition is applied."""
+
     COLLISION = auto()
     STREAMING = auto()
 
 
 class BoundaryCondition(Operator):
-    """
-    Base class for boundary conditions in a LBM simulation.
+    """Abstract base class for all LBM boundary conditions.
+
+    Each BC is registered with a unique numeric *id* and annotated with:
+
+    * ``implementation_step`` - whether it executes after streaming or after
+      collision.
+    * ``needs_aux_recovery`` / ``needs_aux_init`` - whether the BC stores
+      auxiliary data in the ``f_1`` distribution buffer.
+
+    Parameters
+    ----------
+    implementation_step : ImplementationStep
+        Phase in the LBM algorithm where this BC is applied.
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    indices : array-like, optional
+        Explicit voxel indices for this BC.
+    mesh_vertices : array-like, optional
+        Mesh vertices for geometry-based BCs.
+    voxelization_method : MeshVoxelizationMethod, optional
+        Voxelization strategy when *mesh_vertices* is provided.
     """
 
     def __init__(
@@ -38,6 +63,7 @@ class BoundaryCondition(Operator):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         self.id = boundary_condition_registry.register_boundary_condition(self.__class__.__name__ + "_" + str(hash(self)))
         velocity_set = velocity_set or DefaultConfig.velocity_set
@@ -54,28 +80,65 @@ class BoundaryCondition(Operator):
         self.implementation_step = implementation_step
 
         # A flag to indicate whether bc indices need to be padded in both normal directions to identify missing directions
-        # when inside/outside of the geoemtry is not known
+        # when inside/outside of the geometry is not known
         self.needs_padding = False
 
-        # A flag for BCs that need implicit boundary distance between the grid and a mesh (to be set to True if applicable inside each BC)
+        # A flag for BCs that need normalized distance between the grid and a mesh (to be set to True if applicable inside each BC)
         self.needs_mesh_distance = False
 
-        # A flag for BCs that need auxilary data initialization before stepper
+        # A flag for BCs that need auxiliary data initialization before stepper
         self.needs_aux_init = False
 
-        # A flag to track if the BC is initialized with auxilary data
+        # A flag to track if the BC is initialized with auxiliary data
         self.is_initialized_with_aux_data = False
 
-        # Number of auxilary data needed for the BC (for prescribed values)
+        # Number of auxiliary data needed for the BC (for prescribed values)
         self.num_of_aux_data = 0
 
-        # A flag for BCs that need auxilary data recovery after streaming
+        # A flag for BCs that need auxiliary data recovery after streaming
         self.needs_aux_recovery = False
 
-    @partial(jit, static_argnums=(0,), inline=True)
-    def update_bc_auxilary_data(self, f_pre, f_post, bc_mask, missing_mask):
+        # Voxelization method. For BC's specified on a mesh, the user can specify the voxelization scheme.
+        # Currently we support three methods based on (a) aabb method (b) ray casting and (c) winding number.
+        self.voxelization_method = voxelization_method
+
+        # Construct a default warp functional for assembling auxiliary data if needed
+        if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
+
+            @wp.func
+            def assemble_auxiliary_data(
+                index: Any,
+                timestep: Any,
+                missing_mask: Any,
+                f_0: Any,
+                f_1: Any,
+                f_pre: Any,
+                f_post: Any,
+                level: Any = 0,
+            ):
+                return f_post
+
+            self.assemble_auxiliary_data = assemble_auxiliary_data
+
+    def pad_indices(self):
         """
-        A placeholder function for prepare the auxilary distribution functions for the boundary condition.
+        This method pads the indices to ensure that the boundary condition can be applied correctly.
+        It is used to find missing directions in indices_boundary_masker when the BC is imposed on a
+        geometry that is in the domain interior.
+        """
+        _d = self.velocity_set.d
+        bc_indices = np.array(self.indices)
+        lattice_velocity_np = self.velocity_set._c
+        if self.needs_padding:
+            bc_indices_padded = bc_indices[:, :, None] + lattice_velocity_np[:, None, :]
+            return np.unique(bc_indices_padded.reshape(_d, -1), axis=1)
+        else:
+            return bc_indices
+
+    @partial(jit, static_argnums=(0,), inline=True)
+    def assemble_auxiliary_data(self, f_pre, f_post, bc_mask, missing_mask):
+        """
+        A placeholder function for prepare the auxiliary distribution functions for the boundary condition.
         currently being called after collision only.
         """
         return f_post
@@ -94,14 +157,14 @@ class BoundaryCondition(Operator):
             f_pre: wp.array4d(dtype=Any),
             f_post: wp.array4d(dtype=Any),
             bc_mask: wp.array4d(dtype=wp.uint8),
-            missing_mask: wp.array4d(dtype=wp.bool),
+            missing_mask: wp.array4d(dtype=wp.uint8),
         ):
             # Get the global index
             i, j, k = wp.tid()
             index = wp.vec3i(i, j, k)
 
             # read tid data
-            _f_pre, _f_post, _boundary_id, _missing_mask = bc_helper.get_thread_data(f_pre, f_post, bc_mask, missing_mask, index)
+            _f_pre, _f_post, _boundary_id, _missing_mask = bc_helper.get_bc_thread_data(f_pre, f_post, bc_mask, missing_mask, index)
 
             # Apply the boundary condition
             if _boundary_id == _id:
@@ -115,61 +178,3 @@ class BoundaryCondition(Operator):
                 f_post[l, index[0], index[1], index[2]] = self.store_dtype(_f[l])
 
         return kernel
-
-    def _construct_aux_data_init_kernel(self, functional):
-        """
-        Constructs the warp kernel for the auxilary data recovery.
-        """
-        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=self.compute_backend)
-
-        _id = wp.uint8(self.id)
-        _opp_indices = self.velocity_set.opp_indices
-        _num_of_aux_data = self.num_of_aux_data
-
-        # Construct the warp kernel
-        @wp.kernel
-        def aux_data_init_kernel(
-            f_0: wp.array4d(dtype=Any),
-            f_1: wp.array4d(dtype=Any),
-            bc_mask: wp.array4d(dtype=wp.uint8),
-            missing_mask: wp.array4d(dtype=wp.bool),
-        ):
-            # Get the global index
-            i, j, k = wp.tid()
-            index = wp.vec3i(i, j, k)
-
-            # read tid data
-            _f_0, _f_1, _boundary_id, _missing_mask = bc_helper.get_thread_data(f_0, f_1, bc_mask, missing_mask, index)
-
-            # Apply the functional
-            if _boundary_id == _id:
-                # prescribed_values is a q-sized vector of type wp.vec
-                prescribed_values = functional(index)
-                # Write the result for all q directions, but only store up to num_of_aux_data
-                # TODO: Somehow raise an error if the number of prescribed values does not match the number of missing directions
-
-                # The first BC auxiliary data is stored in the zero'th index of f_1 associated with its center.
-                f_1[0, index[0], index[1], index[2]] = self.store_dtype(prescribed_values[0])
-                counter = wp.int32(1)
-
-                # The other remaining BC auxiliary data are stored in missing directions of f_1.
-                for l in range(1, self.velocity_set.q):
-                    if _missing_mask[l] == wp.uint8(1) and counter < _num_of_aux_data:
-                        f_1[_opp_indices[l], index[0], index[1], index[2]] = self.store_dtype(prescribed_values[counter])
-                        counter += 1
-
-        return aux_data_init_kernel
-
-    def aux_data_init(self, f_0, f_1, bc_mask, missing_mask):
-        if self.compute_backend == ComputeBackend.WARP:
-            # Launch the warp kernel
-            wp.launch(
-                self._construct_aux_data_init_kernel(self.profile),
-                inputs=[f_0, f_1, bc_mask, missing_mask],
-                dim=f_0.shape[1:],
-            )
-        elif self.compute_backend == ComputeBackend.JAX:
-            # We don't use boundary aux encoding/decoding in JAX
-            self.prescribed_values = self.profile()
-        self.is_initialized_with_aux_data = True
-        return f_0, f_1

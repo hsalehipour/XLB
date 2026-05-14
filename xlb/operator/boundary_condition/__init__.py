@@ -1,4 +1,4 @@
-from xlb.operator.boundary_condition.helper_functions_bc import HelperFunctionsBC
+from xlb.operator.boundary_condition.helper_functions_bc import HelperFunctionsBC, EncodeAuxiliaryData, MultiresEncodeAuxiliaryData
 from xlb.operator.boundary_condition.boundary_condition import BoundaryCondition
 from xlb.operator.boundary_condition.boundary_condition_registry import BoundaryConditionRegistry
 from xlb.operator.boundary_condition.bc_equilibrium import EquilibriumBC
@@ -8,4 +8,4 @@ from xlb.operator.boundary_condition.bc_fullway_bounce_back import FullwayBounce
 from xlb.operator.boundary_condition.bc_zouhe import ZouHeBC
 from xlb.operator.boundary_condition.bc_regularized import RegularizedBC
 from xlb.operator.boundary_condition.bc_extrapolation_outflow import ExtrapolationOutflowBC
-from xlb.operator.boundary_condition.bc_grads_approximation import GradsApproximationBC
+from xlb.operator.boundary_condition.bc_hybrid import HybridBC

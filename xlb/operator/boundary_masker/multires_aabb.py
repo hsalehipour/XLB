@@ -1,0 +1,101 @@
+"""
+Multi-resolution AABB mesh-based boundary masker for the Neon backend.
+"""
+
+import warp as wp
+from typing import Any
+from xlb.velocity_set.velocity_set import VelocitySet
+from xlb.precision_policy import PrecisionPolicy
+from xlb.compute_backend import ComputeBackend
+from xlb.operator.boundary_masker import MeshMaskerAABB
+from xlb.operator.operator import Operator
+
+
+class MultiresMeshMaskerAABB(MeshMaskerAABB):
+    """
+    Operator for creating boundary missing_mask from mesh using Axis-Aligned Bounding Box (AABB) voxelization in multiresolution simulations.
+
+    This implementation uses warp.mesh_query_aabb for efficient mesh-voxel intersection testing,
+    providing approximate 1-voxel thick surface detection around the mesh geometry.
+    Suitable for scenarios where fast, approximate boundary detection is sufficient.
+    TODO@Hesam:
+    Right now, we cannot properly mask a mesh file if it lives on any level other than the finest. This issue can be easily solved by adding
+           gx = wp.neon_get_x(cIdx) // 2 ** level
+           gy = wp.neon_get_y(cIdx) // 2 ** level
+           gz = wp.neon_get_z(cIdx) // 2 ** level
+    to the "neon_index_to_warp" and subsequently add "level" to the arguments of "index_to_position_neon", "get_pull_index_neon" and
+    "is_in_bc_indices_neon". In order to extract "level" from the "neon_field_hdl" we can use the function wp.neon_level(neon_field_hdl).
+    """
+
+    def __init__(
+        self,
+        velocity_set: VelocitySet = None,
+        precision_policy: PrecisionPolicy = None,
+        compute_backend: ComputeBackend = None,
+    ):
+        # Call super
+        super().__init__(velocity_set, precision_policy, compute_backend)
+        if self.compute_backend in [ComputeBackend.JAX, ComputeBackend.WARP]:
+            raise NotImplementedError(f"Operator {self.__class__.__name__} not supported in {self.compute_backend} backend.")
+
+    def _construct_neon(self):
+        import neon
+
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+
+        @neon.Container.factory(name="MeshMaskerAABB")
+        def container(
+            mesh_id: Any,
+            id_number: Any,
+            distances: Any,
+            bc_mask: Any,
+            missing_mask: Any,
+            needs_mesh_distance: Any,
+            level: Any,
+        ):
+            def aabb_launcher(loader: neon.Loader):
+                loader.set_mres_grid(bc_mask.get_grid(), level)
+                distances_pn = loader.get_mres_write_handle(distances)
+                bc_mask_pn = loader.get_mres_write_handle(bc_mask)
+                missing_mask_pn = loader.get_mres_write_handle(missing_mask)
+
+                @wp.func
+                def aabb_kernel(index: Any):
+                    # apply the functional
+                    functional(
+                        index,
+                        mesh_id,
+                        id_number,
+                        distances_pn,
+                        bc_mask_pn,
+                        missing_mask_pn,
+                        needs_mesh_distance,
+                    )
+
+                loader.declare_kernel(aabb_kernel)
+
+            return aabb_launcher
+
+        return functional, container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(
+        self,
+        bc,
+        distances,
+        bc_mask,
+        missing_mask,
+        stream=0,
+    ):
+        import neon
+
+        # Prepare inputs
+        mesh_id, bc_id = self._prepare_kernel_inputs(bc, bc_mask)
+
+        grid = bc_mask.get_grid()
+        for level in range(grid.num_levels):
+            # Launch the neon container
+            c = self.neon_container(mesh_id, bc_id, distances, bc_mask, missing_mask, wp.static(bc.needs_mesh_distance), level)
+            c.run(stream, container_runtime=neon.Container.ContainerRuntime.neon)
+        return distances, bc_mask, missing_mask

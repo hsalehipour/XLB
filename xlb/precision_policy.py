@@ -1,11 +1,18 @@
-# Enum for precision policy
+"""
+Precision and precision-policy enumerations for XLB.
+
+:class:`Precision` maps symbolic precisions to Warp and JAX dtypes.
+:class:`PrecisionPolicy` pairs a *compute* precision (used during
+arithmetic) with a *store* precision (used in memory), enabling
+mixed-precision simulations.
+"""
 
 from enum import Enum, auto
-import jax.numpy as jnp
-import warp as wp
 
 
 class Precision(Enum):
+    """Scalar precision levels with Warp and JAX dtype accessors."""
+
     FP64 = auto()
     FP32 = auto()
     FP16 = auto()
@@ -14,6 +21,8 @@ class Precision(Enum):
 
     @property
     def wp_dtype(self):
+        import warp as wp
+
         if self == Precision.FP64:
             return wp.float64
         elif self == Precision.FP32:
@@ -29,6 +38,8 @@ class Precision(Enum):
 
     @property
     def jax_dtype(self):
+        import jax.numpy as jnp
+
         if self == Precision.FP64:
             return jnp.float64
         elif self == Precision.FP32:
@@ -44,6 +55,12 @@ class Precision(Enum):
 
 
 class PrecisionPolicy(Enum):
+    """Mixed-precision policy pairing compute and store precisions.
+
+    The naming convention is ``<compute><store>``, e.g. ``FP32FP16``
+    computes in FP32 and stores results in FP16.
+    """
+
     FP64FP64 = auto()
     FP64FP32 = auto()
     FP64FP16 = auto()
@@ -81,9 +98,13 @@ class PrecisionPolicy(Enum):
             raise ValueError("Invalid precision policy")
 
     def cast_to_compute_jax(self, array):
+        import jax.numpy as jnp
+
         compute_precision = self.compute_precision
         return jnp.array(array, dtype=compute_precision.jax_dtype)
 
     def cast_to_store_jax(self, array):
+        import jax.numpy as jnp
+
         store_precision = self.store_precision
         return jnp.array(array, dtype=store_precision.jax_dtype)

@@ -4,9 +4,10 @@ numpy
 pyvista
 Rtree
 trimesh
-warp-lang
 numpy-stl
 pydantic
+nvtx
 pytest
 ruff
 usd-core
+h5py

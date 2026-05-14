@@ -1,5 +1,14 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Extrapolation outflow boundary condition.
+
+Uses first-order extrapolation from the interior to set the unknown
+populations at outflow boundaries, avoiding strong wave reflections.
+
+Reference
+---------
+Geier, M. et al. (2015). "The cumulant lattice Boltzmann equation in
+three dimensions: Theory and validation." *Computers & Mathematics
+with Applications*, 70(4), 507-547.
 """
 
 import jax.numpy as jnp
@@ -19,6 +28,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
     ImplementationStep,
     BoundaryCondition,
 )
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
 class ExtrapolationOutflowBC(BoundaryCondition):
@@ -42,6 +52,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         # Call the parent constructor
         super().__init__(
@@ -51,16 +62,20 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
         # find and store the normal vector using indices
-        self._get_normal_vec(indices)
+        if self.compute_backend == ComputeBackend.JAX:
+            self._get_normal_vectors(indices)
 
         # Unpack the two warp functionals needed for this BC!
         if self.compute_backend == ComputeBackend.WARP:
-            self.warp_functional, self.update_bc_auxilary_data = self.warp_functional
+            self.warp_functional, self.assemble_auxiliary_data = self.warp_functional
+        elif self.compute_backend == ComputeBackend.NEON:
+            self.neon_functional, self.assemble_auxiliary_data = self.neon_functional
 
-    def _get_normal_vec(self, indices):
+    def _get_normal_vectors(self, indices):
         # Get the frequency count and most common element directly
         freq_counts = [Counter(coord).most_common(1)[0] for coord in indices]
 
@@ -89,9 +104,10 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             return jnp.roll(fld, (vec[0], vec[1], vec[2]), axis=(1, 2, 3))
 
     @partial(jit, static_argnums=(0,), inline=True)
-    def update_bc_auxilary_data(self, f_pre, f_post, bc_mask, missing_mask):
+    def assemble_auxiliary_data(self, f_pre, f_post, bc_mask, missing_mask):
         """
-        Update the auxilary distribution functions for the boundary condition.
+        Prepare time-dependent dynamic data for imposing the boundary condition in the next iteration after streaming.
+        We use directions that leave the domain for storing this prepared data.
         Since this function is called post-collisiotn: f_pre = f_post_stream and f_post = f_post_collision
         """
         sound_speed = 1.0 / jnp.sqrt(3.0)
@@ -102,7 +118,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
         # Roll boundary mask in the opposite of the normal vector to mask its next immediate neighbour
         neighbour = self._roll(boundary, -self.normal)
 
-        # gather post-streaming values associated with previous time-step to construct the auxilary data for BC
+        # gather post-streaming values associated with previous time-step to construct the required data for BC
         fpop = jnp.where(boundary, f_pre, f_post)
         fpop_neighbour = jnp.where(neighbour, f_pre, f_post)
 
@@ -168,7 +184,7 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             return _f
 
         @wp.func
-        def update_bc_auxilary_data(
+        def assemble_auxiliary_data_warp(
             index: Any,
             timestep: Any,
             missing_mask: Any,
@@ -177,9 +193,9 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             _f_pre: Any,
             _f_post: Any,
         ):
-            # Update the auxilary data for this BC using the neighbour's populations stored in f_aux and
-            # f_pre (post-streaming values of the current voxel). We use directions that leave the domain
-            # for storing this prepared data.
+            # Prepare time-dependent dynamic data for imposing the boundary condition in the next iteration after streaming.
+            # We use directions that leave the domain for storing this prepared data.
+            # Since this function is called post-collisiotn: f_pre = f_post_stream and f_post = f_post_collision
             _f = _f_post
             nv = get_normal_vectors(missing_mask)
             for l in range(self.velocity_set.q):
@@ -194,9 +210,42 @@ class ExtrapolationOutflowBC(BoundaryCondition):
                     _f[_opp_indices[l]] = (self.compute_dtype(1.0) - sound_speed) * _f_pre[l] + sound_speed * f_aux
             return _f
 
-        kernel = self._construct_kernel(functional)
+        @wp.func
+        def assemble_auxiliary_data_neon(
+            index: Any,
+            timestep: Any,
+            missing_mask: Any,
+            f_0: Any,
+            f_1: Any,
+            _f_pre: Any,
+            _f_post: Any,
+            level: Any = 0,
+        ):
+            # Prepare time-dependent dynamic data for imposing the boundary condition in the next iteration after streaming.
+            # We use directions that leave the domain for storing this prepared data.
+            # Since this function is called post-collisiotn: f_pre = f_post_stream and f_post = f_post_collision
+            _f = _f_post
+            nv = get_normal_vectors(missing_mask)
+            for lattice_dir in range(self.velocity_set.q):
+                if missing_mask[lattice_dir] == wp.uint8(1):
+                    # f_0 is the post-collision values of the current time-step
+                    # Get pull index associated with the "neighbours" pull_index
+                    offset = wp.vec3i(-_c[0, lattice_dir], -_c[1, lattice_dir], -_c[2, lattice_dir])
+                    for d in range(self.velocity_set.d):
+                        offset[d] = offset[d] - nv[d]
+                    offset_pull_index = wp.neon_ngh_idx(wp.int8(offset[0]), wp.int8(offset[1]), wp.int8(offset[2]))
 
-        return (functional, update_bc_auxilary_data), kernel
+                    # The following is the post-streaming values of the neighbor cell
+                    # This function reads a field value at a given neighboring index and direction.
+                    unused_is_valid = wp.bool(False)
+                    f_aux = self.compute_dtype(wp.neon_read_ngh(f_0, index, offset_pull_index, lattice_dir, self.store_dtype(0.0), unused_is_valid))
+                    _f[_opp_indices[lattice_dir]] = (self.compute_dtype(1.0) - sound_speed) * _f_pre[lattice_dir] + sound_speed * f_aux
+            return _f
+
+        kernel = self._construct_kernel(functional)
+        assemble_auxiliary_data = assemble_auxiliary_data_warp if self.compute_backend == ComputeBackend.WARP else assemble_auxiliary_data_neon
+
+        return (functional, assemble_auxiliary_data), kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
     def warp_implementation(self, _f_pre, _f_post, bc_mask, missing_mask):
@@ -207,3 +256,12 @@ class ExtrapolationOutflowBC(BoundaryCondition):
             dim=_f_pre.shape[1:],
         )
         return _f_post
+
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+        # raise exception as this feature is not implemented yet
+        raise NotImplementedError("This feature is not implemented in XLB with the NEON backend yet.")

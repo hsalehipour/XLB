@@ -131,6 +131,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.xlb-env/
+.xlb_install_test_venvs/
 
 # Spyder project settings
 .spyderproject
@@ -155,6 +157,14 @@ checkpoints/*
 dist/
 build/
 *.egg-info/
+*.dot
+
+# Ignore h5 and xmf formats
+*.h5
+*.xmf
+
+# Ignore CSV files
+*.csv
 
 # USD files
 *.usd

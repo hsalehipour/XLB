@@ -20,7 +20,7 @@ import time
 
 omega = 1.6
 grid_shape = (512 // 2, 128 // 2, 128 // 2)
-compute_backend = ComputeBackend.WARP
+compute_backend = ComputeBackend.JAX
 precision_policy = PrecisionPolicy.FP32FP32
 velocity_set = xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=compute_backend)
 u_max = 0.04
@@ -51,7 +51,7 @@ y = np.arange(grid_shape[1])
 z = np.arange(grid_shape[2])
 X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
 indices = np.where((X - grid_shape[0] // 6) ** 2 + (Y - grid_shape[1] // 2) ** 2 + (Z - grid_shape[2] // 2) ** 2 < sphere_radius**2)
-sphere = [tuple(indices[i]) for i in range(velocity_set.d)]
+sphere = [tuple(indices[i].tolist()) for i in range(velocity_set.d)]
 
 
 # Define Boundary Conditions
@@ -80,21 +80,25 @@ def bc_profile():
 
         return bc_profile_jax
 
-    elif compute_backend == ComputeBackend.WARP:
+    else:
+        wp_dtype = precision_policy.compute_precision.wp_dtype
+        H_y = wp_dtype(grid_shape[1] - 1)  # Height in y direction
+        H_z = wp_dtype(grid_shape[2] - 1)  # Height in z direction
+        two = wp_dtype(2.0)
 
         @wp.func
         def bc_profile_warp(index: wp.vec3i):
             # Poiseuille flow profile: parabolic velocity distribution
-            y = wp.float32(index[1])
-            z = wp.float32(index[2])
+            y = wp_dtype(index[1])
+            z = wp_dtype(index[2])
 
             # Calculate normalized distance from center
-            y_center = y - (H_y / 2.0)
-            z_center = z - (H_z / 2.0)
-            r_squared = (2.0 * y_center / H_y) ** 2.0 + (2.0 * z_center / H_z) ** 2.0
+            y_center = y - (H_y / two)
+            z_center = z - (H_z / two)
+            r_squared = (two * y_center / H_y) ** two + (two * z_center / H_z) ** two
 
             # Parabolic profile: u = u_max * (1 - r²)
-            return wp.vec(u_max * wp.max(0.0, 1.0 - r_squared), length=1)
+            return wp.vec(wp_dtype(u_max) * wp.max(wp_dtype(0.0), wp_dtype(1.0) - r_squared), length=1)
 
         return bc_profile_warp
 
@@ -122,15 +126,33 @@ macro = Macroscopic(
     precision_policy=precision_policy,
     velocity_set=xlb.velocity_set.D3Q19(precision_policy=precision_policy, compute_backend=ComputeBackend.JAX),
 )
+to_jax = xlb.utils.ToJAX("populations", velocity_set.q, grid_shape)
+
+# Setup Momentum Transfer for Force Calculation
+from xlb.operator.force.momentum_transfer import MomentumTransfer
+
+momentum_transfer = MomentumTransfer(bc_sphere, compute_backend=compute_backend)
+sphere_cross_section = np.pi * sphere_radius**2
 
 
 # Post-Processing Function
-def post_process(step, f_current):
-    # Convert to JAX array if necessary
-    if not isinstance(f_current, jnp.ndarray):
-        f_current = wp.to_jax(f_current)
+def post_process(step, f_0, f_1):
+    wp.synchronize()
 
-    rho, u = macro(f_current)
+    # Compute lift and drag
+    boundary_force = momentum_transfer(f_0, f_1, bc_mask, missing_mask)
+    drag = boundary_force[0]  # x-direction
+    lift = boundary_force[2]
+    cd = 2.0 * drag / (u_max**2 * sphere_cross_section)
+    cl = 2.0 * lift / (u_max**2 * sphere_cross_section)
+    print(f"CD={cd}, CL={cl}")
+
+    # Convert to JAX array if necessary
+    if not isinstance(f_0, jnp.ndarray):
+        f_0 = to_jax(f_0)
+        wp.synchronize()
+
+    rho, u = macro(f_0)
 
     # Remove boundary cells
     u = u[:, 1:-1, 1:-1, 1:-1]
@@ -158,9 +180,7 @@ for step in range(num_steps):
     f_0, f_1 = f_1, f_0  # Swap the buffers
 
     if step % post_process_interval == 0 or step == num_steps - 1:
-        if compute_backend == ComputeBackend.WARP:
-            wp.synchronize()
-        post_process(step, f_0)
+        post_process(step, f_0, f_1)
         end_time = time.time()
         elapsed = end_time - start_time
         print(f"Completed step {step}. Time elapsed for {post_process_interval} steps: {elapsed:.6f} seconds.")

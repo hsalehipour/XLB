@@ -1,3 +1,7 @@
+"""
+BGK collision operator with Smagorinsky large-eddy-simulation sub-grid model.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -12,8 +16,19 @@ from functools import partial
 
 
 class SmagorinskyLESBGK(Collision):
-    """
-    BGK collision operator for LBM with Smagorinsky LES model.
+    """BGK collision with Smagorinsky LES turbulence modelling.
+
+    Adjusts the effective relaxation time based on the local strain rate
+    estimated from the non-equilibrium stress tensor, using the
+    Smagorinsky model constant *C_s*.
+
+    Parameters
+    ----------
+    velocity_set : VelocitySet, optional
+    precision_policy : PrecisionPolicy, optional
+    compute_backend : ComputeBackend, optional
+    smagorinsky_coef : float
+        Smagorinsky model constant (default 0.17).
     """
 
     def __init__(
@@ -28,7 +43,7 @@ class SmagorinskyLESBGK(Collision):
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0,))
-    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, rho: jnp.ndarray, u: jnp.ndarray, omega):
+    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
         fneq = f - feq
 
         pi_neq = jnp.tensordot(self.velocity_set.cc, fneq, axes=(0, 0))
@@ -44,9 +59,7 @@ class SmagorinskyLESBGK(Collision):
 
         tau0 = self.compute_dtype(1.0) / self.compute_dtype(omega)
         cs = self.compute_dtype(self.smagorinsky_coef)
-        tau = self.compute_dtype(0.5) * (
-            tau0 + jnp.sqrt(tau0 * tau0 + self.compute_dtype(36.0) * (cs * cs) * jnp.sqrt(strain))
-        )
+        tau = self.compute_dtype(0.5) * (tau0 + jnp.sqrt(tau0 * tau0 + self.compute_dtype(36.0) * (cs * cs) * jnp.sqrt(strain)))
 
         omega_eff = self.compute_dtype(1.0) / tau
         fout = f - omega_eff[None, ...] * fneq
@@ -67,37 +80,10 @@ class SmagorinskyLESBGK(Collision):
         def functional(
             f: Any,
             feq: Any,
-            rho: Any,
-            u: Any,
             omega: Any,
         ):
             # Compute the non-equilibrium distribution
             fneq = f - feq
-
-            # Sailfish implementation
-            # {
-            #  float tmp, strain;
-
-            #  strain = 0.0f;
-
-            #  // Off-diagonal components, count twice for symmetry reasons.
-            #  %for a in range(0, dim):
-            #    %for b in range(a + 1, dim):
-            #       tmp = ${cex(sym.ex_flux(grid, 'd0', a, b, config), pointers=True)} -
-            #           ${cex(sym.ex_eq_flux(grid, a, b))};
-            #       strain += 2.0f * tmp * tmp;
-            #    %endfor
-            #  %endfor
-
-            #  // Diagonal components.
-            #  %for a in range(0, dim):
-            #    tmp = ${cex(sym.ex_flux(grid, 'd0', a, a, config), pointers=True)} -
-            #        ${cex(sym.ex_eq_flux(grid, a, a))};
-            #    strain += tmp * tmp;
-            #  %endfor
-
-            #  tau0 += 0.5f * (sqrtf(tau0 * tau0 + 36.0f * ${cex(smagorinsky_const**2)} * sqrtf(strain)) - tau0);
-            # }
 
             # Compute strain
             pi_neq = _pi_vec()
@@ -117,8 +103,7 @@ class SmagorinskyLESBGK(Collision):
             # Compute the Smagorinsky model
             _tau = self.compute_dtype(1.0) / self.compute_dtype(omega)
             tau = _tau + (
-                self.compute_dtype(0.5)
-                * (wp.sqrt(_tau * _tau + self.compute_dtype(36.0) * (_smagorinsky_coef**2.0) * wp.sqrt(strain)) - _tau)
+                self.compute_dtype(0.5) * (wp.sqrt(_tau * _tau + self.compute_dtype(36.0) * (_smagorinsky_coef**2.0) * wp.sqrt(strain)) - _tau)
             )
 
             # Compute the collision
@@ -130,8 +115,6 @@ class SmagorinskyLESBGK(Collision):
         def kernel(
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
             omega: wp.float32,
         ):
@@ -145,13 +128,9 @@ class SmagorinskyLESBGK(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -160,18 +139,20 @@ class SmagorinskyLESBGK(Collision):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, rho, u, fout, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
             inputs=[
                 f,
                 feq,
-                rho,
-                u,
                 fout,
                 omega,
             ],
             dim=f.shape[1:],
         )
         return fout
+
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None

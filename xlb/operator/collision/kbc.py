@@ -43,8 +43,6 @@ class KBC(Collision):
         self,
         f: jnp.ndarray,
         feq: jnp.ndarray,
-        rho: jnp.ndarray,
-        u: jnp.ndarray,
         omega,
     ):
         """
@@ -56,18 +54,14 @@ class KBC(Collision):
             Distribution function.
         feq : jax.numpy.array
             Equilibrium distribution function.
-        rho : jax.numpy.array
-            Density.
-        u : jax.numpy.array
-            Velocity.
         """
         fneq = f - feq
         if isinstance(self.velocity_set, D2Q9):
             shear = self.decompose_shear_d2q9_jax(fneq)
-            delta_s = shear * rho / 4.0
+            delta_s = shear / 4.0
         elif isinstance(self.velocity_set, D3Q27):
             shear = self.decompose_shear_d3q27_jax(fneq)
-            delta_s = shear * rho
+            delta_s = shear
         else:
             raise NotImplementedError("Velocity set not supported: {}".format(type(self.velocity_set)))
 
@@ -269,18 +263,16 @@ class KBC(Collision):
         def functional(
             f: Any,
             feq: Any,
-            rho: Any,
-            u: Any,
             omega: Any,
         ):
             # Compute shear and delta_s
             fneq = f - feq
             if wp.static(self.velocity_set.d == 3):
                 shear = decompose_shear_d3q27(fneq)
-                delta_s = shear * rho
+                delta_s = shear
             else:
                 shear = decompose_shear_d2q9(fneq)
-                delta_s = shear * rho / self.compute_dtype(4.0)
+                delta_s = shear / self.compute_dtype(4.0)
 
             # Compute required constants based on the input omega (omega is the inverse relaxation time)
             _beta = self.compute_dtype(0.5) * self.compute_dtype(omega)
@@ -301,8 +293,6 @@ class KBC(Collision):
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             omega: Any,
         ):
             # Get the global index
@@ -316,13 +306,9 @@ class KBC(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -330,8 +316,15 @@ class KBC(Collision):
 
         return functional, kernel
 
+    def _construct_neon(self):
+        # Redefine the momentum flux operator for the neon backend
+        # This is because the neon backend relies on the warp functionals for its operations.
+        self.momentum_flux = MomentumFlux(compute_backend=ComputeBackend.WARP)
+        functional, _ = self._construct_warp()
+        return functional, None
+
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, fout, rho, u, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
@@ -339,8 +332,6 @@ class KBC(Collision):
                 f,
                 feq,
                 fout,
-                rho,
-                u,
                 omega,
             ],
             dim=f.shape[1:],

@@ -12,18 +12,30 @@ from typing import Tuple, Any
 from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
-from xlb.operator.equilibrium.equilibrium import Equilibrium
-from xlb.operator.equilibrium import QuadraticEquilibrium
+from xlb.operator.equilibrium import Equilibrium, QuadraticEquilibrium
 from xlb.operator.operator import Operator
 from xlb.operator.boundary_condition.boundary_condition import (
     ImplementationStep,
     BoundaryCondition,
 )
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
 class EquilibriumBC(BoundaryCondition):
-    """
-    Full Bounce-back boundary condition for a lattice Boltzmann method simulation.
+    """Equilibrium boundary condition.
+
+    Sets populations at tagged voxels to the equilibrium distribution
+    computed from the prescribed macroscopic density *rho* and velocity
+    *u*.  Commonly used as an inlet or outlet condition.
+
+    Parameters
+    ----------
+    rho : float
+        Prescribed macroscopic density.
+    u : tuple of float
+        Prescribed macroscopic velocity ``(ux, uy, uz)``.
+    equilibrium_operator : Operator, optional
+        Equilibrium operator.  Defaults to ``QuadraticEquilibrium``.
     """
 
     def __init__(
@@ -36,6 +48,7 @@ class EquilibriumBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         # Store the equilibrium information
         self.rho = rho
@@ -53,6 +66,7 @@ class EquilibriumBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
     @Operator.register_backend(ComputeBackend.JAX)
@@ -90,8 +104,17 @@ class EquilibriumBC(BoundaryCondition):
 
         return functional, kernel
 
+    def _construct_neon(self):
+        # Redefine the equilibrium operators for the neon backend
+        # This is because the neon backend relies on the warp functionals for its operations.
+        self.equilibrium_operator = QuadraticEquilibrium(compute_backend=ComputeBackend.WARP)
+
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+        return functional, None
+
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+    def warp_launch(self, f_pre, f_post, bc_mask, missing_mask):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,

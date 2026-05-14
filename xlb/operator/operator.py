@@ -1,6 +1,22 @@
+"""
+Base operator module for XLB.
+
+Every LBM operator (collision, streaming, equilibrium, boundary condition,
+masker, stepper, etc.) inherits from :class:`Operator`.  The class provides:
+
+* **Backend dispatch** — ``__call__`` automatically selects the registered
+  implementation for the active compute backend.
+* **Precision management** — ``compute_dtype`` and ``store_dtype`` properties
+  return the correct type for the active backend and precision policy.
+* **Kernel construction hooks** — ``_construct_warp()`` / ``_construct_neon()``
+  are called at init time to compile backend-specific kernels and functionals.
+"""
+
 import inspect
 import traceback
 import jax
+import warp as wp
+from typing import Any
 
 from xlb.compute_backend import ComputeBackend
 from xlb import DefaultConfig
@@ -17,6 +33,17 @@ class Operator:
     _backends = {}
 
     def __init__(self, velocity_set=None, precision_policy=None, compute_backend=None):
+        """Initialize the operator.
+
+        Parameters
+        ----------
+        velocity_set : VelocitySet, optional
+            Lattice velocity set.  Defaults to ``DefaultConfig.velocity_set``.
+        precision_policy : PrecisionPolicy, optional
+            Precision policy.  Defaults to ``DefaultConfig.default_precision_policy``.
+        compute_backend : ComputeBackend, optional
+            Compute backend.  Defaults to ``DefaultConfig.default_backend``.
+        """
         # Set the default values from the global config
         self.velocity_set = velocity_set or DefaultConfig.velocity_set
         self.precision_policy = precision_policy or DefaultConfig.default_precision_policy
@@ -26,9 +53,17 @@ class Operator:
         if self.compute_backend not in ComputeBackend:
             raise ValueError(f"Compute_backend {compute_backend} is not supported")
 
+        # Construct read/write functions for the compute backend
+        if self.compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
+            self.read_field, self.write_field = self._construct_read_write_functions()
+            self.read_field_neighbor = self._construct_read_field_neighbor()
+
         # Construct the kernel based compute_backend functions TODO: Maybe move this to the register or something
         if self.compute_backend == ComputeBackend.WARP:
             self.warp_functional, self.warp_kernel = self._construct_warp()
+
+        if self.compute_backend == ComputeBackend.NEON:
+            self.neon_functional, self.neon_container = self._construct_neon()
 
         # Updating JAX config in case fp64 is requested
         if self.compute_backend == ComputeBackend.JAX and (
@@ -52,6 +87,20 @@ class Operator:
         return decorator
 
     def __call__(self, *args, callback=None, **kwargs):
+        """Dispatch to the registered backend implementation.
+
+        Iterates over all registered implementations for this operator class
+        and the active backend, attempts to bind the provided arguments, and
+        executes the first matching signature.  An optional *callback* is
+        invoked with the result after successful execution.
+
+        Raises
+        ------
+        NotImplementedError
+            If no implementation is registered for the active backend.
+        Exception
+            If all candidate implementations raise errors.
+        """
         method_candidates = [
             (key, method) for key, method in self._backends.items() if key[0] == self.__class__.__name__ and key[1] == self.compute_backend
         ]
@@ -80,7 +129,7 @@ class Operator:
                 error = e
                 traceback_str = traceback.format_exc()
                 continue  # This skips to the next candidate if binding fails
-
+        method_candidates = [(key, method) for key, method in self._backends.items() if key[1] == self.compute_backend]
         raise Exception(f"Error captured for backend with key {key} for operator {self.__class__.__name__}: {error}\n {traceback_str}")
 
     @property
@@ -123,6 +172,8 @@ class Operator:
             return self.precision_policy.compute_precision.jax_dtype
         elif self.compute_backend == ComputeBackend.WARP:
             return self.precision_policy.compute_precision.wp_dtype
+        elif self.compute_backend == ComputeBackend.NEON:
+            return self.precision_policy.compute_precision.wp_dtype
 
     @property
     def store_dtype(self):
@@ -133,6 +184,20 @@ class Operator:
             return self.precision_policy.store_precision.jax_dtype
         elif self.compute_backend == ComputeBackend.WARP:
             return self.precision_policy.store_precision.wp_dtype
+        elif self.compute_backend == ComputeBackend.NEON:
+            return self.precision_policy.store_precision.wp_dtype
+
+    def get_precision_policy(self):
+        """
+        Returns the precision policy
+        """
+        return self.precision_policy
+
+    def get_grid(self):
+        """
+        Returns the grid object
+        """
+        return self.grid
 
     def _construct_warp(self):
         """
@@ -142,3 +207,110 @@ class Operator:
         Leave it for now, as it is not clear how the warp compute backend will evolve
         """
         return None, None
+
+    def _construct_neon(self):
+        """
+        Construct the Neon functional and Neon container of the operator
+        TODO: Maybe a better way to do this?
+        Maybe add this to the backend decorator?
+        Leave it for now, as it is not clear how the neon backend will evolve
+        """
+        return None, None
+
+    def _construct_read_write_functions(self):
+        """Build backend-specific ``read_field`` / ``write_field`` helpers.
+
+        For the Warp backend these are direct 4-D array accesses.  For the
+        Neon backend they wrap ``wp.neon_read`` / ``wp.neon_write``.
+
+        Returns
+        -------
+        tuple of wp.func
+            ``(read_field, write_field)``
+        """
+        if self.compute_backend == ComputeBackend.WARP:
+
+            @wp.func
+            def read_field(
+                field: Any,
+                index: Any,
+                direction: Any,
+            ):
+                # This function reads a field value at a given index and direction.
+                return field[direction, index[0], index[1], index[2]]
+
+            @wp.func
+            def write_field(
+                field: Any,
+                index: Any,
+                direction: Any,
+                value: Any,
+            ):
+                # This function writes a value to a field at a given index and direction.
+                field[direction, index[0], index[1], index[2]] = value
+
+        elif self.compute_backend == ComputeBackend.NEON:
+            import neon
+
+            @wp.func
+            def read_field(
+                field: Any,
+                index: Any,
+                direction: Any,
+            ):
+                # This function reads a field value at a given index and direction.
+                return wp.neon_read(field, index, direction)
+
+            @wp.func
+            def write_field(
+                field: Any,
+                index: Any,
+                direction: Any,
+                value: Any,
+            ):
+                # This function writes a value to a field at a given index and direction.
+                wp.neon_write(field, index, direction, value)
+
+        else:
+            raise ValueError(f"Unsupported compute backend: {self.compute_backend}")
+
+        return read_field, write_field
+
+    def _construct_read_field_neighbor(self):
+        """
+        Construct a function to read a field value at a neighboring index along a given direction.
+        """
+
+        if self.compute_backend == ComputeBackend.WARP:
+
+            @wp.func
+            def read_field_neighbor(
+                field: Any,
+                index: Any,
+                offset: Any,
+                direction: Any,
+            ):
+                # This function reads a field value at a given neighboring index and direction.
+                neighbor = index + offset
+                return field[direction, neighbor[0], neighbor[1], neighbor[2]]
+
+        elif self.compute_backend == ComputeBackend.NEON:
+            import neon
+            # from neon.multires.mPartition import neon_get_type
+
+            @wp.func
+            def read_field_neighbor(
+                field: Any,
+                index: Any,
+                offset: Any,
+                direction: Any,
+            ):
+                # This function reads a field value at a given neighboring index and direction.
+                unused_is_valid = wp.bool(False)
+                # dtype = neon_get_type(field)  # This is a placeholder to ensure the dtype is set correctly
+                return wp.neon_read_ngh(field, index, offset, direction, wp.uint8(0.0), unused_is_valid)
+
+        else:
+            raise ValueError(f"Unsupported compute backend: {self.compute_backend}")
+
+        return read_field_neighbor

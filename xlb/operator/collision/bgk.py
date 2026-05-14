@@ -1,3 +1,7 @@
+"""
+Bhatnagar-Gross-Krook (BGK) single-relaxation-time collision operator.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -10,13 +14,19 @@ from functools import partial
 
 
 class BGK(Collision):
-    """
-    BGK collision operator for LBM.
+    """Single-relaxation-time BGK collision operator.
+
+    Relaxes the distribution function toward equilibrium at a rate
+    controlled by the relaxation parameter *omega*::
+
+        f_out = f - omega * (f - f_eq)
+
+    Supports JAX, Warp, and Neon backends.
     """
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0,))
-    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, rho, u, omega):
+    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
         fneq = f - feq
         fout = f - self.compute_dtype(omega) * fneq
         return fout
@@ -28,7 +38,7 @@ class BGK(Collision):
 
         # Construct the functional
         @wp.func
-        def functional(f: Any, feq: Any, rho: Any, u: Any, omega: Any):
+        def functional(f: Any, feq: Any, omega: Any):
             fneq = f - feq
             fout = f - self.compute_dtype(omega) * fneq
             return fout
@@ -39,8 +49,6 @@ class BGK(Collision):
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             omega: Any,
         ):
             # Get the global index
@@ -55,7 +63,7 @@ class BGK(Collision):
                 _feq[l] = feq[l, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, rho, u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -63,8 +71,12 @@ class BGK(Collision):
 
         return functional, kernel
 
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None
+
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, fout, rho, u, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
@@ -72,8 +84,6 @@ class BGK(Collision):
                 f,
                 feq,
                 fout,
-                rho,
-                u,
                 omega,
             ],
             dim=f.shape[1:],

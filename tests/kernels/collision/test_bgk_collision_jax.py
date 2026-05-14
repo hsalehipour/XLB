@@ -28,7 +28,7 @@ def init_xlb_env(velocity_set):
         (3, xlb.velocity_set.D3Q27, (50, 50, 50), 1.0),
     ],
 )
-def test_bgk_ollision(dim, velocity_set, grid_shape, omega):
+def test_bgk_collision(dim, velocity_set, grid_shape, omega):
     init_xlb_env(velocity_set)
     my_grid = grid_factory(grid_shape)
 
@@ -45,7 +45,7 @@ def test_bgk_ollision(dim, velocity_set, grid_shape, omega):
 
     f_orig = my_grid.create_field(cardinality=DefaultConfig.velocity_set.q)
 
-    f_out = compute_collision(f_orig, f_eq, rho, u, omega)
+    f_out = compute_collision(f_orig, f_eq, omega)
 
     assert jnp.allclose(f_out, f_orig - omega * (f_orig - f_eq))
 
