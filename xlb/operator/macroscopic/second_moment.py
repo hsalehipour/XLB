@@ -69,12 +69,30 @@ class SecondMoment(Operator):
         def functional(
             fneq: Any,
         ):
-            # Get second order moment (a symmetric tensore shaped into a vector)
-            pi = _pi_vec()
+            # Get second order moment (a symmetric tensor shaped into a vector)
+            pi = _pi_vec()     # pi[d] will hold the final sums
+            corr = _pi_vec()   # correction term for each component
+
+            # initialise
             for d in range(_pi_dim):
-                pi[d] = self.compute_dtype(0.0)
-                for q in range(self.velocity_set.q):
-                    pi[d] += _cc[q, d] * fneq[q]
+                pi[d]   = self.compute_dtype(0.0)
+                corr[d] = self.compute_dtype(0.0)
+
+            # ---- Neumaier summation over all lattice velocities ----
+            for q in range(self.velocity_set.q):
+                for d in range(_pi_dim):
+                    t = _cc[q, d] * fneq[q] - corr[d]   # (input – correction)
+                    # provisional sum
+                    y = pi[d] + t
+                    # update correction:  (pi[d] – y) + t
+                    #   – the part of pi[d] that was lost when adding t
+                    corr[d] = (pi[d] - y) + t
+                    pi[d] = y
+
+            # final correction (add the accumulated low-order bits once)
+            for d in range(_pi_dim):
+                pi[d] = pi[d] + corr[d]
+
             return pi
 
         # Construct the kernel
