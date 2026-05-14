@@ -30,7 +30,7 @@ def test_bc_equilibrium_warp(dim, velocity_set, grid_shape):
     my_grid = grid_factory(grid_shape)
     velocity_set = DefaultConfig.velocity_set
 
-    missing_mask = my_grid.create_field(cardinality=velocity_set.q, dtype=xlb.Precision.BOOL)
+    missing_mask = my_grid.create_field(cardinality=velocity_set.q, dtype=xlb.Precision.UINT8)
 
     bc_mask = my_grid.create_field(cardinality=1, dtype=xlb.Precision.UINT8)
 

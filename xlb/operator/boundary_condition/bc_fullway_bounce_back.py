@@ -1,5 +1,8 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Full-way bounce-back boundary condition.
+
+Reverses every population at tagged solid voxels, effectively
+imposing a no-slip wall located *on* the grid node.
 """
 
 import jax.numpy as jnp
@@ -17,6 +20,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
     BoundaryCondition,
     ImplementationStep,
 )
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
 class FullwayBounceBackBC(BoundaryCondition):
@@ -31,6 +35,7 @@ class FullwayBounceBackBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         super().__init__(
             ImplementationStep.COLLISION,
@@ -39,6 +44,7 @@ class FullwayBounceBackBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
     @Operator.register_backend(ComputeBackend.JAX)
@@ -84,3 +90,7 @@ class FullwayBounceBackBC(BoundaryCondition):
             dim=f_pre.shape[1:],
         )
         return f_post
+
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None

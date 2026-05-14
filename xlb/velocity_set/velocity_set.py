@@ -1,4 +1,10 @@
-# Base Velocity Set class
+"""
+Base velocity-set class for the Lattice Boltzmann Method.
+
+Defines lattice directions, weights, and derived properties (opposite
+indices, moments, etc.) for any DdQq stencil.  Backend-specific constants
+(Warp vectors, JAX arrays, Neon lattice objects) are initialised lazily.
+"""
 
 import math
 import numpy as np
@@ -44,6 +50,8 @@ class VelocitySet(object):
         # Convert properties to backend-specific format
         if self.compute_backend == ComputeBackend.WARP:
             self._init_warp_properties()
+        elif self.compute_backend == ComputeBackend.NEON:
+            self._init_neon_properties()
         elif self.compute_backend == ComputeBackend.JAX:
             self._init_jax_properties()
         else:
@@ -72,6 +80,7 @@ class VelocitySet(object):
         self.main_indices = self._construct_main_indices()
         self.right_indices = self._construct_right_indices()
         self.left_indices = self._construct_left_indices()
+        self.center_index = self._get_center_index()
 
     def _init_warp_properties(self):
         """
@@ -84,6 +93,12 @@ class VelocitySet(object):
         self.cc = wp.constant(wp.mat((self.q, self.d * (self.d + 1) // 2), dtype=dtype)(self._cc))
         self.c_float = wp.constant(wp.mat((self.d, self.q), dtype=dtype)(self._c_float))
         self.qi = wp.constant(wp.mat((self.q, self.d * (self.d + 1) // 2), dtype=dtype)(self._qi))
+
+    def _init_neon_properties(self):
+        """
+        Convert NumPy properties to Neon-specific properties which are identical to Warp.
+        """
+        self._init_warp_properties()
 
     def _init_jax_properties(self):
         """
@@ -219,6 +234,23 @@ class VelocitySet(object):
             The indices of the left velocities.
         """
         return np.nonzero(self._c.T[:, 0] == -1)[0]
+
+    def _get_center_index(self):
+        """
+        This function returns the index of the center point in the lattice associated with (0,0,0)
+
+        Returns
+        -------
+        numpy.ndarray
+            The index of the zero lattice velocity.
+        """
+        arr = self._c.T
+        if self.d == 2:
+            target = np.array([0, 0])
+        else:
+            target = np.array([0, 0, 0])
+        match = np.all(arr == target, axis=1)
+        return int(np.nonzero(match)[0][0])
 
     def __str__(self):
         """

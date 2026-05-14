@@ -6,7 +6,7 @@ from xlb.grid import grid_factory
 from xlb.operator.stepper import IncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import RegularizedBC
 from xlb.operator.macroscopic import Macroscopic
-from xlb.utils import save_fields_vtk, save_image
+from xlb.utils import save_fields_vtk, save_image, warp_array_to_jax
 from xlb.helper import initialize_eq
 import warp as wp
 import numpy as np
@@ -148,7 +148,7 @@ macro = Macroscopic(
 def post_process(step, f_current, grid_shape, macro):
     # Convert to JAX array if necessary
     if not isinstance(f_current, jnp.ndarray):
-        f_current = wp.to_jax(f_current)
+        f_current = warp_array_to_jax(f_current)
 
     rho, u = macro(f_current)
 

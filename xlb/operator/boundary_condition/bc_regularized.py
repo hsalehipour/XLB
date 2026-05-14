@@ -1,5 +1,13 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Regularized boundary condition.
+
+A non-equilibrium bounce-back scheme with additional regularization of the
+distribution function.  Applicable as velocity or pressure boundary conditions.
+
+Reference
+---------
+Latt, J. et al. (2008). "Straight velocity boundaries in the lattice
+Boltzmann method." *Physical Review E*, 77(5), 056703.
 """
 
 import jax.numpy as jnp
@@ -7,7 +15,7 @@ from jax import jit
 import jax.lax as lax
 from functools import partial
 import warp as wp
-from typing import Any, Union, Tuple
+from typing import Any, Union, Tuple, Callable
 import numpy as np
 
 from xlb.velocity_set.velocity_set import VelocitySet
@@ -16,6 +24,7 @@ from xlb.compute_backend import ComputeBackend
 from xlb.operator.operator import Operator
 from xlb.operator.boundary_condition import ZouHeBC, HelperFunctionsBC
 from xlb.operator.macroscopic import SecondMoment as MomentumFlux
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
 class RegularizedBC(ZouHeBC):
@@ -43,13 +52,14 @@ class RegularizedBC(ZouHeBC):
     def __init__(
         self,
         bc_type,
-        profile=None,
+        profile: Callable = None,
         prescribed_value: Union[float, Tuple[float, ...], np.ndarray] = None,
         velocity_set: VelocitySet = None,
         precision_policy: PrecisionPolicy = None,
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         # Call the parent constructor
         super().__init__(
@@ -61,6 +71,7 @@ class RegularizedBC(ZouHeBC):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
         self.momentum_flux = MomentumFlux()
 
@@ -124,18 +135,16 @@ class RegularizedBC(ZouHeBC):
         return f_post
 
     def _construct_warp(self):
-        # load helper functions
-        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=self.compute_backend)
+        # load helper functions. Always use warp backend for helper functions as it may also be called by the Neon backend.
+        bc_helper = HelperFunctionsBC(velocity_set=self.velocity_set, precision_policy=self.precision_policy, compute_backend=ComputeBackend.WARP)
         # Set local constants
         _d = self.velocity_set.d
-        _q = self.velocity_set.q
-        _opp_indices = self.velocity_set.opp_indices
 
         @wp.func
         def functional_velocity(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -145,16 +154,16 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = bc_helper.get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # Find the value of u from the missing directions
             # Since we are only considering normal velocity, we only need to find one value (stored at the center of f_1)
             # Create velocity vector by multiplying the prescribed value with the normal vector
-            prescribed_value = self.compute_dtype(f_1[0, index[0], index[1], index[2]])
+            prescribed_value = self.decoder_functional(f_1, index, _missing_mask)[0]
             _u = -prescribed_value * normals
 
             # calculate rho
-            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = self.compute_dtype(0.0)
             for d in range(_d):
                 unormal += _u[d] * normals[d]
@@ -162,7 +171,7 @@ class RegularizedBC(ZouHeBC):
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
 
             # Regularize the boundary fpop
             _f = bc_helper.regularize_fpop(_f, feq)
@@ -172,7 +181,7 @@ class RegularizedBC(ZouHeBC):
         def functional_pressure(
             index: Any,
             timestep: Any,
-            missing_mask: Any,
+            _missing_mask: Any,
             f_0: Any,
             f_1: Any,
             f_pre: Any,
@@ -182,20 +191,20 @@ class RegularizedBC(ZouHeBC):
             _f = f_post
 
             # Find normal vector
-            normals = bc_helper.get_normal_vectors(missing_mask)
+            normals = bc_helper.get_normal_vectors(_missing_mask)
 
             # Find the value of rho from the missing directions
             # Since we need only one scalar value, we only need to find one value (stored at the center of f_1)
-            _rho = self.compute_dtype(f_1[0, index[0], index[1], index[2]])
+            _rho = self.decoder_functional(f_1, index, _missing_mask)[0]
 
             # calculate velocity
-            fsum = bc_helper.get_bc_fsum(_f, missing_mask)
+            fsum = bc_helper.get_bc_fsum(_f, _missing_mask)
             unormal = -self.compute_dtype(1.0) + fsum / _rho
             _u = unormal * normals
 
             # impose non-equilibrium bounceback
             feq = self.equilibrium_operator.warp_functional(_rho, _u)
-            _f = bc_helper.bounceback_nonequilibrium(_f, feq, missing_mask)
+            _f = bc_helper.bounceback_nonequilibrium(_f, feq, _missing_mask)
 
             # Regularize the boundary fpop
             _f = bc_helper.regularize_fpop(_f, feq)

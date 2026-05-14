@@ -2,10 +2,12 @@ from functools import partial
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
+import os
+
 from typing import Any
 
 from xlb.compute_backend import ComputeBackend
-from xlb.operator.equilibrium.equilibrium import Equilibrium
+from xlb.operator.equilibrium import Equilibrium
 from xlb.operator import Operator
 
 
@@ -14,6 +16,9 @@ class QuadraticEquilibrium(Equilibrium):
     Quadratic equilibrium of Boltzmann equation using hermite polynomials.
     Standard equilibrium model for LBM.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0))
@@ -95,4 +100,51 @@ class QuadraticEquilibrium(Equilibrium):
             ],
             dim=rho.shape[1:],
         )
+        return f
+
+    def _construct_neon(self):
+        import neon
+
+        # Use the warp functional for the NEON backend
+        functional, _ = self._construct_warp()
+
+        # Set local constants TODO: This is a hack and should be fixed with warp update
+        _u_vec = wp.vec(self.velocity_set.d, dtype=self.compute_dtype)
+
+        @neon.Container.factory(name="QuadraticEquilibrium")
+        def container(
+            rho: Any,
+            u: Any,
+            f: Any,
+        ):
+            def quadratic_equilibrium_ll(loader: neon.Loader):
+                loader.set_grid(rho.get_grid())
+                rho_pn = loader.get_read_handle(rho)
+                u_pn = loader.get_read_handle(u)
+                f_pn = loader.get_write_handle(f)
+
+                @wp.func
+                def quadratic_equilibrium_cl(index: Any):
+                    _u = _u_vec()
+                    for d in range(self.velocity_set.d):
+                        _u[d] = self.compute_dtype(wp.neon_read(u_pn, index, d))
+                    _rho = self.compute_dtype(wp.neon_read(rho_pn, index, 0))
+                    feq = functional(_rho, _u)
+
+                    # Set the output
+                    for l in range(self.velocity_set.q):
+                        wp.neon_write(f_pn, index, l, self.store_dtype(feq[l]))
+
+                loader.declare_kernel(quadratic_equilibrium_cl)
+
+            return quadratic_equilibrium_ll
+
+        return functional, container
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, rho, u, f):
+        import neon
+
+        c = self.neon_container(rho, u, f)
+        c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
         return f

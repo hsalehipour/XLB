@@ -1,3 +1,7 @@
+"""
+Collision operator with external body-force correction.
+"""
+
 import jax.numpy as jnp
 from jax import jit
 import warp as wp
@@ -5,14 +9,26 @@ from typing import Any
 
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.collision.collision import Collision
+from xlb.operator.macroscopic import Macroscopic
 from xlb.operator import Operator
 from functools import partial
 from xlb.operator.force import ExactDifference
 
 
 class ForcedCollision(Collision):
-    """
-    A collision operator for LBM with external force.
+    """Collision operator that wraps another collision with a forcing term.
+
+    After the inner collision the forcing operator is applied to
+    incorporate the effect of an external body force.
+
+    Parameters
+    ----------
+    collision_operator : Operator
+        The base collision operator (e.g. :class:`BGK`).
+    forcing_scheme : str
+        Forcing scheme.  Currently only ``"exact_difference"`` is supported.
+    force_vector : array-like
+        External force vector of length ``d`` (number of spatial dimensions).
     """
 
     def __init__(
@@ -23,6 +39,7 @@ class ForcedCollision(Collision):
     ):
         assert collision_operator is not None
         self.collision_operator = collision_operator
+        self.macroscopic = Macroscopic()
         super().__init__()
 
         assert forcing_scheme == "exact_difference", NotImplementedError(f"Force model {forcing_scheme} not implemented!")
@@ -33,8 +50,9 @@ class ForcedCollision(Collision):
 
     @Operator.register_backend(ComputeBackend.JAX)
     @partial(jit, static_argnums=(0,))
-    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, rho, u, omega):
-        fout = self.collision_operator(f, feq, rho, u, omega)
+    def jax_implementation(self, f: jnp.ndarray, feq: jnp.ndarray, omega):
+        fout = self.collision_operator(f, feq, omega)
+        rho, u = self.macroscopic(fout)
         fout = self.forcing_operator(fout, feq, rho, u)
         return fout
 
@@ -45,8 +63,9 @@ class ForcedCollision(Collision):
 
         # Construct the functional
         @wp.func
-        def functional(f: Any, feq: Any, rho: Any, u: Any, omega: Any):
-            fout = self.collision_operator.warp_functional(f, feq, rho, u, omega)
+        def functional(f: Any, feq: Any, omega: Any):
+            fout = self.collision_operator.warp_functional(f, feq, omega)
+            rho, u = self.macroscopic.warp_functional(fout)
             fout = self.forcing_operator.warp_functional(fout, feq, rho, u)
             return fout
 
@@ -56,8 +75,6 @@ class ForcedCollision(Collision):
             f: wp.array4d(dtype=Any),
             feq: wp.array4d(dtype=Any),
             fout: wp.array4d(dtype=Any),
-            rho: wp.array4d(dtype=Any),
-            u: wp.array4d(dtype=Any),
             omega: Any,
         ):
             # Get the global index
@@ -71,13 +88,9 @@ class ForcedCollision(Collision):
             for l in range(self.velocity_set.q):
                 _f[l] = f[l, index[0], index[1], index[2]]
                 _feq[l] = feq[l, index[0], index[1], index[2]]
-            _u = _u_vec()
-            for l in range(_d):
-                _u[l] = u[l, index[0], index[1], index[2]]
-            _rho = rho[0, index[0], index[1], index[2]]
 
             # Compute the collision
-            _fout = functional(_f, _feq, _rho, _u, omega)
+            _fout = functional(_f, _feq, omega)
 
             # Write the result
             for l in range(self.velocity_set.q):
@@ -86,7 +99,7 @@ class ForcedCollision(Collision):
         return functional, kernel
 
     @Operator.register_backend(ComputeBackend.WARP)
-    def warp_implementation(self, f, feq, fout, rho, u, omega):
+    def warp_implementation(self, f, feq, fout, omega):
         # Launch the warp kernel
         wp.launch(
             self.warp_kernel,
@@ -94,10 +107,19 @@ class ForcedCollision(Collision):
                 f,
                 feq,
                 fout,
-                rho,
-                u,
                 omega,
             ],
             dim=f.shape[1:],
         )
         return fout
+
+    def _construct_neon(self):
+        # Construct the functional
+        @wp.func
+        def functional(f: Any, feq: Any, omega: Any):
+            fout = self.collision_operator.neon_functional(f, feq, omega)
+            rho, u = self.macroscopic.neon_functional(fout)
+            fout = self.forcing_operator.neon_functional(fout, feq, rho, u)
+            return fout
+
+        return functional, None

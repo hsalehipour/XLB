@@ -1,6 +1,15 @@
+"""
+Factory function for creating the standard Navier-Stokes field arrays.
+
+Returns the distribution-function pair (*f_0*, *f_1*), the boundary-
+condition mask, and the missing-population mask, all allocated on the
+given grid and backend.
+"""
+
 from xlb import DefaultConfig
 from xlb.grid import grid_factory
 from xlb.precision_policy import Precision
+from xlb.compute_backend import ComputeBackend
 from typing import Tuple
 
 
@@ -30,12 +39,17 @@ def create_nse_fields(
     if grid is None:
         if grid_shape is None:
             raise ValueError("grid_shape must be provided when grid is None")
-        grid = grid_factory(grid_shape, compute_backend=compute_backend)
+        grid = grid_factory(grid_shape, compute_backend=compute_backend, velocity_set=velocity_set)
 
     # Create fields
     f_0 = grid.create_field(cardinality=velocity_set.q, dtype=precision_policy.store_precision)
     f_1 = grid.create_field(cardinality=velocity_set.q, dtype=precision_policy.store_precision)
-    missing_mask = grid.create_field(cardinality=velocity_set.q, dtype=Precision.BOOL)
     bc_mask = grid.create_field(cardinality=1, dtype=Precision.UINT8)
+    if compute_backend in [ComputeBackend.WARP, ComputeBackend.NEON]:
+        # For WARP and NEON, we use UINT8 for missing mask
+        missing_mask = grid.create_field(cardinality=velocity_set.q, dtype=Precision.UINT8)
+    else:
+        # For JAX, we use bool for missing mask
+        missing_mask = grid.create_field(cardinality=velocity_set.q, dtype=Precision.BOOL)
 
     return grid, f_0, f_1, missing_mask, bc_mask

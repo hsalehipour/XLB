@@ -5,9 +5,8 @@ from xlb.grid import grid_factory
 from xlb.operator.stepper import IncompressibleNavierStokesStepper
 from xlb.operator.boundary_condition import HalfwayBounceBackBC, EquilibriumBC
 from xlb.operator.macroscopic import Macroscopic
-from xlb.utils import save_fields_vtk, save_image
+from xlb.utils import save_fields_vtk, save_image, warp_array_to_jax
 import xlb.velocity_set
-import warp as wp
 import jax.numpy as jnp
 import numpy as np
 
@@ -74,7 +73,7 @@ class LidDrivenCavity2D:
         # Write the results. We'll use JAX compute_backend for the post-processing
         if not isinstance(self.f_0, jnp.ndarray):
             # If the compute_backend is warp, we need to drop the last dimension added by warp for 2D simulations
-            f_0 = wp.to_jax(self.f_0)[..., 0]
+            f_0 = warp_array_to_jax(self.f_0)[..., 0]
         else:
             f_0 = self.f_0
 
@@ -101,7 +100,7 @@ if __name__ == "__main__":
     # Running the simulation
     grid_size = 500
     grid_shape = (grid_size, grid_size)
-    compute_backend = ComputeBackend.WARP
+    compute_backend = ComputeBackend.JAX
     precision_policy = PrecisionPolicy.FP32FP32
 
     velocity_set = xlb.velocity_set.D2Q9(precision_policy=precision_policy, compute_backend=compute_backend)

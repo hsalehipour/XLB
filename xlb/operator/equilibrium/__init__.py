@@ -1,1 +1,3 @@
-from xlb.operator.equilibrium.quadratic_equilibrium import Equilibrium, QuadraticEquilibrium
+from xlb.operator.equilibrium.equilibrium import Equilibrium
+from xlb.operator.equilibrium.quadratic_equilibrium import QuadraticEquilibrium
+from xlb.operator.equilibrium.multires_quadratic_equilibrium import MultiresQuadraticEquilibrium

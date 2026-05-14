@@ -1,5 +1,8 @@
 """
-Base class for boundary conditions in a LBM simulation.
+Do-nothing boundary condition.
+
+Skips the streaming step at tagged boundary voxels, leaving the
+populations unchanged.
 """
 
 import jax.numpy as jnp
@@ -16,6 +19,7 @@ from xlb.operator.boundary_condition.boundary_condition import (
     ImplementationStep,
     BoundaryCondition,
 )
+from xlb.operator.boundary_masker.mesh_voxelization_method import MeshVoxelizationMethod
 
 
 class DoNothingBC(BoundaryCondition):
@@ -31,6 +35,7 @@ class DoNothingBC(BoundaryCondition):
         compute_backend: ComputeBackend = None,
         indices=None,
         mesh_vertices=None,
+        voxelization_method: MeshVoxelizationMethod = None,
     ):
         super().__init__(
             ImplementationStep.STREAMING,
@@ -39,6 +44,7 @@ class DoNothingBC(BoundaryCondition):
             compute_backend,
             indices,
             mesh_vertices,
+            voxelization_method,
         )
 
     @Operator.register_backend(ComputeBackend.JAX)
@@ -74,3 +80,12 @@ class DoNothingBC(BoundaryCondition):
             dim=f_pre.shape[1:],
         )
         return f_post
+
+    def _construct_neon(self):
+        functional, _ = self._construct_warp()
+        return functional, None
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_pre, f_post, bc_mask, missing_mask):
+        # raise exception as this feature is not implemented yet
+        raise NotImplementedError("This feature is not implemented in XLB with the NEON backend yet.")

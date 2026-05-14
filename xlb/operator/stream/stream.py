@@ -1,4 +1,9 @@
-# Base class for all streaming operators
+"""
+Streaming operator for the Lattice Boltzmann Method.
+
+Implements the pull-scheme propagation step: each voxel reads populations
+from its lattice neighbours according to the velocity-set directions.
+"""
 
 from functools import partial
 import jax.numpy as jnp
@@ -11,8 +16,14 @@ from xlb.operator.operator import Operator
 
 
 class Stream(Operator):
-    """
-    Base class for all streaming operators. This is used for pulling the distribution
+    """Pull-scheme streaming operator.
+
+    Propagates distribution functions by reading each population from the
+    upstream neighbour along the corresponding lattice direction.  Periodic
+    boundaries are applied automatically when a pull index falls outside
+    the domain (Warp backend only; JAX uses ``jnp.roll``).
+
+    Supports JAX, Warp backends.
     """
 
     @Operator.register_backend(ComputeBackend.JAX)
@@ -112,3 +123,32 @@ class Stream(Operator):
             dim=f_0.shape[1:],
         )
         return f_1
+
+    def _construct_neon(self):
+        # Set local constants TODO: This is a hack and should be fixed with warp update
+        _c = self.velocity_set.c
+        _f_vec = wp.vec(self.velocity_set.q, dtype=self.compute_dtype)
+
+        # Construct the funcional to get streamed indices
+        @wp.func
+        def functional(
+            f: Any,
+            index: Any,
+        ):
+            # Pull the distribution function
+            _f = _f_vec()
+            for l in range(self.velocity_set.q):
+                # Get pull offset
+                ngh = wp.neon_ngh_idx(wp.int8(-_c[0, l]), wp.int8(-_c[1, l]), wp.int8(-_c[2, l]))
+                unused_is_valid = wp.bool(False)
+
+                # Read the distribution function from the neighboring cell in the pull direction
+                _f[l] = self.compute_dtype(wp.neon_read_ngh(f, index, ngh, l, self.store_dtype(0), unused_is_valid))
+            return _f
+
+        return functional, None
+
+    @Operator.register_backend(ComputeBackend.NEON)
+    def neon_implementation(self, f_0, f_1):
+        # raise exception as this feature is not implemented yet
+        raise NotImplementedError("This feature is not implemented in XLB with the NEON backend yet.")

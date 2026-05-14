@@ -25,8 +25,11 @@ class WarpGrid(Grid):
         # Check if shape is 2D, and if so, append a singleton dimension to the shape
         shape = (cardinality,) + (self.shape if len(self.shape) != 2 else self.shape + (1,))
 
+        # Pin allocations to the active Warp device (important when multiple CUDA GPUs exist).
+        dev = wp.get_device()
+
         if fill_value is None:
-            f = wp.zeros(shape, dtype=dtype)
+            f = wp.zeros(shape, dtype=dtype, device=dev)
         else:
-            f = wp.full(shape, fill_value, dtype=dtype)
+            f = wp.full(shape, fill_value, dtype=dtype, device=dev)
         return f
