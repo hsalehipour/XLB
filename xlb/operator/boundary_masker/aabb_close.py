@@ -285,12 +285,9 @@ class MeshMaskerAABBClose(MeshBoundaryMasker):
     ):
         assert bc.mesh_vertices is not None, f'Please provide the mesh vertices for {bc.__class__.__name__} BC using keyword "mesh_vertices"!'
         assert bc.indices is None, f"Please use IndicesBoundaryMasker operator if {bc.__class__.__name__} is imposed on known indices of the grid!"
-        assert bc.mesh_vertices.shape[1] == self.velocity_set.d, (
-            "Mesh points must be reshaped into an array (N, 3) where N indicates number of points!"
-        )
 
         domain_shape = bc_mask.shape[1:]  # (nx, ny, nz)
-        mesh_vertices = bc.mesh_vertices
+        mesh_vertices = self.validate_triangle_soup_mesh_vertices(bc.mesh_vertices)
         mesh_min = np.min(mesh_vertices, axis=0)
         mesh_max = np.max(mesh_vertices, axis=0)
 

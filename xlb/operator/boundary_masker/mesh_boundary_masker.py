@@ -3,6 +3,11 @@ Abstract base class for mesh-based boundary maskers.
 
 Provides shared input preparation logic (mesh construction, kernel arrays)
 used by AABB, Ray, Winding, and AABB-Close masker subclasses.
+
+Mesh-based BCs expect *triangle soup* coordinates: an ``(N, 3)`` array
+where each consecutive group of three rows is one triangle. Indexed vertex
+pools (e.g. ``mesh.vertices`` from OBJ without ``mesh.faces``) are not
+supported directly.
 """
 
 import numpy as np
@@ -16,9 +21,83 @@ from xlb.operator.boundary_masker.helper_functions_masker import HelperFunctions
 
 
 class MeshBoundaryMasker(Operator):
+    """Base operator for geometry-based boundary masking from a surface mesh.
+
+    Subclasses (AABB, Ray, Winding, AABB-Close) voxelize or ray-cast against
+    a :class:`warp.Mesh` built from the BC's ``mesh_vertices`` array.
+
+    **Input format**
+
+    ``mesh_vertices`` must be *triangle soup*: shape ``(N, 3)`` with ``N``
+    divisible by 3, where rows ``(3k, 3k+1, 3k+2)`` are the three corners of
+    triangle ``k``. Face connectivity is implied by row order; there is no
+    separate face-index array.
+
+    Typical STL files already satisfy this layout. For indexed meshes (OBJ,
+    glTF, deduplicated trimesh loads), expand faces first::
+
+        mesh_vertices = mesh.vertices[mesh.faces].reshape(-1, 3)
     """
-    Operator for creating a boundary missing_mask from a mesh file
-    """
+
+    @staticmethod
+    def validate_triangle_soup_mesh_vertices(mesh_vertices) -> np.ndarray:
+        """Validate ``mesh_vertices`` before building a :class:`warp.Mesh`.
+
+        Parameters
+        ----------
+        mesh_vertices : array-like
+            Triangle soup with shape ``(N, 3)``. Each consecutive triple of
+            rows defines one triangle corner list
+            ``(row 0, row 1, row 2)``, ``(row 3, row 4, row 5)``, etc.
+
+        Returns
+        -------
+        np.ndarray
+            A contiguous ``(N, 3)`` array suitable for Warp mesh construction.
+
+        Raises
+        ------
+        ValueError
+            If the array is not 2-D, does not have three columns, does not
+            contain a whole number of triangles, holds non-finite values, or
+            contains only degenerate (zero-area) triangles.
+        """
+        mesh_vertices = np.asarray(mesh_vertices)
+
+        if mesh_vertices.ndim != 2:
+            raise ValueError(
+                f"mesh_vertices must be a 2-D array of shape (N, 3); got {mesh_vertices.ndim}-D array with shape {mesh_vertices.shape}."
+            )
+
+        if mesh_vertices.shape[1] != 3:
+            raise ValueError(
+                f"mesh_vertices must have shape (N, 3); got shape {mesh_vertices.shape}. "
+                "Each row is one corner; every three consecutive rows form one triangle."
+            )
+
+        num_rows = mesh_vertices.shape[0]
+        if num_rows == 0:
+            raise ValueError("mesh_vertices is empty; at least one triangle (3 rows) is required.")
+
+        if num_rows % 3 != 0:
+            raise ValueError(
+                f"mesh_vertices must contain a whole number of triangles: got {num_rows} rows, which is not divisible by 3. "
+                "Pass triangle soup (e.g. mesh.vertices[mesh.faces].reshape(-1, 3)), not an indexed vertex pool from mesh.vertices alone."
+            )
+
+        if not np.isfinite(mesh_vertices).all():
+            raise ValueError("mesh_vertices contains non-finite values (NaN or Inf).")
+
+        triangles = mesh_vertices.reshape(-1, 3, 3)
+        cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+        areas = np.linalg.norm(cross, axis=1)
+        if not np.any(areas > 1e-12):
+            raise ValueError(
+                "mesh_vertices does not contain any non-degenerate triangles (all triangles have zero area). "
+                "Check that face connectivity was expanded into triangle soup."
+            )
+
+        return np.ascontiguousarray(mesh_vertices)
 
     def __init__(
         self,
@@ -184,14 +263,34 @@ class MeshBoundaryMasker(Operator):
         bc,
         bc_mask,
     ):
+        """Build a Warp mesh handle from a mesh-based boundary condition.
+
+        Parameters
+        ----------
+        bc : BoundaryCondition
+            BC with ``mesh_vertices`` set and ``indices`` unset.
+        bc_mask : array
+            Boundary mask field used to obtain the lattice grid shape.
+
+        Returns
+        -------
+        tuple[wp.uint64, int]
+            ``(mesh_id, bc_id)`` for Warp / Neon masker kernels.
+
+        Raises
+        ------
+        AssertionError
+            If required BC fields are missing or inconsistent.
+        ValueError
+            If ``mesh_vertices`` is not valid triangle soup or exceeds the
+            domain bounds.
+        """
         assert bc.mesh_vertices is not None, f'Please provide the mesh vertices for {bc.__class__.__name__} BC using keyword "mesh_vertices"!'
         assert bc.indices is None, f"Please use IndicesBoundaryMasker operator if {bc.__class__.__name__} is imposed on known indices of the grid!"
-        assert bc.mesh_vertices.shape[1] == self.velocity_set.d, (
-            "Mesh points must be reshaped into an array (N, 3) where N indicates number of points!"
-        )
+
+        mesh_vertices = self.validate_triangle_soup_mesh_vertices(bc.mesh_vertices)
 
         grid_shape = self.helper_masker.get_grid_shape(bc_mask)  # (nx, ny, nz)
-        mesh_vertices = bc.mesh_vertices
         mesh_min = np.min(mesh_vertices, axis=0)
         mesh_max = np.max(mesh_vertices, axis=0)
 
