@@ -5,6 +5,8 @@ Provides geometry preparation and I/O for multi-resolution LBM simulations:
 
 * :func:`make_cuboid_mesh` — builds a strongly-balanced cuboid mesh hierarchy
   from an STL file and a sequence of domain multipliers.
+* :func:`make_adaptive_surface_mesh` — builds a surface-distance-driven
+  strongly-balanced hierarchy (see :mod:`xlb.utils.adaptive_mesher`).
 * :func:`prepare_sparsity_pattern` — converts level data into the sparsity
   arrays required by :func:`multires_grid_factory`.
 * :class:`MultiresIO` — exports multi-resolution Neon field data to HDF5 /
@@ -13,10 +15,109 @@ Provides geometry preparation and I/O for multi-resolution LBM simulations:
 
 import numpy as np
 import trimesh
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import warp as wp
 from xlb.utils.utils import UnitConvertor
+
+
+def _load_stl_mesh(stl_filename):
+    """Load an STL/OBJ mesh and validate it is non-empty."""
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    assert not mesh.is_empty, "Loaded mesh is empty or invalid."
+    return mesh
+
+
+def _stl_bounds(mesh):
+    """Return (min_bound, max_bound, partSize) for a trimesh object."""
+    mesh_vertices = mesh.vertices
+    min_bound = mesh_vertices.min(axis=0)
+    max_bound = mesh_vertices.max(axis=0)
+    part_size = max_bound - min_bound
+    return min_bound, max_bound, part_size
+
+
+def _domain_bbox_from_padding(min_bound, max_bound, part_size, padding):
+    """
+    Compute a physical domain bounding box from a 6-tuple padding specification.
+
+    Padding format: [-x, +x, -y, +y, -z, +z] multipliers relative to part_size.
+    """
+    cuboid_min = np.array(
+        [
+            min_bound[0] - padding[0] * part_size[0],
+            min_bound[1] - padding[2] * part_size[1],
+            min_bound[2] - padding[4] * part_size[2],
+        ],
+        dtype=float,
+    )
+    cuboid_max = np.array(
+        [
+            max_bound[0] + padding[1] * part_size[0],
+            max_bound[1] + padding[3] * part_size[1],
+            max_bound[2] + padding[5] * part_size[2],
+        ],
+        dtype=float,
+    )
+    return cuboid_min, cuboid_max
+
+
+def _finest_grid_from_bbox(adjusted_min, adjusted_max, voxel_size):
+    """Return (grid_shape, origin) for the finest lattice covering a physical bbox."""
+    nx = int(np.round((adjusted_max[0] - adjusted_min[0]) / voxel_size))
+    ny = int(np.round((adjusted_max[1] - adjusted_min[1]) / voxel_size))
+    nz = int(np.round((adjusted_max[2] - adjusted_min[2]) / voxel_size))
+    return (nx, ny, nz), adjusted_min.copy()
+
+
+def _align_domain_origin_for_dyadic(
+    origin_phys: np.ndarray,
+    adjusted_max: np.ndarray,
+    voxel_size: float,
+    num_levels: int,
+) -> Tuple[np.ndarray, Tuple[int, int, int]]:
+    """
+    Snap the physical domain origin so its finest-lattice index is divisible by
+    ``2 ** (num_levels - 1)``.
+
+    Unified-grid adaptive meshes assign mask[0,0,0] at every level to the same
+    physical corner.  ``_normalize_level_data`` stores per-level native origins as
+    ``origin_finest // stride``; that only maps back to a common finest corner when
+    ``origin_finest`` is divisible by every stride.
+    """
+    if num_levels <= 1:
+        grid_shape, _ = _finest_grid_from_bbox(origin_phys, adjusted_max, voxel_size)
+        return origin_phys.copy(), grid_shape
+
+    coarse_factor = 2 ** (num_levels - 1)
+    origin_finest = np.floor(origin_phys / voxel_size + 1e-9).astype(np.int64)
+    origin_finest_aligned = (origin_finest // coarse_factor) * coarse_factor
+    origin_aligned = origin_finest_aligned.astype(np.float64) * voxel_size
+    grid_shape, _ = _finest_grid_from_bbox(origin_aligned, adjusted_max, voxel_size)
+    return origin_aligned, grid_shape
+
+
+def _normalize_level_data(level_data, voxel_size_finest):
+    """
+    Convert physical voxel sizes and origins to finest-lattice units and reorder finest-first.
+
+    Each input entry is (mask, voxel_size_physical, origin_physical, build_level_index).
+
+    Origins are snapped once in finest-lattice units, then converted to per-level native
+    indices.  Rounding physical origins independently at each level (old behaviour) shifts
+    coarse masks relative to fine ones and produces false overlaps, coverage holes, and
+    apparent diagonal level jumps in ParaView.
+    """
+    num_levels = len(level_data)
+    normalized = []
+    for mask, voxel_size, origin, build_level in level_data:
+        stride = int(voxel_size / voxel_size_finest)
+        origin_finest = np.round(origin / voxel_size_finest).astype(int)
+        origin_native = (origin_finest // stride).astype(int)
+        normalized.append(
+            (mask, stride, origin_native, num_levels - 1 - build_level)
+        )
+    return list(reversed(normalized))
 
 
 def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
@@ -74,13 +175,8 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         list: Level data with mask arrays, voxel sizes, origins, and levels.
     """
     # Load the mesh and get its bounding box
-    mesh = trimesh.load_mesh(stl_filename, process=False)
-    assert not mesh.is_empty, "Loaded mesh is empty or invalid."
-
-    mesh_vertices = mesh.vertices
-    min_bound = mesh_vertices.min(axis=0)
-    max_bound = mesh_vertices.max(axis=0)
-    partSize = max_bound - min_bound
+    mesh = _load_stl_mesh(stl_filename)
+    min_bound, max_bound, partSize = _stl_bounds(mesh)
 
     level_data = []
     adjusted_bboxes = []
@@ -155,10 +251,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         voxel_matrix_k[i_start:i_end, j_start:j_end, k_start:k_end] = 0
 
     # Step 3 Convert to Indices from STL units
-    num_levels = len(level_data)
-    level_data = [(dr, int(v / voxel_size), np.round(dOrigin / v).astype(int), num_levels - 1 - l) for dr, v, dOrigin, l in level_data]
-
-    return list(reversed(level_data))
+    return _normalize_level_data(level_data, voxel_size)
 
 
 class MultiresIO(object):
