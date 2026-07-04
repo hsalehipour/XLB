@@ -361,8 +361,10 @@ def _record_assignments(
         if not np.any(sel):
             continue
         t_keys = keys[sel]
-        if target <= source_level:
-            idx = t_keys >> (source_level - target) if source_level > target else t_keys
+        if target < source_level:
+            idx = t_keys << (source_level - target)
+        elif target == source_level:
+            idx = t_keys
         else:
             idx = t_keys >> (target - source_level)
         assignments[target].append(idx)

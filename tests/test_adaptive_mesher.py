@@ -13,6 +13,7 @@ HAS_NEON = importlib.util.find_spec("neon") is not None
 
 from xlb.utils.adaptive_mesher import (
     AdaptiveMeshConfig,
+    _record_assignments,
     make_adaptive_surface_mesh,
     validate_level_data,
 )
@@ -43,6 +44,25 @@ def sphere_stl():
 def _grid_shape_finest(level_data):
     num_levels = len(level_data)
     return tuple(int(level_data[-1][0].shape[i] * 2 ** (num_levels - 1)) for i in range(3))
+
+
+def test_record_assignments_index_mapping():
+    """Child keys on a finer grid must upscale (<<), not downscale (>>), to coarser targets."""
+    num_levels = 4
+    assignments = [[] for _ in range(num_levels)]
+    keys = np.array([[5, 3, 2], [7, 4, 1]], dtype=int)
+    targets = np.array([0, 1], dtype=int)
+
+    _record_assignments(assignments, keys, targets, source_level=1, num_levels=num_levels)
+
+    np.testing.assert_array_equal(np.vstack(assignments[0]), [[10, 6, 4]])
+    np.testing.assert_array_equal(np.vstack(assignments[1]), [[7, 4, 1]])
+
+    assignments = [[] for _ in range(num_levels)]
+    _record_assignments(
+        assignments, np.array([[2, 1, 0]]), np.array([2]), source_level=1, num_levels=num_levels
+    )
+    np.testing.assert_array_equal(np.vstack(assignments[2]), [[1, 0, 0]])
 
 
 def test_adaptive_mesh_produces_level_data_format(sphere_stl):
