@@ -19,6 +19,8 @@ from .utils import (
 from .mesher import make_cuboid_mesh, MultiresIO
 from .adaptive_mesher import (
     AdaptiveMeshConfig,
+    build_parser,
+    main,
     make_adaptive_surface_mesh,
     validate_level_data,
 )

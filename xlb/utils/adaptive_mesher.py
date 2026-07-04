@@ -5,13 +5,25 @@ Builds strongly-balanced multires domains with fine cells near STL surfaces
 and progressively coarser cells farther away, using geometric expansion-ratio
 bands.  Output matches :func:`xlb.utils.mesher.make_cuboid_mesh` ``level_data``
 format.
+
+CLI
+---
+::
+
+    python -m xlb.utils.adaptive_mesher --stl path/to/model.stl [options]
+
+See :func:`main` and :func:`build_parser` for all flags.
 """
 
 from __future__ import annotations
 
+import argparse
+import os
+import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Sequence, Tuple, Union
+from typing import Dict, List, Literal, Sequence, Tuple, Union
 
 import numpy as np
 import trimesh
@@ -1110,6 +1122,7 @@ def make_adaptive_surface_mesh(
     finest_band_cells: int = 3,
     tile_size: int = 64,
     max_dense_cells: int = 128**3,
+    backend: Literal["warp", "python"] = "warp",
 ) -> list:
     """
     Create a strongly-balanced surface-adaptive multires mesh from an STL file.
@@ -1128,6 +1141,7 @@ def make_adaptive_surface_mesh(
         finest_band_cells: Thickness of the finest shell in finest-cell counts.
         tile_size: Tile edge length for chunked distance queries on large domains.
         max_dense_cells: Use dense distance computation when the domain is smaller.
+        backend: ``"warp"`` (default, GPU-accelerated) or ``"python"`` (NumPy/SciPy reference).
 
     Returns:
         ``level_data`` list (finest-first), compatible with
@@ -1172,17 +1186,30 @@ def make_adaptive_surface_mesh(
         n_finest = int(np.prod(grid_shape))
         print(f"Aligned domain to {grid_shape} for adaptive partitioning (align={align})")
 
+    if backend not in ("warp", "python"):
+        raise ValueError(f"backend must be 'warp' or 'python', got {backend!r}")
+
     if n_finest > max_dense_cells:
         print("Using octree surface meshing (avoids full finest-grid allocation).", flush=True)
-        masks, mask_origins = _make_masks_octree_refine(mesh, origin_phys, grid_shape, config)
+        if backend == "warp":
+            from xlb.utils.adaptive_mesher_warp import make_masks_octree_warp
+
+            masks, mask_origins = make_masks_octree_warp(mesh, origin_phys, grid_shape, config)
+        else:
+            masks, mask_origins = _make_masks_octree_refine(mesh, origin_phys, grid_shape, config)
     else:
-        print("Using dense finest-grid meshing.", flush=True)
-        distances = _compute_distance_field(mesh, origin_phys, grid_shape, voxel_size, config)
-        assigned = _assign_levels_from_distance(distances, config)
-        owner_floor = assigned.copy()
-        assigned = _finalize_owner_grid(assigned, owner_floor, num_levels)
-        masks = _build_masks_from_owner(assigned, num_levels, owner_floor=owner_floor)
-        mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
+        print(f"Using dense finest-grid meshing ({backend} backend).", flush=True)
+        if backend == "warp":
+            from xlb.utils.adaptive_mesher_warp import make_masks_dense_warp
+
+            masks, mask_origins = make_masks_dense_warp(mesh, origin_phys, grid_shape, config)
+        else:
+            distances = _compute_distance_field(mesh, origin_phys, grid_shape, voxel_size, config)
+            assigned = _assign_levels_from_distance(distances, config)
+            owner_floor = assigned.copy()
+            assigned = _finalize_owner_grid(assigned, owner_floor, num_levels)
+            masks = _build_masks_from_owner(assigned, num_levels, owner_floor=owner_floor)
+            mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
 
     raw_level_data = _pack_level_data(masks, mask_origins, origin_phys, voxel_size, num_levels)
 
@@ -1248,3 +1275,264 @@ def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int
                                 stats["strongly_balanced"] = False
 
     return stats
+
+
+def grid_shape_finest(level_data: list) -> Tuple[int, int, int]:
+    """Finest lattice shape implied by coarsest-level mask and level count."""
+    num_levels = len(level_data)
+    return tuple(int(level_data[-1][0].shape[i] * 2 ** (num_levels - 1)) for i in range(3))
+
+
+def default_cuboid_multipliers(domain_padding: Sequence[float], num_levels: int) -> List[List[float]]:
+    """Build nested cuboid domain multipliers from the outer padding."""
+    if num_levels < 1:
+        raise ValueError("num_levels must be at least 1.")
+    if num_levels == 1:
+        return [list(domain_padding)]
+
+    scale_steps = [
+        [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        [0.7, 0.7, 0.7, 0.7, 0.8, 0.8],
+        [0.4, 0.4, 0.4, 0.4, 0.6, 0.6],
+        [0.2, 0.2, 0.2, 0.2, 0.4, 0.4],
+    ]
+    multipliers: List[List[float]] = []
+    for level in range(num_levels):
+        if level == 0:
+            multipliers.append(list(domain_padding))
+            continue
+        step = scale_steps[min(level, len(scale_steps) - 1)]
+        multipliers.append([domain_padding[i] * step[i] for i in range(6)])
+    return multipliers
+
+
+def load_and_shift_stl(stl_path: str, domain_padding: Sequence[float]) -> Tuple[str, np.ndarray]:
+    """
+    Load geometry and translate it into the mesh-domain frame.
+
+    Returns a temporary STL path and the translation applied (for export offset).
+    """
+    loaded = trimesh.load(stl_path, process=False)
+    if isinstance(loaded, trimesh.Scene):
+        if len(loaded.geometry) == 0:
+            raise ValueError(f"Loaded mesh is empty: {stl_path}")
+        mesh = trimesh.util.concatenate(tuple(loaded.geometry.values()))
+    else:
+        mesh = loaded
+
+    min_bound = mesh.vertices.min(axis=0)
+    max_bound = mesh.vertices.max(axis=0)
+    part_size = max_bound - min_bound
+
+    stl_shift = np.array(
+        [
+            domain_padding[0] * part_size[0] - min_bound[0],
+            domain_padding[2] * part_size[1] - min_bound[1],
+            domain_padding[4] * part_size[2] - min_bound[2],
+        ],
+        dtype=float,
+    )
+    mesh.apply_translation(stl_shift)
+    _ = mesh.vertex_normals
+
+    fd, temp_path = tempfile.mkstemp(suffix=".stl", prefix="adaptive_mesh_")
+    os.close(fd)
+    mesh.export(temp_path)
+    return temp_path, stl_shift
+
+
+def print_mesh_statistics(
+    label: str, level_data: list, grid_shape_finest_grid: Tuple[int, int, int]
+) -> Tuple[int, int]:
+    """Print per-level counts, validation flags; return total active / equiv. finest."""
+    from xlb.utils.mesher import prepare_sparsity_pattern
+
+    num_levels = len(level_data)
+    sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
+
+    print(f"\n{label}")
+    print("=" * len(label))
+    print(f"Finest grid shape: {grid_shape_finest_grid}")
+    for lvl in range(num_levels):
+        active = int(np.count_nonzero(sparsity_pattern[lvl]))
+        equiv_finest = active * (2 ** (num_levels - 1 - lvl))
+        print(
+            f"  Level {lvl}: active={active:,}, "
+            f"mask shape={sparsity_pattern[lvl].shape}, "
+            f"origin={level_origins[lvl]}, "
+            f"equiv. finest cells={equiv_finest:,}"
+        )
+
+    total_active = sum(int(np.count_nonzero(m)) for m in sparsity_pattern)
+    total_equiv_finest = sum(
+        int(np.count_nonzero(sparsity_pattern[lvl])) * (2 ** (num_levels - 1 - lvl))
+        for lvl in range(num_levels)
+    )
+    print(f"  Total active cells: {total_active:,}")
+    print(f"  Total equivalent finest cells: {total_equiv_finest:,}")
+
+    stats = validate_level_data(level_data, grid_shape_finest_grid)
+    print(
+        f"  Validation: non_overlapping={stats['non_overlapping']}, "
+        f"fully_covering={stats['fully_covering']}, "
+        f"strongly_balanced={stats['strongly_balanced']}"
+    )
+    return total_active, total_equiv_finest
+
+
+def export_mesh_xdmf(
+    level_data: list,
+    voxel_size: float,
+    output_basename: str,
+    export_offset: Tuple[float, float, float],
+    original_stl: str,
+) -> None:
+    """Write HDF5/XDMF geometry for ParaView inspection."""
+    from xlb.utils.mesher import MultiresIO
+
+    exporter = MultiresIO.__new__(MultiresIO)
+    exporter.unit_convertor = None
+    coords, conn, level_ids, n_cells = MultiresIO.process_geometry(exporter, level_data)
+    coords, conn = MultiresIO._merge_duplicates(exporter, coords, conn, level_data)
+    coords = MultiresIO._transform_coordinates(exporter, coords * voxel_size, export_offset)
+    MultiresIO.save_xdmf(exporter, f"{output_basename}.h5", f"{output_basename}.xmf", n_cells, len(coords), fields={})
+    MultiresIO.save_hdf5_file(exporter, output_basename, coords, conn, level_ids, fields_data={})
+    print(f"\nExported {n_cells:,} cells to {output_basename}.xmf")
+    if export_offset != (0.0, 0.0, 0.0):
+        print(f"  Coordinates in original STL frame (offset applied: {export_offset})")
+    print(f"  Overlay in ParaView with: {original_stl}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for surface-adaptive mesh generation."""
+    parser = argparse.ArgumentParser(
+        description="Build and inspect a surface-adaptive multires mesh from an STL/OBJ file.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Level shells: finest band width = finest_band_cells * voxel_size; "
+            "each outer shell grows by expansion_ratio."
+        ),
+    )
+    parser.add_argument("--stl", required=True, help="Path to input STL/OBJ geometry.")
+    parser.add_argument("--voxel-size", type=float, default=4.0, help="Finest cell size (default: 4.0).")
+    parser.add_argument("--num-levels", type=int, default=4, help="Refinement levels; 0 is finest (default: 4).")
+    parser.add_argument(
+        "--expansion-ratio", type=float, default=2.0, help="Shell growth ratio (default: 2.0)."
+    )
+    parser.add_argument(
+        "--finest-band-cells", type=int, default=3, help="Finest shell thickness in cells (default: 3)."
+    )
+    parser.add_argument(
+        "--domain-padding",
+        type=float,
+        nargs=6,
+        metavar=("MX", "PX", "MY", "PY", "MZ", "PZ"),
+        default=[0.5, 0.5, 0.5, 0.5, 0.25, 1.0],
+        help="Padding [-x,+x,-y,+y,-z,+z] x geometry extent.",
+    )
+    parser.add_argument(
+        "--shift-stl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Translate STL into mesh-domain frame before meshing (default: on).",
+    )
+    parser.add_argument("--compare-cuboid", action="store_true", help="Compare vs nested cuboid mesh.")
+    parser.add_argument("--export-mesh", action="store_true", help="Export HDF5/XDMF for ParaView.")
+    parser.add_argument("-o", "--output", default=None, help="Export basename (default: <stl_stem>_adaptive_mesh).")
+    parser.add_argument(
+        "--max-dense-cells",
+        type=int,
+        default=128**3,
+        help="Dense distance field limit (default: 128^3).",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("warp", "python"),
+        default="warp",
+        help="Mesh backend: warp (default) or python reference.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point for building and inspecting adaptive surface meshes."""
+    from xlb.utils.mesher import make_cuboid_mesh
+
+    args = build_parser().parse_args(argv)
+
+    stl_path = os.path.abspath(args.stl)
+    if not os.path.isfile(stl_path):
+        print(f"STL not found: {stl_path}", file=sys.stderr)
+        return 1
+
+    domain_padding = list(args.domain_padding)
+    output_basename = args.output or f"{os.path.splitext(os.path.basename(stl_path))[0]}_adaptive_mesh"
+
+    print("Surface-adaptive mesh generation")
+    print(f"  STL: {stl_path}")
+    print(f"  voxel_size={args.voxel_size}, num_levels={args.num_levels}")
+    print(f"  expansion_ratio={args.expansion_ratio}, finest_band_cells={args.finest_band_cells}")
+    print(f"  domain_padding={domain_padding}")
+    print(f"  shift_stl={args.shift_stl}")
+    print(f"  backend={args.backend}")
+
+    temp_stl: str | None = None
+    stl_shift = np.zeros(3, dtype=float)
+    mesh_stl = stl_path
+
+    try:
+        if args.shift_stl:
+            temp_stl, stl_shift = load_and_shift_stl(stl_path, domain_padding)
+            mesh_stl = temp_stl
+            print(f"  STL shift applied: {stl_shift}")
+
+        t0 = time.perf_counter()
+        level_data = make_adaptive_surface_mesh(
+            voxel_size=args.voxel_size,
+            num_levels=args.num_levels,
+            stl_filename=mesh_stl,
+            domain_padding=domain_padding,
+            expansion_ratio=args.expansion_ratio,
+            finest_band_cells=args.finest_band_cells,
+            max_dense_cells=args.max_dense_cells,
+            backend=args.backend,
+        )
+        print(f"\nAdaptive mesh built in {time.perf_counter() - t0:.1f} s")
+
+        gs = grid_shape_finest(level_data)
+        adaptive_total, adaptive_equiv = print_mesh_statistics("Adaptive surface mesh", level_data, gs)
+
+        if args.compare_cuboid:
+            cuboid_multipliers = default_cuboid_multipliers(domain_padding, args.num_levels)
+            t0 = time.perf_counter()
+            cuboid_data = make_cuboid_mesh(args.voxel_size, cuboid_multipliers, mesh_stl)
+            print(f"\nCuboid mesh built in {time.perf_counter() - t0:.1f} s")
+
+            cuboid_gs = grid_shape_finest(cuboid_data)
+            cuboid_total, cuboid_equiv = print_mesh_statistics("Cuboid mesh (comparison)", cuboid_data, cuboid_gs)
+
+            print("\nComparison")
+            print("==========")
+            print(f"  Adaptive finest-level cells: {int(np.count_nonzero(level_data[0][0])):,}")
+            print(f"  Cuboid finest-level cells:   {int(np.count_nonzero(cuboid_data[0][0])):,}")
+            print(f"  Adaptive total active:       {adaptive_total:,}")
+            print(f"  Cuboid total active:         {cuboid_total:,}")
+            print(f"  Adaptive equiv. finest:      {adaptive_equiv:,}")
+            print(f"  Cuboid equiv. finest:        {cuboid_equiv:,}")
+            if cuboid_equiv > 0:
+                savings = 100.0 * (1.0 - adaptive_equiv / cuboid_equiv)
+                print(f"  Equivalent-finest savings:   {savings:.1f}%")
+
+        if args.export_mesh:
+            export_offset = tuple(-stl_shift) if args.shift_stl else (0.0, 0.0, 0.0)
+            export_mesh_xdmf(level_data, args.voxel_size, output_basename, export_offset, stl_path)
+
+    finally:
+        if temp_stl is not None and os.path.isfile(temp_stl):
+            os.remove(temp_stl)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
