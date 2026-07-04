@@ -13,27 +13,59 @@ import warp as wp
 
 from xlb.utils.adaptive_mesher import (
     AdaptiveMeshConfig,
-    _assign_levels_from_distances_1d,
-    _build_masks_from_assignments,
     _child_centers_and_keys,
     _record_assignments,
     _shape_at_level,
 )
 from xlb.utils.adaptive_mesher_kernels import (
+    kernel_any_changed,
+    kernel_any_nonzero_uint8,
+    kernel_any_uncovered,
     kernel_apply_balance_coarsen,
     kernel_apply_balance_refine,
+    kernel_apply_subdivide_level,
     kernel_assign_levels,
+    kernel_assign_levels_1d,
     kernel_batched_distances,
+    kernel_binary_dilate_cube,
     kernel_block_uniformity_level,
+    kernel_build_fine_mask,
+    kernel_build_shell_mask,
     kernel_conservative_coarse_targets,
     kernel_dense_distances,
     kernel_dense_distances_tiled,
+    kernel_edt_init_from_mask,
+    kernel_edt_pass_x,
+    kernel_edt_pass_y,
+    kernel_edt_pass_z,
+    kernel_edt_sqrt,
     kernel_extract_level_mask,
+    kernel_fill_coverage_gaps,
+    kernel_mark_coverage,
+    kernel_mark_subdivide_offset,
     kernel_maximum_filter_3x3,
     kernel_minimum_filter_3x3,
     kernel_minimum_with_floor,
+    kernel_owners_from_masks,
+    kernel_paint_blocks_level,
+    kernel_promote_near_fine,
     kernel_refine_transition,
+    kernel_widen_shell,
+    kernel_balance_need_coarsen,
+    kernel_balance_need_refine,
 )
+
+# 26-neighbor offsets (excluding self) on a 3-D Cartesian grid.
+_NEIGHBOR_OFFSETS_26 = [
+    (dx, dy, dz)
+    for dx in (-1, 0, 1)
+    for dy in (-1, 0, 1)
+    for dz in (-1, 0, 1)
+    if not (dx == 0 and dy == 0 and dz == 0)
+]
+
+_MAX_MASK_LEVELS = 8
+_DUMMY_MASK_SHAPE = (1, 1, 1)
 
 
 def trimesh_to_warp(mesh: trimesh.Trimesh) -> wp.Mesh:
@@ -51,16 +83,44 @@ def _max_query_distance(origin: np.ndarray, grid_shape: Tuple[int, int, int], vo
     return float(np.linalg.norm(extent) * 2.0 + 1.0)
 
 
-def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
-    """
-    Exact Euclidean distance transform for ``background==True`` voxels.
+def _pad_mask_list(masks: List[wp.array], num_levels: int) -> List[wp.array]:
+    """Return exactly ``_MAX_MASK_LEVELS`` mask arrays (dummy 1³ for unused slots)."""
+    dummy = wp.zeros(_DUMMY_MASK_SHAPE, dtype=wp.uint8, device=masks[0].device)
+    out = list(masks)
+    while len(out) < _MAX_MASK_LEVELS:
+        out.append(dummy)
+    return out[: _MAX_MASK_LEVELS]
 
-    Matches ``scipy.ndimage.distance_transform_edt(background)``.
-    Used for validation; tile-band thickening delegates to the SciPy reference path.
-    """
-    from scipy import ndimage
 
-    return ndimage.distance_transform_edt(background).astype(np.float32)
+def _edt_scratch_buffers(nx: int, ny: int, nz: int):
+    n_lines_xy = ny * nz
+    n_lines_xz = nx * nz
+    n_lines_yz = nx * ny
+    max_dim = max(nx, ny, nz)
+    return (
+        wp.zeros((n_lines_xy, max_dim), dtype=wp.int32),
+        wp.zeros((n_lines_xy, max_dim + 1), dtype=wp.float32),
+        wp.zeros((n_lines_xz, max_dim), dtype=wp.int32),
+        wp.zeros((n_lines_xz, max_dim + 1), dtype=wp.float32),
+        wp.zeros((n_lines_yz, max_dim), dtype=wp.int32),
+        wp.zeros((n_lines_yz, max_dim + 1), dtype=wp.float32),
+    )
+
+
+def euclidean_edt_3d_warp(background: np.ndarray) -> np.ndarray:
+    """Warp-native exact Euclidean distance transform (SciPy parity)."""
+    nx, ny, nz = background.shape
+    mask_wp = wp.array(background.astype(np.uint8), dtype=wp.uint8)
+    sq_wp = wp.zeros((nx, ny, nz), dtype=wp.float32)
+    sv_xy, sz_xy, sv_xz, sz_xz, sv_yz, sz_yz = _edt_scratch_buffers(nx, ny, nz)
+    wp.launch(kernel_edt_init_from_mask, dim=(nx, ny, nz), inputs=[mask_wp, sq_wp])
+    wp.launch(kernel_edt_pass_x, dim=(ny, nz), inputs=[sq_wp, sv_xy, sz_xy])
+    wp.launch(kernel_edt_pass_y, dim=(nx, nz), inputs=[sq_wp, sv_xz, sz_xz])
+    wp.launch(kernel_edt_pass_z, dim=(nx, ny), inputs=[sq_wp, sv_yz, sz_yz])
+    dist_wp = wp.zeros((nx, ny, nz), dtype=wp.float32)
+    wp.launch(kernel_edt_sqrt, dim=(nx, ny, nz), inputs=[sq_wp, dist_wp])
+    wp.synchronize()
+    return dist_wp.numpy()
 
 
 class WarpAdaptiveMesherOps:
@@ -74,6 +134,13 @@ class WarpAdaptiveMesherOps:
     @property
     def mesh_id(self) -> wp.uint64:
         return self._mesh_id
+
+    def _sync_counter(self, counter: wp.array) -> int:
+        wp.synchronize()
+        return int(counter.numpy()[0])
+
+    def euclidean_edt_3d(self, background: np.ndarray) -> np.ndarray:
+        return euclidean_edt_3d_warp(background)
 
     def compute_distance_field_dense(
         self,
@@ -108,7 +175,6 @@ class WarpAdaptiveMesherOps:
         nx, ny, nz = grid_shape
         if nx * ny * nz <= config.max_dense_cells:
             return self.compute_distance_field_dense(origin, grid_shape, voxel_size)
-        # Tiled warp distance for large dense grids
         distances = np.empty(grid_shape, dtype=np.float64)
         tile = config.tile_size
         max_dist = _max_query_distance(origin, grid_shape, voxel_size)
@@ -147,6 +213,28 @@ class WarpAdaptiveMesherOps:
         wp.launch(
             kernel_assign_levels,
             dim=distances.shape,
+            inputs=[
+                dist_wp,
+                wp.float64(d0),
+                wp.float64(log_ratio),
+                wp.int32(config.num_levels),
+                assigned,
+            ],
+        )
+        wp.synchronize()
+        return assigned.numpy()
+
+    def assign_levels_from_distances_1d(self, distances: np.ndarray, config: AdaptiveMeshConfig) -> np.ndarray:
+        n = len(distances)
+        if n == 0:
+            return np.empty(0, dtype=np.int32)
+        d0 = config.finest_band_cells * config.voxel_size
+        log_ratio = math.log(config.expansion_ratio)
+        dist_wp = wp.array(distances.astype(np.float64), dtype=wp.float64)
+        assigned = wp.zeros(n, dtype=wp.int32)
+        wp.launch(
+            kernel_assign_levels_1d,
+            dim=n,
             inputs=[
                 dist_wp,
                 wp.float64(d0),
@@ -213,30 +301,33 @@ class WarpAdaptiveMesherOps:
         wp.synchronize()
         return out
 
+    def _any_nonzero_uint8(self, flags: wp.array) -> bool:
+        counter = wp.zeros(1, dtype=wp.int32)
+        wp.launch(kernel_any_nonzero_uint8, dim=flags.shape, inputs=[flags, counter])
+        return self._sync_counter(counter) > 0
+
     def enforce_strong_balance_bidirectional(self, assigned: np.ndarray, max_passes: int = 64) -> np.ndarray:
-        result = assigned.copy()
-        shape = result.shape
-        cur = wp.array(result, dtype=wp.int32)
+        shape = assigned.shape
+        cur = wp.array(assigned, dtype=wp.int32)
         tmp = wp.zeros(shape, dtype=wp.int32)
-        nmin = wp.zeros(shape, dtype=wp.int32)
-        nmax = wp.zeros(shape, dtype=wp.int32)
+        refine_flags = wp.zeros(shape, dtype=wp.uint8)
+        coarsen_flags = wp.zeros(shape, dtype=wp.uint8)
 
         for _ in range(max_passes):
             nmin = self._min_filter_3x3(cur)
             nmax = self._max_filter_3x3(cur)
-            nmin_np = nmin.numpy()
-            nmax_np = nmax.numpy()
-            cur_np = cur.numpy()
-            refine = cur_np > (nmin_np + 1)
-            coarsen = cur_np < (nmax_np - 1)
-            if not np.any(refine) and not np.any(coarsen):
+            wp.launch(kernel_balance_need_refine, dim=shape, inputs=[cur, nmin, refine_flags])
+            wp.launch(kernel_balance_need_coarsen, dim=shape, inputs=[cur, nmax, coarsen_flags])
+            need_refine = self._any_nonzero_uint8(refine_flags)
+            need_coarsen = self._any_nonzero_uint8(coarsen_flags)
+            if not need_refine and not need_coarsen:
                 break
-            if np.any(refine):
+            if need_refine:
                 wp.launch(kernel_apply_balance_refine, dim=shape, inputs=[cur, nmin, tmp])
                 wp.synchronize()
                 cur = tmp
                 tmp = wp.zeros(shape, dtype=wp.int32)
-            if np.any(coarsen):
+            if need_coarsen:
                 wp.launch(kernel_apply_balance_coarsen, dim=shape, inputs=[cur, nmax, tmp])
                 wp.synchronize()
                 cur = tmp
@@ -282,18 +373,68 @@ class WarpAdaptiveMesherOps:
         return owner
 
     def ensure_tileable_transition_bands(self, owner: np.ndarray, num_levels: int) -> np.ndarray:
-        """Match SciPy EDT + cube dilation exactly (reference implementation)."""
-        from xlb.utils.adaptive_mesher import _ensure_tileable_transition_bands
+        """Thicken transition bands using Warp EDT + cube dilation."""
+        nx, ny, nz = owner.shape
+        owner_wp = wp.array(owner, dtype=wp.int32)
+        cur = owner_wp
+        tmp = wp.zeros((nx, ny, nz), dtype=wp.int32)
+        fine = wp.zeros((nx, ny, nz), dtype=wp.uint8)
+        shell = wp.zeros((nx, ny, nz), dtype=wp.uint8)
+        dilated = wp.zeros((nx, ny, nz), dtype=wp.uint8)
+        dist_sq = wp.zeros((nx, ny, nz), dtype=wp.float32)
+        dist = wp.zeros((nx, ny, nz), dtype=wp.float32)
+        sv_xy, sz_xy, sv_xz, sz_xz, sv_yz, sz_yz = _edt_scratch_buffers(nx, ny, nz)
 
-        return _ensure_tileable_transition_bands(owner, num_levels)
+        for level in range(num_levels - 2, -1, -1):
+            transition = level + 1
+            band_width = 2**transition
+            wp.launch(kernel_build_fine_mask, dim=(nx, ny, nz), inputs=[cur, wp.int32(level), fine])
+            wp.launch(kernel_edt_init_from_mask, dim=(nx, ny, nz), inputs=[fine, dist_sq])
+            wp.launch(kernel_edt_pass_x, dim=(ny, nz), inputs=[dist_sq, sv_xy, sz_xy])
+            wp.launch(kernel_edt_pass_y, dim=(nx, nz), inputs=[dist_sq, sv_xz, sz_xz])
+            wp.launch(kernel_edt_pass_z, dim=(nx, ny), inputs=[dist_sq, sv_yz, sz_yz])
+            wp.launch(kernel_edt_sqrt, dim=(nx, ny, nz), inputs=[dist_sq, dist])
+            wp.launch(
+                kernel_promote_near_fine,
+                dim=(nx, ny, nz),
+                inputs=[cur, dist, wp.int32(level), wp.int32(transition), wp.float32(band_width), tmp],
+            )
+            cur = tmp
+            tmp = wp.zeros((nx, ny, nz), dtype=wp.int32)
+
+            wp.launch(
+                kernel_build_shell_mask,
+                dim=(nx, ny, nz),
+                inputs=[cur, wp.int32(transition), shell],
+            )
+            counter = wp.zeros(1, dtype=wp.int32)
+            wp.launch(kernel_any_nonzero_uint8, dim=(nx, ny, nz), inputs=[shell, counter])
+            if self._sync_counter(counter) == 0:
+                continue
+            wp.launch(
+                kernel_binary_dilate_cube,
+                dim=(nx, ny, nz),
+                inputs=[shell, dilated, wp.int32(band_width)],
+            )
+            wp.launch(
+                kernel_widen_shell,
+                dim=(nx, ny, nz),
+                inputs=[cur, dilated, wp.int32(level), wp.int32(transition), tmp],
+            )
+            cur = tmp
+            tmp = wp.zeros((nx, ny, nz), dtype=wp.int32)
+
+        wp.synchronize()
+        return cur.numpy()
 
     def enforce_owner_block_uniformity(self, owner: np.ndarray, num_levels: int, max_passes: int = 24) -> np.ndarray:
-        result = owner.copy()
-        nx, ny, nz = result.shape
+        nx, ny, nz = owner.shape
+        cur = wp.array(owner, dtype=wp.int32)
+        out = wp.zeros((nx, ny, nz), dtype=wp.int32)
+        changed_flag = wp.zeros(1, dtype=wp.int32)
+
         for _ in range(max_passes):
-            changed = False
-            cur = wp.array(result, dtype=wp.int32)
-            out = wp.zeros((nx, ny, nz), dtype=wp.int32)
+            pass_changed = False
             for level in range(num_levels - 1, 0, -1):
                 stride = 2**level
                 sx, sy, sz = nx // stride, ny // stride, nz // stride
@@ -305,14 +446,15 @@ class WarpAdaptiveMesherOps:
                     inputs=[cur, wp.int32(stride), out],
                 )
                 wp.synchronize()
-                out_np = out.numpy()
-                if not np.array_equal(out_np, result):
-                    changed = True
-                    result = out_np
-                    cur = wp.array(result, dtype=wp.int32)
-            if not changed:
+                changed_flag.zero_()
+                wp.launch(kernel_any_changed, dim=(nx, ny, nz), inputs=[cur, out, changed_flag])
+                if self._sync_counter(changed_flag) > 0:
+                    pass_changed = True
+                    cur = out
+                    out = wp.zeros((nx, ny, nz), dtype=wp.int32)
+            if not pass_changed:
                 break
-        return result
+        return cur.numpy()
 
     def build_non_overlapping_masks_vectorized(
         self, owner: np.ndarray, num_levels: int
@@ -333,6 +475,124 @@ class WarpAdaptiveMesherOps:
             masks.append(mask_wp.numpy().astype(bool))
         return masks
 
+    def repair_balance_by_subdivision(
+        self,
+        masks: List[np.ndarray],
+        num_levels: int,
+        grid_shape: Tuple[int, int, int],
+        max_passes: int = 96,
+    ) -> List[np.ndarray]:
+        nx, ny, nz = grid_shape
+        mask_wps = [wp.array(m.astype(np.uint8), dtype=wp.uint8) for m in masks]
+        padded_masks = _pad_mask_list(mask_wps, num_levels)
+        owners = wp.zeros((nx, ny, nz), dtype=wp.int32)
+        subdivide = [wp.zeros(m.shape, dtype=wp.uint8) for m in mask_wps]
+        padded_sub = _pad_mask_list(subdivide, num_levels)
+        counter = wp.zeros(1, dtype=wp.int32)
+
+        for _ in range(max_passes):
+            wp.launch(
+                kernel_owners_from_masks,
+                dim=(nx, ny, nz),
+                inputs=[wp.int32(num_levels), *padded_masks, owners],
+            )
+            for sub in subdivide:
+                sub.zero_()
+            for di, dj, dk in _NEIGHBOR_OFFSETS_26:
+                wp.launch(
+                    kernel_mark_subdivide_offset,
+                    dim=(nx, ny, nz),
+                    inputs=[owners, wp.int32(di), wp.int32(dj), wp.int32(dk), *padded_sub],
+                )
+            counter.zero_()
+            for sub in subdivide:
+                wp.launch(kernel_any_nonzero_uint8, dim=sub.shape, inputs=[sub, counter])
+            if self._sync_counter(counter) == 0:
+                break
+            changed = False
+            for level in range(1, num_levels):
+                wp.launch(
+                    kernel_apply_subdivide_level,
+                    dim=mask_wps[level].shape,
+                    inputs=[subdivide[level], mask_wps[level], mask_wps[level - 1]],
+                )
+                counter.zero_()
+                wp.launch(kernel_any_nonzero_uint8, dim=subdivide[level].shape, inputs=[subdivide[level], counter])
+                if self._sync_counter(counter) > 0:
+                    changed = True
+            if not changed:
+                break
+
+        wp.synchronize()
+        return [m.numpy().astype(bool) for m in mask_wps]
+
+    def fill_coverage_gaps(
+        self,
+        masks: List[np.ndarray],
+        grid_shape: Tuple[int, int, int],
+        num_levels: int,
+    ) -> List[np.ndarray]:
+        nx, ny, nz = grid_shape
+        mask_wps = [wp.array(m.astype(np.uint8), dtype=wp.uint8) for m in masks]
+        padded_masks = _pad_mask_list(mask_wps, num_levels)
+        covered = wp.zeros((nx, ny, nz), dtype=wp.uint8)
+        wp.launch(
+            kernel_mark_coverage,
+            dim=(nx, ny, nz),
+            inputs=[wp.int32(num_levels), *padded_masks, covered],
+        )
+        counter = wp.zeros(1, dtype=wp.int32)
+        wp.launch(kernel_any_uncovered, dim=(nx, ny, nz), inputs=[covered, counter])
+        if self._sync_counter(counter) == 0:
+            return masks
+        coarsest = num_levels - 1
+        coarse_stride = 2**coarsest
+        wp.launch(
+            kernel_fill_coverage_gaps,
+            dim=(nx, ny, nz),
+            inputs=[covered, mask_wps[coarsest], wp.int32(coarse_stride)],
+        )
+        wp.synchronize()
+        return [m.numpy().astype(bool) for m in mask_wps]
+
+    def paint_owner_from_assignments(
+        self,
+        level_indices: List[np.ndarray],
+        tight_shape: Tuple[int, int, int],
+        fi_min: int,
+        fj_min: int,
+        fk_min: int,
+        num_levels: int,
+    ) -> np.ndarray:
+        """GPU scatter of octree assignments into a tight owner grid."""
+        owner = wp.full(tight_shape, wp.int32(num_levels - 1), dtype=wp.int32)
+        for target in range(num_levels):
+            cells = level_indices[target]
+            n_blocks = len(cells)
+            if n_blocks == 0:
+                continue
+            stride = 2**target
+            block_i = wp.array(cells[:, 0].astype(np.int32), dtype=wp.int32)
+            block_j = wp.array(cells[:, 1].astype(np.int32), dtype=wp.int32)
+            block_k = wp.array(cells[:, 2].astype(np.int32), dtype=wp.int32)
+            wp.launch(
+                kernel_paint_blocks_level,
+                dim=(n_blocks, stride, stride, stride),
+                inputs=[
+                    wp.int32(target),
+                    block_i,
+                    block_j,
+                    block_k,
+                    wp.int32(fi_min),
+                    wp.int32(fj_min),
+                    wp.int32(fk_min),
+                    wp.int32(stride),
+                    owner,
+                ],
+            )
+        wp.synchronize()
+        return owner.numpy()
+
     def build_masks_from_owner(
         self, owner: np.ndarray, num_levels: int, owner_floor: np.ndarray | None = None
     ) -> List[np.ndarray]:
@@ -342,17 +602,14 @@ class WarpAdaptiveMesherOps:
         owner = self.finalize_owner_grid(owner, floor, num_levels)
         owner = self.enforce_owner_block_uniformity(owner, num_levels)
         masks = self.build_non_overlapping_masks_vectorized(owner, num_levels)
-        # Subdivision repair and gap fill use numpy (identical algorithms)
-        from xlb.utils.adaptive_mesher import (
-            _fill_coverage_gaps,
-            _finest_coverage,
-            _repair_balance_by_subdivision,
-        )
-
-        masks = _repair_balance_by_subdivision(masks, num_levels, owner.shape)
-        if np.any(~_finest_coverage(masks, num_levels, owner.shape)):
-            masks = _fill_coverage_gaps(masks, owner)
+        masks = self.repair_balance_by_subdivision(masks, num_levels, owner.shape)
+        masks = self.fill_coverage_gaps(masks, owner.shape, num_levels)
         return masks
+
+
+def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
+    """Public EDT helper (Warp-native, SciPy-parity)."""
+    return euclidean_edt_3d_warp(background)
 
 
 def make_masks_dense_warp(
@@ -415,7 +672,7 @@ def make_masks_octree_warp(
         t0 = time.perf_counter()
         centers, keys = _child_centers_and_keys(parent_refine, origin, parent_voxel, child_voxel)
         dists = ops.batched_distances(centers, max_dist)
-        child_targets = _assign_levels_from_distances_1d(dists, config)
+        child_targets = ops.assign_levels_from_distances_1d(dists, config)
         _record_assignments(assignments, keys, child_targets, level, num_levels)
         n_active = int(np.sum(child_targets == level))
         print(
@@ -478,15 +735,9 @@ def _build_masks_from_assignments_warp(
             "increase voxel_size or reduce num_levels."
         )
 
-    owner = np.full((tight_nx, tight_ny, tight_nz), num_levels - 1, dtype=np.int32)
-    for target in range(num_levels):
-        stride = 2**target
-        for i, j, k in level_indices[target]:
-            i0, i1 = i * stride - fi_min, (i + 1) * stride - fi_min
-            j0, j1 = j * stride - fj_min, (j + 1) * stride - fj_min
-            k0, k1 = k * stride - fk_min, (k + 1) * stride - fk_min
-            owner[i0:i1, j0:j1, k0:k1] = np.minimum(owner[i0:i1, j0:j1, k0:k1], target)
-
+    owner = ops.paint_owner_from_assignments(
+        level_indices, (tight_nx, tight_ny, tight_nz), fi_min, fj_min, fk_min, num_levels
+    )
     owner_floor = owner.copy()
     full_owner = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
     full_floor = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
