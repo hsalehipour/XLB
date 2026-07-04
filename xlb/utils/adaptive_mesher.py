@@ -1216,6 +1216,34 @@ def make_adaptive_surface_mesh(
     return _normalize_level_data(raw_level_data, voxel_size)
 
 
+def _embed_level_mask_on_finest(
+    mask: np.ndarray,
+    stride: int,
+    origin_native: np.ndarray,
+    base_origin: np.ndarray,
+    grid_shape: Tuple[int, int, int],
+) -> Tuple[Tuple[int, int, int, int, int, int], np.ndarray]:
+    """Expand a level mask into a finest-grid slab (boolean, clipped to domain)."""
+    nx, ny, nz = grid_shape
+    origin_finest = np.asarray(origin_native, dtype=int) * stride - base_origin
+    ox, oy, oz = int(origin_finest[0]), int(origin_finest[1]), int(origin_finest[2])
+    sx, sy, sz = mask.shape
+    expanded = np.repeat(
+        np.repeat(np.repeat(mask, stride, axis=0), stride, axis=1),
+        stride,
+        axis=2,
+    )
+    x0, y0, z0 = max(0, ox), max(0, oy), max(0, oz)
+    x1 = min(nx, ox + sx * stride)
+    y1 = min(ny, oy + sy * stride)
+    z1 = min(nz, oz + sz * stride)
+    if x0 >= x1 or y0 >= y1 or z0 >= z1:
+        return (0, 0, 0, 0, 0, 0), np.zeros((0, 0, 0), dtype=bool)
+    ex0, ey0, ez0 = x0 - ox, y0 - oy, z0 - oz
+    ex1, ey1, ez1 = ex0 + (x1 - x0), ey0 + (y1 - y0), ez0 + (z1 - z0)
+    return (x0, x1, y0, y1, z0, z1), expanded[ex0:ex1, ey0:ey1, ez0:ez1]
+
+
 def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int]) -> dict:
     """
     Validate ``level_data`` for non-overlap and strong balance (ΔL ≤ 1).
@@ -1224,55 +1252,41 @@ def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int
     """
     stats = {"num_levels": len(level_data), "active_counts": [], "strongly_balanced": True, "non_overlapping": True}
 
-    finest_owners = np.full(grid_shape_finest, -1, dtype=np.int32)
-    finest_origins = [
-        np.asarray(entry[2], dtype=int) * int(entry[1]) for entry in level_data
-    ]
+    nx, ny, nz = grid_shape_finest
+    coverage = np.zeros((nx, ny, nz), dtype=np.int16)
+    finest_owners = np.full((nx, ny, nz), -1, dtype=np.int32)
+
+    finest_origins = [np.asarray(entry[2], dtype=int) * int(entry[1]) for entry in level_data]
     base_origin = np.min(finest_origins, axis=0)
 
-    for mask, voxel_size_lattice, origin, level_id in level_data:
+    for mask, stride_lattice, origin, level_id in level_data:
         stats["active_counts"].append(int(np.count_nonzero(mask)))
-        origin_finest = np.asarray(origin, dtype=int) * int(voxel_size_lattice) - base_origin
+        if not np.any(mask):
+            continue
+        stride = int(stride_lattice)
+        bounds, slab = _embed_level_mask_on_finest(mask, stride, origin, base_origin, grid_shape_finest)
+        if slab.size == 0:
+            continue
+        x0, x1, y0, y1, z0, z1 = bounds
+        region_cov = coverage[x0:x1, y0:y1, z0:z1]
+        if np.any(region_cov[slab] > 0):
+            stats["non_overlapping"] = False
+        region_cov[slab] += 1
+        finest_owners[x0:x1, y0:y1, z0:z1][slab] = level_id
 
-        stride = int(voxel_size_lattice)
-        for i, j, k in np.argwhere(mask):
-            for di in range(stride):
-                for dj in range(stride):
-                    for dk in range(stride):
-                        fi = origin_finest[0] + i * stride + di
-                        fj = origin_finest[1] + j * stride + dj
-                        fk = origin_finest[2] + k * stride + dk
-                        if (
-                            fi < 0
-                            or fj < 0
-                            or fk < 0
-                            or fi >= grid_shape_finest[0]
-                            or fj >= grid_shape_finest[1]
-                            or fk >= grid_shape_finest[2]
-                        ):
-                            continue
-                        if finest_owners[fi, fj, fk] >= 0:
-                            stats["non_overlapping"] = False
-                        finest_owners[fi, fj, fk] = level_id
-
-    stats["fully_covering"] = int(np.sum(finest_owners < 0)) == 0
+    stats["fully_covering"] = not np.any(coverage == 0)
 
     marked = finest_owners >= 0
     if not stats["fully_covering"]:
         stats["strongly_balanced"] = False
     elif np.any(marked):
-        nx, ny, nz = grid_shape_finest
-        for i in range(nx):
-            for j in range(ny):
-                for k in range(nz):
-                    if not marked[i, j, k]:
-                        continue
-                    level = finest_owners[i, j, k]
-                    for di, dj, dk in _NEIGHBOR_OFFSETS_26:
-                        ni, nj, nk = i + di, j + dj, k + dk
-                        if 0 <= ni < nx and 0 <= nj < ny and 0 <= nk < nz and marked[ni, nj, nk]:
-                            if abs(level - finest_owners[ni, nj, nk]) > 1:
-                                stats["strongly_balanced"] = False
+        for di, dj, dk in _NEIGHBOR_OFFSETS_26:
+            n_o = _shift_toward_offset(finest_owners, di, dj, dk, -1)
+            n_m = _shift_toward_offset(marked.astype(np.int8), di, dj, dk, 0).astype(bool)
+            valid = marked & n_m & (n_o >= 0)
+            if np.any(valid & (np.abs(finest_owners - n_o) > 1)):
+                stats["strongly_balanced"] = False
+                break
 
     return stats
 
