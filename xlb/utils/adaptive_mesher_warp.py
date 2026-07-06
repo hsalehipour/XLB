@@ -13,7 +13,9 @@ import warp as wp
 
 from xlb.utils.adaptive_mesher import (
     AdaptiveMeshConfig,
+    _build_masks_greedy_coarsest,
     _child_centers_and_keys,
+    _fill_mask_coverage_gaps,
     _record_assignments,
     _shape_at_level,
 )
@@ -206,7 +208,7 @@ class WarpAdaptiveMesherOps:
         return distances
 
     def assign_levels_from_distance(self, distances: np.ndarray, config: AdaptiveMeshConfig) -> np.ndarray:
-        d0 = config.finest_band_cells * config.voxel_size
+        d_band = config.finest_band_cells * config.voxel_size
         log_ratio = math.log(config.expansion_ratio)
         assigned = wp.zeros(distances.shape, dtype=wp.int32)
         dist_wp = wp.array(distances, dtype=wp.float64)
@@ -215,7 +217,7 @@ class WarpAdaptiveMesherOps:
             dim=distances.shape,
             inputs=[
                 dist_wp,
-                wp.float64(d0),
+                wp.float64(d_band),
                 wp.float64(log_ratio),
                 wp.int32(config.num_levels),
                 assigned,
@@ -228,7 +230,7 @@ class WarpAdaptiveMesherOps:
         n = len(distances)
         if n == 0:
             return np.empty(0, dtype=np.int32)
-        d0 = config.finest_band_cells * config.voxel_size
+        d_band = config.finest_band_cells * config.voxel_size
         log_ratio = math.log(config.expansion_ratio)
         dist_wp = wp.array(distances.astype(np.float64), dtype=wp.float64)
         assigned = wp.zeros(n, dtype=wp.int32)
@@ -237,7 +239,7 @@ class WarpAdaptiveMesherOps:
             dim=n,
             inputs=[
                 dist_wp,
-                wp.float64(d0),
+                wp.float64(d_band),
                 wp.float64(log_ratio),
                 wp.int32(config.num_levels),
                 assigned,
@@ -268,7 +270,7 @@ class WarpAdaptiveMesherOps:
         config: AdaptiveMeshConfig,
     ) -> np.ndarray:
         nx, ny, nz = grid_shape
-        d0 = config.finest_band_cells * config.voxel_size
+        d_band = config.finest_band_cells * config.voxel_size
         log_ratio = math.log(config.expansion_ratio)
         max_dist = _max_query_distance(origin, grid_shape, voxel_size)
         targets = wp.zeros((nx, ny, nz), dtype=wp.int32)
@@ -280,7 +282,7 @@ class WarpAdaptiveMesherOps:
                 wp.vec3d(float(origin[0]), float(origin[1]), float(origin[2])),
                 wp.float64(voxel_size),
                 wp.float64(max_dist),
-                wp.float64(d0),
+                wp.float64(d_band),
                 wp.float64(log_ratio),
                 wp.int32(config.num_levels),
                 targets,
@@ -363,14 +365,23 @@ class WarpAdaptiveMesherOps:
     def finalize_owner_grid(
         self, owner: np.ndarray, owner_floor: np.ndarray, num_levels: int
     ) -> np.ndarray:
-        owner = self.enforce_strong_balance_bidirectional(owner)
-        owner = self.minimum_with_floor(owner, owner_floor)
-        owner = self.refine_transition_layers(owner, owner_floor, num_levels)
-        owner = self.enforce_strong_balance_bidirectional(owner)
-        owner = self.minimum_with_floor(owner, owner_floor)
-        owner = self.refine_transition_layers(owner, owner_floor, num_levels)
-        owner = self.minimum_with_floor(owner, owner_floor)
-        return owner
+        """Enforce strong balance (ΔL ≤ 1) using refine-only passes."""
+        shape = owner.shape
+        cur = wp.array(owner, dtype=wp.int32)
+        tmp = wp.zeros(shape, dtype=wp.int32)
+        refine_flags = wp.zeros(shape, dtype=wp.uint8)
+
+        for _ in range(64):
+            nmin = self._min_filter_3x3(cur)
+            wp.launch(kernel_balance_need_refine, dim=shape, inputs=[cur, nmin, refine_flags])
+            if not self._any_nonzero_uint8(refine_flags):
+                break
+            wp.launch(kernel_apply_balance_refine, dim=shape, inputs=[cur, nmin, tmp])
+            wp.synchronize()
+            cur = tmp
+            tmp = wp.zeros(shape, dtype=wp.int32)
+
+        return cur.numpy()
 
     def ensure_tileable_transition_bands(self, owner: np.ndarray, num_levels: int) -> np.ndarray:
         """Thicken transition bands using Warp EDT + cube dilation."""
@@ -427,7 +438,21 @@ class WarpAdaptiveMesherOps:
         wp.synchronize()
         return cur.numpy()
 
-    def enforce_owner_block_uniformity(self, owner: np.ndarray, num_levels: int, max_passes: int = 24) -> np.ndarray:
+    def enforce_owner_block_uniformity(
+        self,
+        owner: np.ndarray,
+        num_levels: int,
+        max_level: int | None = None,
+        max_passes: int = 24,
+    ) -> np.ndarray:
+        """Refine owner levels within dyadic blocks up to ``max_level`` (inclusive).
+
+        Levels above ``max_level`` are left unchanged so coarse blocks (e.g. 64–128 m)
+        are not promoted to the finest level present in a corner cell.
+        """
+        if max_level is None:
+            max_level = num_levels - 1
+        max_level = min(max_level, num_levels - 1)
         nx, ny, nz = owner.shape
         cur = wp.array(owner, dtype=wp.int32)
         out = wp.zeros((nx, ny, nz), dtype=wp.int32)
@@ -435,7 +460,7 @@ class WarpAdaptiveMesherOps:
 
         for _ in range(max_passes):
             pass_changed = False
-            for level in range(num_levels - 1, 0, -1):
+            for level in range(max_level, 0, -1):
                 stride = 2**level
                 sx, sy, sz = nx // stride, ny // stride, nz // stride
                 if sx == 0 or sy == 0 or sz == 0:
@@ -455,6 +480,90 @@ class WarpAdaptiveMesherOps:
             if not pass_changed:
                 break
         return cur.numpy()
+
+    @staticmethod
+    def _align_owner_dyadic(owner: np.ndarray, num_levels: int) -> np.ndarray:
+        """Enforce dyadic block alignment so mask extraction has no orphans.
+
+        Invariant: for each level L in [0, num_levels-2], the region
+        {owner <= L} is aligned to 2^(L+1) blocks. Any 2^(L+1)-aligned block
+        that touches the region is fully absorbed into it. This guarantees
+        every dyadic block is uniform, so _build_masks_greedy_coarsest emits
+        clean, non-overlapping, fully-covering masks with no fallback-to-L0
+        orphan cells (the source of staircase protrusions).
+        """
+        nx, ny, nz = owner.shape
+        for level in range(num_levels - 1):
+            stride = 2 ** (level + 1)
+            sx, sy, sz = nx // stride, ny // stride, nz // stride
+            if sx == 0 or sy == 0 or sz == 0:
+                continue
+            ex, ey, ez = sx * stride, sy * stride, sz * stride
+            region = owner[:ex, :ey, :ez] <= level
+            block_has = region.reshape(sx, stride, sy, stride, sz, stride).any(axis=(1, 3, 5))
+            expanded = np.repeat(
+                np.repeat(np.repeat(block_has, stride, axis=0), stride, axis=1),
+                stride,
+                axis=2,
+            )
+            sub = owner[:ex, :ey, :ez]
+            owner[:ex, :ey, :ez] = np.where(expanded & (sub > level), level, sub)
+        return owner
+
+    def build_masks_from_owner(
+        self, owner: np.ndarray, num_levels: int, owner_floor: np.ndarray | None = None,
+        origin: np.ndarray | None = None,
+        voxel_size: float = 1.0,
+        config=None,
+    ) -> List[np.ndarray]:
+        floor = owner.copy() if owner_floor is None else owner_floor
+        owner = self.finalize_owner_grid(owner, floor, num_levels)
+
+        # Assign every near-surface cell its level directly from its TRUE
+        # distance to the STL. This yields smooth distance-contour bands that
+        # hug the surface (like the dense path), instead of the comb/teeth
+        # artifacts produced by iterative shell dilation. The octree owner only
+        # identifies WHICH cells to recompute (all cells it brought below the
+        # coarsest level), so we avoid a full finest-grid distance field.
+        if origin is not None and config is not None:
+            coarsest = num_levels - 1
+            band_region = owner < coarsest
+            # Grow the recompute region by one coarsest-block so that cells the
+            # octree left at the coarsest level but which truly fall in a finer
+            # band are captured too.
+            for _ in range(2**coarsest):
+                grown = band_region.copy()
+                grown[1:] |= band_region[:-1]
+                grown[:-1] |= band_region[1:]
+                grown[:, 1:] |= band_region[:, :-1]
+                grown[:, :-1] |= band_region[:, 1:]
+                grown[:, :, 1:] |= band_region[:, :, :-1]
+                grown[:, :, :-1] |= band_region[:, :, 1:]
+                band_region = grown
+
+            cells = np.argwhere(band_region)
+            if len(cells) > 0:
+                orig = origin.astype(np.float64)
+                centers = orig + (cells.astype(np.float64) + 0.5) * voxel_size
+                max_dist = float(np.linalg.norm(np.array(owner.shape) * voxel_size))
+                dists = self.batched_distances(centers, max_dist)
+                new_levels = self.assign_levels_from_distances_1d(dists, config)
+                ci, cj, ck = cells[:, 0], cells[:, 1], cells[:, 2]
+                owner[ci, cj, ck] = new_levels.astype(owner.dtype)
+
+        # Enforce dyadic block alignment and strong balance to a fixed point.
+        # Both operations are monotonically refining (owner only decreases),
+        # so alternating them converges.
+        for _ in range(num_levels + 2):
+            prev = owner.copy()
+            owner = self.finalize_owner_grid(owner, floor, num_levels)
+            owner = self._align_owner_dyadic(owner, num_levels)
+            if np.array_equal(owner, prev):
+                break
+
+        masks = _build_masks_greedy_coarsest(owner, num_levels)
+        masks = self.repair_balance_by_subdivision(masks, num_levels, owner.shape)
+        return masks
 
     def build_non_overlapping_masks_vectorized(
         self, owner: np.ndarray, num_levels: int
@@ -593,19 +702,6 @@ class WarpAdaptiveMesherOps:
         wp.synchronize()
         return owner.numpy()
 
-    def build_masks_from_owner(
-        self, owner: np.ndarray, num_levels: int, owner_floor: np.ndarray | None = None
-    ) -> List[np.ndarray]:
-        floor = owner.copy() if owner_floor is None else owner_floor
-        owner = self.finalize_owner_grid(owner, floor, num_levels)
-        owner = self.ensure_tileable_transition_bands(owner, num_levels)
-        owner = self.finalize_owner_grid(owner, floor, num_levels)
-        owner = self.enforce_owner_block_uniformity(owner, num_levels)
-        masks = self.build_non_overlapping_masks_vectorized(owner, num_levels)
-        masks = self.repair_balance_by_subdivision(masks, num_levels, owner.shape)
-        masks = self.fill_coverage_gaps(masks, owner.shape, num_levels)
-        return masks
-
 
 def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
     """Public EDT helper (Warp-native, SciPy-parity)."""
@@ -623,7 +719,9 @@ def make_masks_dense_warp(
     distances = ops.compute_distance_field(origin_phys, grid_shape, config.voxel_size, config)
     assigned = ops.assign_levels_from_distance(distances, config)
     owner_floor = assigned.copy()
-    masks = ops.build_masks_from_owner(assigned, config.num_levels, owner_floor=owner_floor)
+    masks = ops.build_masks_from_owner(assigned, config.num_levels, owner_floor=owner_floor,
+                                        origin=origin_phys, voxel_size=config.voxel_size,
+                                        config=config)
     mask_origins = [np.zeros(3, dtype=int) for _ in range(config.num_levels)]
     return masks, mask_origins
 
@@ -687,7 +785,8 @@ def make_masks_octree_warp(
     print("  Building non-overlapping masks from assignments...", flush=True)
     t0 = time.perf_counter()
     masks, mask_origins = _build_masks_from_assignments_warp(
-        ops, assignments, grid_shape_finest, num_levels, config.max_dense_cells
+        ops, assignments, grid_shape_finest, num_levels, config.max_dense_cells,
+        origin, config,
     )
     print(f"    masks built in {time.perf_counter() - t0:.1f}s", flush=True)
     return masks, mask_origins
@@ -699,6 +798,8 @@ def _build_masks_from_assignments_warp(
     grid_shape_finest: Tuple[int, int, int],
     num_levels: int,
     max_dense_cells: int,
+    origin: np.ndarray | None = None,
+    config=None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Warp-accelerated owner paint + mask build from octree assignments."""
     nx, ny, nz = grid_shape_finest
@@ -711,39 +812,16 @@ def _build_masks_from_assignments_warp(
             arr = np.empty((0, 3), dtype=int)
         level_indices.append(arr)
 
-    fi_min, fj_min, fk_min = nx, ny, nz
-    fi_max, fj_max, fk_max = 0, 0, 0
-    for target, arr in enumerate(level_indices):
-        if len(arr) == 0:
-            continue
-        stride = 2**target
-        fi_min = min(fi_min, int(arr[:, 0].min()) * stride)
-        fj_min = min(fj_min, int(arr[:, 1].min()) * stride)
-        fk_min = min(fk_min, int(arr[:, 2].min()) * stride)
-        fi_max = max(fi_max, (int(arr[:, 0].max()) + 1) * stride)
-        fj_max = max(fj_max, (int(arr[:, 1].max()) + 1) * stride)
-        fk_max = max(fk_max, (int(arr[:, 2].max()) + 1) * stride)
-
-    if fi_max <= fi_min:
+    if all(len(a) == 0 for a in level_indices):
         raise RuntimeError("No cell assignments collected during octree refinement.")
 
-    tight_nx, tight_ny, tight_nz = fi_max - fi_min, fj_max - fj_min, fk_max - fk_min
-    max_owner_cells = max(max_dense_cells * 8, 512**3)
-    if tight_nx * tight_ny * tight_nz > max_owner_cells:
-        raise RuntimeError(
-            f"Tight ownership grid ({tight_nx}, {tight_ny}, {tight_nz}) is too large; "
-            "increase voxel_size or reduce num_levels."
-        )
-
     owner = ops.paint_owner_from_assignments(
-        level_indices, (tight_nx, tight_ny, tight_nz), fi_min, fj_min, fk_min, num_levels
+        level_indices, (nx, ny, nz), 0, 0, 0, num_levels
     )
     owner_floor = owner.copy()
-    full_owner = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
-    full_floor = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
-    full_owner[fi_min:fi_max, fj_min:fj_max, fk_min:fk_max] = owner
-    full_floor[fi_min:fi_max, fj_min:fj_max, fk_min:fk_max] = owner_floor
-
-    masks = ops.build_masks_from_owner(full_owner, num_levels, owner_floor=full_floor)
+    voxel_size = config.voxel_size if config is not None else 1.0
+    masks = ops.build_masks_from_owner(owner, num_levels, owner_floor=owner_floor,
+                                       origin=origin, voxel_size=voxel_size,
+                                       config=config)
     mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
     return masks, mask_origins

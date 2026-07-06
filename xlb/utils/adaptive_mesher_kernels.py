@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import warp as wp
 
+wp.clear_kernel_cache()
 wp.init()
 
 TILE_3 = wp.constant(3)
@@ -32,15 +33,13 @@ def unsigned_mesh_distance(mesh_id: wp.uint64, pos: wp.vec3d, max_dist: wp.float
 @wp.func
 def assign_level_from_distance(
     dist: wp.float64,
-    d0: wp.float64,
+    d_band: wp.float64,
     log_ratio: wp.float64,
     num_levels: wp.int32,
 ) -> wp.int32:
-    if dist < d0:
+    if dist <= wp.float64(0.0):
         return wp.int32(0)
-    ratio = dist / d0
-    if ratio <= wp.float64(0.0):
-        return wp.int32(0)
+    ratio = dist / d_band + wp.float64(1.0)
     lvl = wp.int32(wp.floor(wp.log(ratio) / log_ratio))
     if lvl < wp.int32(0):
         return wp.int32(0)

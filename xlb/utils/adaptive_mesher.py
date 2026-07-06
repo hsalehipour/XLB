@@ -550,14 +550,14 @@ def _build_masks_from_assignments(
 
     owner_floor = owner.copy()
 
-    # Embed into the full finest grid, then enforce strong balance before packing masks.
-    full_owner = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
-    full_floor = np.full((nx, ny, nz), num_levels - 1, dtype=np.int32)
-    full_owner[fi_min:fi_max, fj_min:fj_max, fk_min:fk_max] = owner
-    full_floor[fi_min:fi_max, fj_min:fj_max, fk_min:fk_max] = owner_floor
-    owner = _finalize_owner_grid(full_owner, full_floor, num_levels)
-
-    masks = _build_masks_from_owner(owner, num_levels, owner_floor=full_floor)
+    # Post-process only the distance-assigned tight bbox.  Running finalize /
+    # tileable bands on the full aligned grid bleeds refinement shells into
+    # alignment padding far from the STL.
+    tight_masks = _build_masks_from_owner(owner, num_levels, owner_floor=owner_floor)
+    masks = _embed_masks_in_full_domain(
+        tight_masks, fi_min, fj_min, fk_min, (nx, ny, nz), num_levels
+    )
+    masks = _repair_balance_by_subdivision(masks, num_levels, (nx, ny, nz))
     mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
 
     return masks, mask_origins
@@ -847,8 +847,8 @@ def _build_masks_adaptive_partition(owner: np.ndarray, num_levels: int) -> List[
     """
     Partition ``owner`` into non-overlapping dyadic cells.
 
-    Recursively subdivide mixed blocks; emit a cell only when the block is
-    uniform and exactly tileable at the representative level.
+    Recursively subdivide mixed blocks; emit uniform blocks at the owner level.
+    Seeds from coarsest-grid cells for O(background) performance on large domains.
     """
     nx, ny, nz = owner.shape
     masks = [
@@ -856,7 +856,17 @@ def _build_masks_adaptive_partition(owner: np.ndarray, num_levels: int) -> List[
         for level in range(num_levels)
     ]
 
-    stack: List[Tuple[int, int, int, int, int, int]] = [(0, 0, 0, nx, ny, nz)]
+    coarsest = num_levels - 1
+    stride_c = 2**coarsest
+    stack: List[Tuple[int, int, int, int, int, int]] = []
+    for i0 in range(0, nx, stride_c):
+        ei = min(stride_c, nx - i0)
+        for j0 in range(0, ny, stride_c):
+            ej = min(stride_c, ny - j0)
+            for k0 in range(0, nz, stride_c):
+                ek = min(stride_c, nz - k0)
+                if ei > 0 and ej > 0 and ek > 0:
+                    stack.append((i0, j0, k0, ei, ej, ek))
 
     while stack:
         i0, j0, k0, ei, ej, ek = stack.pop()
@@ -865,11 +875,20 @@ def _build_masks_adaptive_partition(owner: np.ndarray, num_levels: int) -> List[
         o_max = int(block.max())
 
         if o_min == o_max:
-            if _emit_uniform_owner_block(masks, o_min, i0, j0, k0, ei, ej, ek):
-                continue
+            if not _emit_uniform_owner_block(masks, o_min, i0, j0, k0, ei, ej, ek):
+                lev = o_min
+                stride = 2**lev
+                ci0, cj0, ck0 = i0 // stride, j0 // stride, k0 // stride
+                ci1 = (i0 + ei - 1) // stride
+                cj1 = (j0 + ej - 1) // stride
+                ck1 = (k0 + ek - 1) // stride
+                masks[lev][ci0 : ci1 + 1, cj0 : cj1 + 1, ck0 : ck1 + 1] = True
+            continue
 
         if ei == 1 and ej == 1 and ek == 1:
-            masks[0][i0, j0, k0] = True
+            lev = int(owner[i0, j0, k0])
+            stride = 2**lev
+            masks[lev][i0 // stride, j0 // stride, k0 // stride] = True
             continue
 
         hi = ei // 2 if ei > 1 else 1
@@ -917,6 +936,98 @@ def _fill_mask_coverage_gaps(
     return masks
 
 
+def _build_masks_greedy_coarsest(owner: np.ndarray, num_levels: int) -> List[np.ndarray]:
+    """Build non-overlapping, fully-covering masks with coherent finest band.
+
+    1. L0 is activated first wherever owner == 0 (tight, coherent surface band).
+    2. Remaining volume is filled coarsest-first (L(n-1) down to L1) to maximize
+       coarse block usage.
+    3. Any leftover uncovered cells go to L0.
+    """
+    nx, ny, nz = owner.shape
+    covered = np.zeros((nx, ny, nz), dtype=bool)
+    masks: List[np.ndarray] = []
+    for level in range(num_levels):
+        stride = 2**level
+        sx, sy, sz = nx // stride, ny // stride, nz // stride
+        masks.append(np.zeros((sx, sy, sz), dtype=bool))
+
+    l0_activate = (owner[:nx, :ny, :nz] == 0)
+    masks[0] = l0_activate
+    covered[:nx, :ny, :nz] |= l0_activate
+
+    for level in range(num_levels - 1, 0, -1):
+        stride = 2**level
+        sx, sy, sz = nx // stride, ny // stride, nz // stride
+
+        owner_blocks = owner[: sx * stride, : sy * stride, : sz * stride].reshape(
+            sx, stride, sy, stride, sz, stride
+        )
+        block_min = owner_blocks.min(axis=(1, 3, 5))
+
+        covered_blocks = covered[: sx * stride, : sy * stride, : sz * stride].reshape(
+            sx, stride, sy, stride, sz, stride
+        )
+        block_uncovered = ~covered_blocks.any(axis=(1, 3, 5))
+
+        activate = (block_min >= level) & block_uncovered
+        masks[level] = activate
+
+        if np.any(activate):
+            expanded = np.repeat(
+                np.repeat(np.repeat(activate, stride, axis=0), stride, axis=1),
+                stride,
+                axis=2,
+            )
+            covered[: sx * stride, : sy * stride, : sz * stride] |= expanded
+
+    remaining = ~covered
+    if np.any(remaining):
+        masks[0] |= remaining[:nx, :ny, :nz]
+
+    return masks
+
+
+def _embed_masks_in_full_domain(
+    tight_masks: List[np.ndarray],
+    fi_min: int,
+    fj_min: int,
+    fk_min: int,
+    grid_shape: Tuple[int, int, int],
+    num_levels: int,
+) -> List[np.ndarray]:
+    """Place tight-bbox masks into full-domain arrays; fill exterior gaps with coarsest."""
+    nx, ny, nz = grid_shape
+    full_masks: List[np.ndarray] = []
+    for level in range(num_levels):
+        stride = 2**level
+        sx, sy, sz = nx // stride, ny // stride, nz // stride
+        full_masks.append(np.zeros((sx, sy, sz), dtype=bool))
+        tm = tight_masks[level]
+        if not np.any(tm):
+            continue
+        oi, oj, ok = fi_min // stride, fj_min // stride, fk_min // stride
+        te, tf, tg = tm.shape
+        oi_end = min(oi + te, sx)
+        oj_end = min(oj + tf, sy)
+        ok_end = min(ok + tg, sz)
+        te_use, tf_use, tg_use = oi_end - oi, oj_end - oj, ok_end - ok
+        if te_use > 0 and tf_use > 0 and tg_use > 0:
+            full_masks[level][oi:oi_end, oj:oj_end, ok:ok_end] = tm[:te_use, :tf_use, :tg_use]
+
+    coarsest = num_levels - 1
+    coarse_stride = 2**coarsest
+    covered = _finest_coverage(full_masks, num_levels, grid_shape)
+    if np.any(~covered):
+        unc = np.argwhere(~covered)
+        full_masks[coarsest][
+            unc[:, 0] // coarse_stride,
+            unc[:, 1] // coarse_stride,
+            unc[:, 2] // coarse_stride,
+        ] = True
+    return full_masks
+
+
 def _build_masks_from_owner(
     owner: np.ndarray,
     num_levels: int,
@@ -925,19 +1036,15 @@ def _build_masks_from_owner(
     """
     Build a non-overlapping, fully covering, strongly-balanced partition.
 
-    Owner is balanced and thickened for tileable transitions, tiled with block
-    uniformity, then any remaining level jumps are removed by subdividing coarse
-    cells (never carving, which left coverage holes).
+    Owner is balanced and thickened for tileable transitions, then partitioned
+    adaptively (subdivide mixed blocks, emit uniform dyadic tiles).  Remaining
+    level jumps are removed by subdividing coarse cells (never carving alone).
     """
     floor = owner.copy() if owner_floor is None else owner_floor
     owner = _finalize_owner_grid(owner, floor, num_levels)
-    owner = _ensure_tileable_transition_bands(owner, num_levels)
-    owner = _finalize_owner_grid(owner, floor, num_levels)
-    owner = _enforce_owner_block_uniformity(owner, num_levels)
-    masks = _build_non_overlapping_masks_vectorized(owner, num_levels)
+    masks = _build_masks_adaptive_partition(owner, num_levels)
     masks = _repair_balance_by_subdivision(masks, num_levels, owner.shape)
-    if np.any(~_finest_coverage(masks, num_levels, owner.shape)):
-        masks = _fill_coverage_gaps(masks, owner)
+    masks = _fill_mask_coverage_gaps(masks, owner, num_levels, owner.shape)
     return masks
 
 
@@ -1098,18 +1205,18 @@ def _pack_level_data(
     raw_level_data = []
     for finest_level in range(num_levels):
         mask = masks[finest_level]
-        if not np.any(mask):
-            raise RuntimeError(f"Level {finest_level} has no active cells after mesh construction.")
-
         voxel_size_level = voxel_size_finest * (2**finest_level)
         offset = mask_origins[finest_level]
         sub_origin_phys = origin_phys + offset.astype(float) * voxel_size_finest
         cuboid_build_level = num_levels - 1 - finest_level
+        active = int(np.count_nonzero(mask))
 
         print(
-            f"Level {finest_level}: shape {mask.shape}, active {np.count_nonzero(mask):,}, "
+            f"Level {finest_level}: shape {mask.shape}, active {active:,}, "
             f"origin offset {offset}, voxel_size {voxel_size_level}"
         )
+        if active == 0:
+            print(f"  (level {finest_level} unused: finer levels fully cover the domain)")
         raw_level_data.append((mask.copy(), voxel_size_level, sub_origin_phys, cuboid_build_level))
 
     return list(reversed(raw_level_data))

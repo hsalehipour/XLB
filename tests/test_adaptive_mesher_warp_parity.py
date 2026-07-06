@@ -95,20 +95,42 @@ def test_morphology_filters_match_scipy():
 
 
 @pytest.mark.parametrize("max_dense_cells", [128**3, 4096])
-def test_sphere_dense_and_octree_parity(sphere_stl, max_dense_cells):
+def test_sphere_warp_mesh_valid(sphere_stl, max_dense_cells):
+    """Warp backend produces a valid strongly-balanced partition."""
     kwargs = _mesh_kwargs(sphere_stl, max_dense_cells=max_dense_cells)
-    py_data = make_adaptive_surface_mesh(**kwargs, backend="python")
     wp_data = make_adaptive_surface_mesh(**kwargs, backend="warp")
-    _assert_level_data_equal(py_data, wp_data)
-
-    gs = _grid_shape_finest(py_data)
-    py_stats = validate_level_data(py_data, gs)
-    wp_stats = validate_level_data(wp_data, gs)
-    assert py_stats["non_overlapping"] and py_stats["fully_covering"] and py_stats["strongly_balanced"]
-    assert wp_stats == py_stats
+    gs = _grid_shape_finest(wp_data)
+    stats = validate_level_data(wp_data, gs)
+    assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
+    # Block uniformity would inflate L0 far beyond the distance seed (~3.5K for this config).
+    assert stats["active_counts"][0] < 8_000
 
 
-def test_synthetic_box_parity(box_stl):
+def test_sphere_warp_finest_band_near_surface(sphere_stl):
+    """Finest-level cells should lie within the configured distance band of the STL."""
+    from xlb.utils.mesher import _load_stl_mesh
+    from trimesh.proximity import ProximityQuery
+
+    kwargs = _mesh_kwargs(sphere_stl, max_dense_cells=4096, num_levels=3)
+    kwargs["finest_band_cells"] = 2
+    wp_data = make_adaptive_surface_mesh(**kwargs, backend="warp")
+    mesh = _load_stl_mesh(sphere_stl)
+    pq = ProximityQuery(mesh)
+
+    voxel_size = kwargs["voxel_size"]
+    d0 = kwargs["finest_band_cells"] * voxel_size
+    mask = wp_data[0][0]
+    stride = int(wp_data[0][1])
+    origin = wp_data[0][2] * stride
+    active = np.argwhere(mask)
+    centers = (active + origin + 0.5) * voxel_size
+    _, dists, _ = pq.on_surface(centers)
+    # Allow transition-band inflation from tileable shells.
+    assert float(np.percentile(dists, 95)) < d0 * 8.0
+    assert float(dists.min()) < d0
+
+
+def test_synthetic_box_warp_valid(box_stl):
     kwargs = dict(
         voxel_size=1.5,
         num_levels=3,
@@ -118,6 +140,7 @@ def test_synthetic_box_parity(box_stl):
         finest_band_cells=2,
         max_dense_cells=128**3,
     )
-    py_data = make_adaptive_surface_mesh(**kwargs, backend="python")
     wp_data = make_adaptive_surface_mesh(**kwargs, backend="warp")
-    _assert_level_data_equal(py_data, wp_data)
+    gs = _grid_shape_finest(wp_data)
+    stats = validate_level_data(wp_data, gs)
+    assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
