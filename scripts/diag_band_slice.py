@@ -11,8 +11,7 @@ import matplotlib.pyplot as plt
 
 import trimesh
 
-from xlb.utils.adaptive_mesher import AdaptiveMeshConfig, _compute_domain
-from xlb.utils.adaptive_mesher_warp import make_masks_octree_warp, make_masks_dense_warp
+from xlb.utils.adaptive_mesher import AdaptiveMeshConfig, _compute_domain, _make_masks_octree, _make_masks_dense
 
 STL = "examples/cfd/stl-files/07022026_SEPULVEDA_SITE_MODEL_FORMA_NOTREES.stl"
 
@@ -55,7 +54,7 @@ def main():
     align = 2 ** num_levels
     grid_shape = tuple(((n + align - 1) // align) * align for n in grid_shape)
 
-    masks, mask_origins = make_masks_octree_warp(mesh, origin_phys, grid_shape, config)
+    masks, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
     owners = reconstruct_levels(masks, num_levels, grid_shape)
     nx, ny, nz = grid_shape
 
