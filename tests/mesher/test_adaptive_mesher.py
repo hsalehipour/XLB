@@ -29,7 +29,7 @@ SPHERE_VOXEL_SIZE = 2.0
 def sphere_stl():
     """Use the checked-in sphere STL when available, else create a temp one."""
     checked_in = os.path.join(
-        os.path.dirname(__file__), "..", "examples", "cfd", "stl-files", "sphere.stl"
+        os.path.dirname(__file__), "..", "..", "examples", "cfd", "stl-files", "sphere.stl"
     )
     checked_in = os.path.normpath(checked_in)
     if os.path.isfile(checked_in):

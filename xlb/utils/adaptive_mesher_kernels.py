@@ -934,3 +934,154 @@ def kernel_any_uncovered(
     i, j, k = wp.tid()
     if covered[i, j, k] == wp.uint8(0):
         wp.atomic_add(counter, 0, wp.int32(1))
+
+
+# ---------------------------------------------------------------------------
+# Dyadic alignment kernels
+# ---------------------------------------------------------------------------
+
+@wp.kernel
+def kernel_dyadic_flag_blocks(
+    owner: wp.array3d(dtype=wp.int32),
+    level: wp.int32,
+    stride: wp.int32,
+    flags: wp.array3d(dtype=wp.int32),
+):
+    """Flag each dyadic block that contains at least one cell with owner <= level."""
+    i, j, k = wp.tid()
+    ex = (owner.shape[0] // stride) * stride
+    ey = (owner.shape[1] // stride) * stride
+    ez = (owner.shape[2] // stride) * stride
+    if i >= ex or j >= ey or k >= ez:
+        return
+    if owner[i, j, k] <= level:
+        bi = i // stride
+        bj = j // stride
+        bk = k // stride
+        wp.atomic_max(flags, bi, bj, bk, wp.int32(1))
+
+
+@wp.kernel
+def kernel_dyadic_apply_flags(
+    owner: wp.array3d(dtype=wp.int32),
+    level: wp.int32,
+    stride: wp.int32,
+    flags: wp.array3d(dtype=wp.int32),
+):
+    """Set owner to level for cells in flagged blocks whose owner > level."""
+    i, j, k = wp.tid()
+    ex = (owner.shape[0] // stride) * stride
+    ey = (owner.shape[1] // stride) * stride
+    ez = (owner.shape[2] // stride) * stride
+    if i >= ex or j >= ey or k >= ez:
+        return
+    bi = i // stride
+    bj = j // stride
+    bk = k // stride
+    if flags[bi, bj, bk] > wp.int32(0) and owner[i, j, k] > level:
+        owner[i, j, k] = level
+
+
+# ---------------------------------------------------------------------------
+# Greedy coarsest-first mask building kernels
+# ---------------------------------------------------------------------------
+
+@wp.kernel
+def kernel_greedy_activate_l0(
+    owner: wp.array3d(dtype=wp.int32),
+    mask0: wp.array3d(dtype=wp.uint8),
+    covered: wp.array3d(dtype=wp.uint8),
+):
+    """Activate L0 mask wherever owner == 0, and mark covered."""
+    i, j, k = wp.tid()
+    if owner[i, j, k] == wp.int32(0):
+        mask0[i, j, k] = wp.uint8(1)
+        covered[i, j, k] = wp.uint8(1)
+
+
+@wp.kernel
+def kernel_greedy_check_block(
+    owner: wp.array3d(dtype=wp.int32),
+    covered: wp.array3d(dtype=wp.uint8),
+    level: wp.int32,
+    stride: wp.int32,
+    block_ok: wp.array3d(dtype=wp.uint8),
+):
+    """Check if a block can be activated at `level`: all owner >= level AND none covered."""
+    bi, bj, bk = wp.tid()
+    i0 = bi * stride
+    j0 = bj * stride
+    k0 = bk * stride
+    ok = wp.uint8(1)
+    for di in range(stride):
+        for dj in range(stride):
+            for dk in range(stride):
+                ii = i0 + di
+                jj = j0 + dj
+                kk = k0 + dk
+                if owner[ii, jj, kk] < level:
+                    ok = wp.uint8(0)
+                if covered[ii, jj, kk] != wp.uint8(0):
+                    ok = wp.uint8(0)
+    block_ok[bi, bj, bk] = ok
+
+
+@wp.kernel
+def kernel_greedy_mark_covered(
+    block_ok: wp.array3d(dtype=wp.uint8),
+    stride: wp.int32,
+    covered: wp.array3d(dtype=wp.uint8),
+    mask_level: wp.array3d(dtype=wp.uint8),
+):
+    """Mark finest-grid cells as covered for activated blocks and set the level mask."""
+    i, j, k = wp.tid()
+    bi = i // stride
+    bj = j // stride
+    bk = k // stride
+    if bi < block_ok.shape[0] and bj < block_ok.shape[1] and bk < block_ok.shape[2]:
+        if block_ok[bi, bj, bk] != wp.uint8(0):
+            covered[i, j, k] = wp.uint8(1)
+            if i == bi * stride and j == bj * stride and k == bk * stride:
+                mask_level[bi, bj, bk] = wp.uint8(1)
+
+
+@wp.kernel
+def kernel_greedy_fill_remaining(
+    covered: wp.array3d(dtype=wp.uint8),
+    mask0: wp.array3d(dtype=wp.uint8),
+):
+    """Assign any uncovered finest cells to L0."""
+    i, j, k = wp.tid()
+    if covered[i, j, k] == wp.uint8(0):
+        mask0[i, j, k] = wp.uint8(1)
+
+
+# ---------------------------------------------------------------------------
+# Band-region dilation kernel (face-connected, N iterations in one launch)
+# ---------------------------------------------------------------------------
+
+@wp.kernel
+def kernel_dilate_mask_uint8(
+    mask_in: wp.array3d(dtype=wp.uint8),
+    mask_out: wp.array3d(dtype=wp.uint8),
+):
+    """Single-voxel face-connected (6-neighbor) dilation of a uint8 mask."""
+    i, j, k = wp.tid()
+    nx = mask_in.shape[0]
+    ny = mask_in.shape[1]
+    nz = mask_in.shape[2]
+    val = mask_in[i, j, k]
+    if val == wp.uint8(0):
+        if i > 0 and mask_in[i - 1, j, k] != wp.uint8(0):
+            val = wp.uint8(1)
+        elif i < nx - 1 and mask_in[i + 1, j, k] != wp.uint8(0):
+            val = wp.uint8(1)
+        elif j > 0 and mask_in[i, j - 1, k] != wp.uint8(0):
+            val = wp.uint8(1)
+        elif j < ny - 1 and mask_in[i, j + 1, k] != wp.uint8(0):
+            val = wp.uint8(1)
+        elif k > 0 and mask_in[i, j, k - 1] != wp.uint8(0):
+            val = wp.uint8(1)
+        elif k < nz - 1 and mask_in[i, j, k + 1] != wp.uint8(0):
+            val = wp.uint8(1)
+    mask_out[i, j, k] = val
