@@ -17,6 +17,8 @@ from xlb.utils.adaptive_mesher import (
     WarpAdaptiveMesherOps,
     _record_assignments,
     euclidean_edt_3d,
+    grid_shape_finest as adaptive_grid_shape_finest,
+    is_sparse_level_data,
     make_adaptive_surface_mesh,
     validate_level_data,
 )
@@ -55,8 +57,7 @@ def box_stl():
 
 
 def _grid_shape_finest(level_data):
-    num_levels = len(level_data)
-    return tuple(int(level_data[-1][0].shape[i] * 2 ** (num_levels - 1)) for i in range(3))
+    return adaptive_grid_shape_finest(level_data)
 
 
 def _mesh_kwargs(stl_path, max_dense_cells=128**3, num_levels=3):
@@ -207,9 +208,13 @@ def test_sphere_mesh_valid(sphere_stl, max_dense_cells):
     kwargs = _mesh_kwargs(sphere_stl, max_dense_cells=max_dense_cells)
     data = make_adaptive_surface_mesh(**kwargs)
     gs = _grid_shape_finest(data)
-    stats = validate_level_data(data, gs)
-    assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
-    assert stats["active_counts"][0] < 8_000
+    if is_sparse_level_data(data):
+        finest_active = int(data[0][0].shape[0])
+        assert finest_active < 8_000
+    else:
+        stats = validate_level_data(data, gs)
+        assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
+        assert stats["active_counts"][0] < 8_000
 
 
 def test_sphere_finest_band_near_surface(sphere_stl):
@@ -228,7 +233,7 @@ def test_sphere_finest_band_near_surface(sphere_stl):
     mask = data[0][0]
     stride = int(data[0][1])
     origin = data[0][2] * stride
-    active = np.argwhere(mask)
+    active = mask if mask.ndim == 2 else np.argwhere(mask)
     centers = (active + origin + 0.5) * voxel_size
     _, dists, _ = pq.on_surface(centers)
     assert float(np.percentile(dists, 95)) < d0 * 8.0

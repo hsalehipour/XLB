@@ -137,25 +137,48 @@ def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
     return adjusted_min, adjusted_max
 
 
+def is_sparse_level_data(level_data) -> bool:
+    """Return True when level_data stores (N, 3) sparse coords instead of dense masks."""
+    if not level_data:
+        return False
+    pattern = level_data[0][0]
+    return pattern.ndim == 2 and pattern.shape[1] == 3
+
+
+def grid_shape_finest_from_level_data(level_data) -> np.ndarray:
+    """Return finest-grid shape as int64 array for dense or sparse level_data."""
+    stored = getattr(level_data, "grid_shape_finest", None)
+    if stored is not None:
+        return np.asarray(stored, dtype=np.int64)
+    if is_sparse_level_data(level_data):
+        raise ValueError(
+            "Sparse level_data is missing grid_shape_finest metadata; "
+            "use make_adaptive_surface_mesh or set level_data.grid_shape_finest."
+        )
+    num_levels = len(level_data)
+    return np.asarray(level_data[-1][0].shape, dtype=np.int64) * (2 ** (num_levels - 1))
+
+
 def prepare_sparsity_pattern(level_data):
     """
-    Prepare the sparsity pattern for the multiresolution grid based on the level data. "level_data" is expected to be formatted as in
-    the output of "make_cuboid_mesh".
+    Prepare the sparsity pattern for the multiresolution grid based on the level data.
+
+    ``level_data`` is expected to be formatted as in the output of
+    ``make_cuboid_mesh`` or ``make_adaptive_surface_mesh``. Each entry may hold
+    either a dense 3-D mask or a sparse (N, 3) integer coordinate array.
     """
     num_levels = len(level_data)
     level_origins = []
     sparsity_pattern = []
     for lvl in range(num_levels):
-        # Get the level mask from the level data
-        level_mask = level_data[lvl][0]
+        pattern = level_data[lvl][0]
 
-        # Ensure level_0 is contiguous int32
-        level_mask = np.ascontiguousarray(level_mask, dtype=np.int32)
+        if pattern.ndim == 2:
+            level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
+        else:
+            level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
 
-        # Append the padded level mask to the sparsity pattern
-        sparsity_pattern.append(level_mask)
-
-        # Get the origin for this level
+        sparsity_pattern.append(level_pattern)
         level_origins.append(level_data[lvl][2])
 
     return sparsity_pattern, level_origins
@@ -342,7 +365,10 @@ class MultiresIO(object):
         total_cells : int
             Total number of active voxels across all levels.
         """
-        num_voxels_per_level = [np.sum(data) for data, _, _, _ in levels_data]
+        num_voxels_per_level = [
+            data.shape[0] if data.ndim == 2 else int(np.sum(data))
+            for data, _, _, _ in levels_data
+        ]
         num_points_per_level = [8 * nv for nv in num_voxels_per_level]
         point_id_offsets = np.cumsum([0] + num_points_per_level[:-1])
 
@@ -356,7 +382,8 @@ class MultiresIO(object):
             corners_list, conn_list = self._process_level(data, voxel_size, origin, point_id_offsets[level_idx])
 
             if corners_list:
-                print(f"\tProcessing level {level}: Voxel size {voxel_size}, Origin {origin}, Shape {data.shape}")
+                shape_desc = f"coords {data.shape}" if data.ndim == 2 else f"shape {data.shape}"
+                print(f"\tProcessing level {level}: Voxel size {voxel_size}, Origin {origin}, {shape_desc}")
                 all_corners.extend(corners_list)
                 all_connectivity.extend(conn_list)
                 num_cells = sum(c.shape[0] for c in conn_list)
@@ -374,9 +401,12 @@ class MultiresIO(object):
 
     def _process_level(self, data, voxel_size, origin, point_id_offset):
         """
-        Given a voxel grid, returns all corners and connectivity in NumPy for this resolution level.
+        Given a voxel grid or sparse coordinate list, returns all corners and connectivity.
         """
-        true_indices = np.argwhere(data)
+        if data.ndim == 2:
+            true_indices = data
+        else:
+            true_indices = np.argwhere(data)
         if true_indices.size == 0:
             return [], []
 
@@ -516,8 +546,7 @@ class MultiresIO(object):
         unique_idx = 0
 
         # Get the grid shape of computational box at the finest level from the levels_data
-        num_levels = len(levels_data)
-        grid_shape_finest = np.array(levels_data[-1][0].shape) * 2 ** (num_levels - 1)
+        grid_shape_finest = grid_shape_finest_from_level_data(levels_data)
 
         for start in range(0, num_points, chunk_size):
             end = min(start + chunk_size, num_points)

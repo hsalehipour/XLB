@@ -53,6 +53,11 @@ class NeonMultiresGrid(Grid):
         self.sparsity_pattern_origins = sparsity_pattern_origins
         self.count_levels = len(sparsity_pattern_list)
         self.refinement_factor = 2
+        self._sparse_pattern = (
+            sparsity_pattern_list
+            and sparsity_pattern_list[0].ndim == 2
+            and sparsity_pattern_list[0].shape[1] == 3
+        )
 
         super().__init__(shape, ComputeBackend.NEON)
 
@@ -82,13 +87,26 @@ class NeonMultiresGrid(Grid):
 
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
 
-        self.grid = neon.multires.mGrid(
-            backend=self.bk,
-            dim=self.dim,
-            sparsity_pattern_list=self.sparsity_pattern_list,
-            sparsity_pattern_origins=self.sparsity_pattern_origins,
-            stencil=self.neon_stencil,
-        )
+        if self._sparse_pattern:
+            active_voxels = [
+                np.ascontiguousarray(pattern, dtype=np.int32)
+                for pattern in self.sparsity_pattern_list
+            ]
+            self.grid = neon.multires.mGrid.from_active_voxels(
+                backend=self.bk,
+                dim=self.dim,
+                active_voxels_list=active_voxels,
+                sparsity_pattern_origins=self.sparsity_pattern_origins,
+                stencil=self.neon_stencil,
+            )
+        else:
+            self.grid = neon.multires.mGrid(
+                backend=self.bk,
+                dim=self.dim,
+                sparsity_pattern_list=self.sparsity_pattern_list,
+                sparsity_pattern_origins=self.sparsity_pattern_origins,
+                stencil=self.neon_stencil,
+            )
         # Print grid stats about voxel distribution between levels.
         self.grid.print_info()
         pass
@@ -188,7 +206,7 @@ class NeonMultiresGrid(Grid):
             raise ValueError(f"Unsupported box_side: {box_side}")
 
         for level in range(num_levels):
-            mask = level_data[level][0]
+            pattern = level_data[level][0]
             origin = level_data[level][2]  # Assume np.array of shape (d,)
             grid_shape = self.level_to_shape(level)  # tuple of length d
 
@@ -196,8 +214,10 @@ class NeonMultiresGrid(Grid):
             dim_idx = conf["dim"]
             grid_bounds = conf["value"](grid_shape) if callable(conf["value"]) else conf["value"]
 
-            # Get local indices of active voxels
-            local_coords = np.nonzero(mask)  # Tuple of d arrays, each of length num_active
+            if pattern.ndim == 2:
+                local_coords = tuple(pattern[:, i] for i in range(d))
+            else:
+                local_coords = np.nonzero(pattern)  # Tuple of d arrays, each of length num_active
             if not local_coords[0].size:
                 bc_indices_list.append([])
                 continue

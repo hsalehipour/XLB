@@ -182,27 +182,60 @@ def _child_centers_and_keys(
     if len(parent_refine) == 0:
         return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=int)
 
-    bases = origin + parent_refine.astype(np.float64) * parent_voxel
-    offsets = np.array(
+    # Single (8, 3) offset table shared by both the physical child centers and
+    # the integer child block coordinates, so the distance evaluated at a child
+    # centre and the coordinate it is recorded under always refer to the same
+    # child. (Previously the integer offsets were sliced with a stride that did
+    # not match the centre ordering, scrambling child coordinates and scattering
+    # active cells into diagonal stripes.)
+    int_offsets = np.array(
         [
-            [di + 0.5, dj + 0.5, dk + 0.5]
+            [di, dj, dk]
             for di in range(2)
             for dj in range(2)
             for dk in range(2)
         ],
-        dtype=np.float64,
+        dtype=np.int64,
     )
-    centers = (bases[:, None, :] + offsets[None, :, :] * child_voxel).reshape(-1, 3)
 
-    pi = np.repeat(parent_refine[:, 0], 8)
-    pj = np.repeat(parent_refine[:, 1], 8)
-    pk = np.repeat(parent_refine[:, 2], 8)
-    child_off = np.tile(np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1], dtype=int), len(parent_refine))
-    di = child_off[0::3]
-    dj = child_off[1::3]
-    dk = child_off[2::3]
-    keys = np.stack([pi * 2 + di, pj * 2 + dj, pk * 2 + dk], axis=1)
+    bases = origin + parent_refine.astype(np.float64) * parent_voxel
+    centers = (bases[:, None, :] + (int_offsets[None, :, :] + 0.5) * child_voxel).reshape(-1, 3)
+
+    child_blocks = parent_refine.astype(np.int64)[:, None, :] * 2 + int_offsets[None, :, :]
+    keys = child_blocks.reshape(-1, 3)
     return centers, keys
+
+
+class LevelDataList(list):
+    """Level data list with optional attached finest-grid shape metadata."""
+
+    grid_shape_finest: Tuple[int, int, int] | None = None
+
+
+def is_sparse_level_data(level_data: list) -> bool:
+    """Return True when level_data stores (N, 3) sparse coords instead of dense masks."""
+    if not level_data:
+        return False
+    pattern = level_data[0][0]
+    return pattern.ndim == 2 and pattern.shape[1] == 3
+
+
+def _assignments_to_active_coords(
+    assignments: List[List[np.ndarray]],
+    num_levels: int,
+) -> List[np.ndarray]:
+    """Convert octree per-level cell assignments into sparse (N, 3) coordinate arrays."""
+    active_coords: List[np.ndarray] = []
+    for target in range(num_levels):
+        if assignments[target]:
+            arr = np.unique(np.vstack(assignments[target]), axis=0).astype(np.int32)
+        else:
+            arr = np.empty((0, 3), dtype=np.int32)
+        active_coords.append(arr)
+
+    if all(len(a) == 0 for a in active_coords):
+        raise RuntimeError("No cell assignments collected during octree refinement.")
+    return active_coords
 
 
 def _record_assignments(
@@ -1180,14 +1213,14 @@ def _make_masks_octree(
         parent_refine = keys[child_targets <= level - 1] if level > 0 else np.empty((0, 3), dtype=int)
         parent_level = level
 
-    print("  Building non-overlapping masks from assignments...", flush=True)
+    print("  Building sparse active-voxel coordinates from assignments...", flush=True)
     t0 = time.perf_counter()
-    masks, mask_origins = _build_masks_from_assignments(
-        ops, assignments, grid_shape_finest, num_levels, config.max_dense_cells,
-        origin, config,
-    )
-    print(f"    masks built in {time.perf_counter() - t0:.1f}s", flush=True)
-    return masks, mask_origins
+    active_coords = _assignments_to_active_coords(assignments, num_levels)
+    mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
+    print(f"    sparse coords built in {time.perf_counter() - t0:.1f}s", flush=True)
+    for level, coords in enumerate(active_coords):
+        print(f"    level {level}: {len(coords):,} active voxels", flush=True)
+    return active_coords, mask_origins
 
 
 def _build_masks_from_assignments(
@@ -1247,45 +1280,56 @@ def _build_masks_from_assignments(
 # ---------------------------------------------------------------------------
 
 def _pack_level_data(
-    masks: List[np.ndarray],
+    patterns: List[np.ndarray],
     mask_origins: List[np.ndarray],
     origin_phys: np.ndarray,
     voxel_size_finest: float,
     num_levels: int,
+    *,
+    sparse: bool = False,
 ) -> list:
-    """Pack boolean masks into level_data tuples for the cuboid mesh interface.
+    """Pack per-level masks or sparse coords into level_data tuples.
 
     Output ordering is coarsest-first (reversed from the internal finest-first
     convention) to match the format expected by :func:`_normalize_level_data`.
 
-    Each entry is ``(mask, voxel_size_at_level, physical_origin, build_level)``.
+    Each entry is ``(mask_or_coords, voxel_size_at_level, physical_origin, build_level)``.
+    When ``sparse=True``, the first element is an (N, 3) int32 coordinate array.
 
     Args:
-        masks: Per-level boolean mask arrays (finest-first).
+        patterns: Per-level boolean masks or sparse coordinate arrays (finest-first).
         mask_origins: Per-level grid-index origins.
         origin_phys: Physical domain origin.
         voxel_size_finest: Finest cell physical size.
         num_levels: Total levels.
+        sparse: When True, ``patterns`` holds (N, 3) coordinate arrays.
 
     Returns:
         List of tuples in coarsest-first order.
     """
     raw_level_data = []
     for finest_level in range(num_levels):
-        mask = masks[finest_level]
+        pattern = patterns[finest_level]
         voxel_size_level = voxel_size_finest * (2**finest_level)
         offset = mask_origins[finest_level]
         sub_origin_phys = origin_phys + offset.astype(float) * voxel_size_finest
         cuboid_build_level = num_levels - 1 - finest_level
-        active = int(np.count_nonzero(mask))
+        if sparse:
+            active = int(pattern.shape[0])
+            shape_desc = f"coords ({active:,} x 3)"
+            packed = np.ascontiguousarray(pattern, dtype=np.int32)
+        else:
+            active = int(np.count_nonzero(pattern))
+            shape_desc = f"shape {pattern.shape}"
+            packed = pattern.copy()
 
         print(
-            f"Level {finest_level}: shape {mask.shape}, active {active:,}, "
+            f"Level {finest_level}: {shape_desc}, active {active:,}, "
             f"origin offset {offset}, voxel_size {voxel_size_level}"
         )
         if active == 0:
             print(f"  (level {finest_level} unused: finer levels fully cover the domain)")
-        raw_level_data.append((mask.copy(), voxel_size_level, sub_origin_phys, cuboid_build_level))
+        raw_level_data.append((packed, voxel_size_level, sub_origin_phys, cuboid_build_level))
 
     return list(reversed(raw_level_data))
 
@@ -1367,14 +1411,18 @@ def make_adaptive_surface_mesh(
 
     if n_finest > max_dense_cells:
         print("Using octree surface meshing (avoids full finest-grid allocation).", flush=True)
-        masks, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
+        patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
+        raw_level_data = _pack_level_data(
+            patterns, mask_origins, origin_phys, voxel_size, num_levels, sparse=True
+        )
     else:
         print("Using dense finest-grid meshing.", flush=True)
         masks, mask_origins = _make_masks_dense(mesh, origin_phys, grid_shape, config)
+        raw_level_data = _pack_level_data(masks, mask_origins, origin_phys, voxel_size, num_levels)
 
-    raw_level_data = _pack_level_data(masks, mask_origins, origin_phys, voxel_size, num_levels)
-
-    return _normalize_level_data(raw_level_data, voxel_size)
+    level_data = LevelDataList(_normalize_level_data(raw_level_data, voxel_size))
+    level_data.grid_shape_finest = grid_shape
+    return level_data
 
 
 # ---------------------------------------------------------------------------
@@ -1457,7 +1505,15 @@ def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int
 
 
 def grid_shape_finest(level_data: list) -> Tuple[int, int, int]:
-    """Finest lattice shape implied by coarsest-level mask and level count."""
+    """Finest lattice shape implied by level_data or attached metadata."""
+    stored = getattr(level_data, "grid_shape_finest", None)
+    if stored is not None:
+        return tuple(int(x) for x in stored)
+    if is_sparse_level_data(level_data):
+        raise ValueError(
+            "Sparse level_data has no attached grid_shape_finest; "
+            "call make_adaptive_surface_mesh or set level_data.grid_shape_finest."
+        )
     num_levels = len(level_data)
     return tuple(int(level_data[-1][0].shape[i] * 2 ** (num_levels - 1)) for i in range(3))
 
@@ -1532,30 +1588,50 @@ def print_mesh_statistics(
     print(f"\n{label}")
     print("=" * len(label))
     print(f"Finest grid shape: {grid_shape_finest_grid}")
+    sparse = is_sparse_level_data(level_data)
+
+    def _active_count(pattern: np.ndarray) -> int:
+        if pattern.ndim == 2:
+            return int(pattern.shape[0])
+        return int(np.count_nonzero(pattern))
+
     for lvl in range(num_levels):
-        active = int(np.count_nonzero(sparsity_pattern[lvl]))
+        active = _active_count(sparsity_pattern[lvl])
         equiv_finest = active * (2 ** (num_levels - 1 - lvl))
+        shape_desc = (
+            f"coords {sparsity_pattern[lvl].shape}"
+            if sparse
+            else f"mask shape={sparsity_pattern[lvl].shape}"
+        )
         print(
             f"  Level {lvl}: active={active:,}, "
-            f"mask shape={sparsity_pattern[lvl].shape}, "
+            f"{shape_desc}, "
             f"origin={level_origins[lvl]}, "
             f"equiv. finest cells={equiv_finest:,}"
         )
 
-    total_active = sum(int(np.count_nonzero(m)) for m in sparsity_pattern)
+    total_active = sum(_active_count(m) for m in sparsity_pattern)
     total_equiv_finest = sum(
-        int(np.count_nonzero(sparsity_pattern[lvl])) * (2 ** (num_levels - 1 - lvl))
+        _active_count(sparsity_pattern[lvl]) * (2 ** (num_levels - 1 - lvl))
         for lvl in range(num_levels)
     )
     print(f"  Total active cells: {total_active:,}")
     print(f"  Total equivalent finest cells: {total_equiv_finest:,}")
 
-    stats = validate_level_data(level_data, grid_shape_finest_grid)
-    print(
-        f"  Validation: non_overlapping={stats['non_overlapping']}, "
-        f"fully_covering={stats['fully_covering']}, "
-        f"strongly_balanced={stats['strongly_balanced']}"
-    )
+    if sparse:
+        print("  Validation: skipped (sparse level_data; dense validation not applicable)")
+        stats = {
+            "non_overlapping": None,
+            "fully_covering": None,
+            "strongly_balanced": None,
+        }
+    else:
+        stats = validate_level_data(level_data, grid_shape_finest_grid)
+        print(
+            f"  Validation: non_overlapping={stats['non_overlapping']}, "
+            f"fully_covering={stats['fully_covering']}, "
+            f"strongly_balanced={stats['strongly_balanced']}"
+        )
     return total_active, total_equiv_finest
 
 
