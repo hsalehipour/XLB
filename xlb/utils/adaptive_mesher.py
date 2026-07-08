@@ -132,6 +132,57 @@ def _shape_at_level(grid_shape_finest: Tuple[int, int, int], level: int) -> Tupl
     return (grid_shape_finest[0] // stride, grid_shape_finest[1] // stride, grid_shape_finest[2] // stride)
 
 
+def _pad_domain_for_dyadic(
+    grid_shape: Tuple[int, int, int],
+    origin_phys: np.ndarray,
+    voxel_size: float,
+    num_levels: int,
+    domain_padding: Sequence[float],
+) -> Tuple[Tuple[int, int, int], np.ndarray]:
+    """Grow the finest grid to a multiple of ``2**num_levels`` cells per axis.
+
+    The extra alignment cells are split between the low (-) and high (+) side of
+    each axis in proportion to the requested ``domain_padding``, so a symmetric
+    padding (e.g. ``0.5 / 0.5``) keeps the geometry centred, while an asymmetric
+    one (e.g. a tight ground plane ``0.05 / 3.0``) preserves its intended offset.
+
+    The low-side growth is quantised to ``2**(num_levels-1)`` cells so the origin
+    stays divisible by every level stride — a requirement of
+    :func:`xlb.utils.mesher._normalize_level_data`, which maps each level's origin
+    to a common finest-grid corner.
+
+    Args:
+        grid_shape: Finest-grid dimensions before alignment.
+        origin_phys: Physical domain origin (modified copy is returned).
+        voxel_size: Finest cell size.
+        num_levels: Number of refinement levels.
+        domain_padding: 6-tuple ``[-x, +x, -y, +y, -z, +z]`` padding multipliers.
+
+    Returns:
+        Tuple of (aligned grid_shape, shifted origin_phys).
+    """
+    align = 2**num_levels
+    factor = 2 ** (num_levels - 1)
+    origin = origin_phys.astype(np.float64).copy()
+    new_shape = list(grid_shape)
+    for axis in range(3):
+        n = int(grid_shape[axis])
+        total = (align - n % align) % align
+        if total == 0:
+            continue
+        p_lo = float(domain_padding[2 * axis])
+        p_hi = float(domain_padding[2 * axis + 1])
+        denom = p_lo + p_hi
+        frac_lo = 0.5 if denom <= 0.0 else p_lo / denom
+        # Quantise the low-side growth to whole coarse cells so the origin stays
+        # dyadic-aligned; the remainder goes to the high side.
+        low_extra = int(round((total * frac_lo) / factor)) * factor
+        low_extra = max(0, min(low_extra, (total // factor) * factor))
+        origin[axis] -= low_extra * voxel_size
+        new_shape[axis] = n + total
+    return (new_shape[0], new_shape[1], new_shape[2]), origin
+
+
 # ---------------------------------------------------------------------------
 # Octree helpers
 # ---------------------------------------------------------------------------
@@ -684,29 +735,21 @@ def make_adaptive_surface_mesh(
     )
 
     mesh, origin_phys, grid_shape = _compute_domain(config)
-    nx, ny, nz = grid_shape
-    n_finest = nx * ny * nz
+    n_finest = int(np.prod(grid_shape))
     print(f"Adaptive mesh domain (finest): {grid_shape}, origin {origin_phys}, voxel_size {voxel_size}")
     print(f"  Finest-grid cell count: {n_finest:,}")
 
-    factor = 2 ** (num_levels - 1)
-    pad_x = (factor - nx % factor) % factor
-    pad_y = (factor - ny % factor) % factor
-    pad_z = (factor - nz % factor) % factor
-    if pad_x or pad_y or pad_z:
-        nx += pad_x
-        ny += pad_y
-        nz += pad_z
-        grid_shape = (nx, ny, nz)
-        n_finest = nx * ny * nz
-        print(f"Padded domain to {grid_shape} for dyadic nesting (factor {factor})")
-
     align = 2**num_levels
-    aligned_shape = tuple(((n + align - 1) // align) * align for n in grid_shape)
+    aligned_shape, origin_phys = _pad_domain_for_dyadic(
+        grid_shape, origin_phys, voxel_size, num_levels, config.domain_padding
+    )
     if aligned_shape != grid_shape:
         grid_shape = aligned_shape
         n_finest = int(np.prod(grid_shape))
-        print(f"Aligned domain to {grid_shape} for adaptive partitioning (align={align})")
+        print(
+            f"Aligned domain to {grid_shape}, origin {origin_phys} "
+            f"(align={align}, padding distributed by domain_padding ratio)"
+        )
 
     print("Using octree surface meshing (sparse active-voxel output).", flush=True)
     patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
