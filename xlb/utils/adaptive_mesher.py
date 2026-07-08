@@ -1202,15 +1202,26 @@ def _make_masks_octree(
         centers, keys = _child_centers_and_keys(parent_refine, origin, parent_voxel, child_voxel)
         dists = ops.batched_distances(centers, max_dist)
         child_targets = ops.assign_levels_from_distances_1d(dists, config)
-        _record_assignments(assignments, keys, child_targets, level, num_levels)
-        n_active = int(np.sum(child_targets == level))
+
+        # Graded-octree leaf partition: a child is a leaf at this level when it
+        # is not refined further (target >= level). Its 8 siblings exactly tile
+        # the subdivided parent, so recording leaves at the *current* level (not
+        # at their distance-derived target) yields a strictly non-overlapping,
+        # fully-covering set. Children with target < level are subdivided next.
+        # (Recording at the raw target instead makes coarse cells overlap their
+        # own refined siblings.)
+        is_leaf = child_targets >= level
+        leaf_keys = keys[is_leaf]
+        if len(leaf_keys):
+            assignments[level].append(leaf_keys)
+        n_active = int(len(leaf_keys))
         print(
             f"    {len(parent_refine):,} parents, {n_active:,} active at level {level} "
             f"in {time.perf_counter() - t0:.1f}s",
             flush=True,
         )
 
-        parent_refine = keys[child_targets <= level - 1] if level > 0 else np.empty((0, 3), dtype=int)
+        parent_refine = keys[~is_leaf] if level > 0 else np.empty((0, 3), dtype=int)
         parent_level = level
 
     print("  Building sparse active-voxel coordinates from assignments...", flush=True)
