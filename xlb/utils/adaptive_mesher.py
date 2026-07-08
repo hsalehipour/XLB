@@ -8,17 +8,12 @@ remaining domain volume using geometric expansion-ratio shells.
 
 **Architecture:**
 
-1. Distance computation: GPU-accelerated signed-distance queries via Warp BVH
-   meshes, either in a single dense launch or tiled for large domains.
-2. Level assignment: Each cell receives a target refinement level based on its
+1. Octree refinement: GPU BVH distance queries at coarse levels, subdividing
+   only where finer resolution is needed near the STL surface.
+2. Level assignment: Each cell receives a target refinement level from its
    distance to the surface (geometric-ratio shells).
-3. Owner grid refinement: Strong-balance enforcement (ΔL ≤ 1), dyadic block
-   alignment, and optional surface-targeted distance recomputation ensure
-   artifact-free transitions.
-4. Mask extraction: Greedy coarsest-first partitioning produces non-overlapping,
-   fully-covering boolean masks.
-5. Balance repair: A final subdivision pass guarantees the strong-balance
-   invariant across mask boundaries.
+3. Sparse output: Per-level active-voxel coordinates ``(N, 3)`` — no dense
+   finest-grid allocation at any stage.
 
 **Requirements:** NVIDIA Warp (``pip install warp-lang``).
 
@@ -49,41 +44,16 @@ import trimesh
 import warp as wp
 
 from xlb.utils.adaptive_mesher_kernels import (
-    kernel_any_nonzero_uint8,
-    kernel_any_uncovered,
-    kernel_apply_balance_coarsen,
-    kernel_apply_balance_refine,
-    kernel_apply_subdivide_level,
-    kernel_assign_levels,
     kernel_assign_levels_1d,
     kernel_batched_distances,
     kernel_conservative_coarse_targets,
-    kernel_dense_distances,
-    kernel_dense_distances_tiled,
-    kernel_dilate_mask_uint8,
-    kernel_dyadic_apply_flags,
-    kernel_dyadic_flag_blocks,
     kernel_edt_init_from_mask,
     kernel_edt_pass_x,
     kernel_edt_pass_y,
     kernel_edt_pass_z,
     kernel_edt_sqrt,
-    kernel_extract_level_mask,
-    kernel_fill_coverage_gaps,
-    kernel_greedy_activate_l0,
-    kernel_greedy_check_block,
-    kernel_greedy_fill_remaining,
-    kernel_greedy_mark_covered,
-    kernel_mark_coverage,
-    kernel_mark_subdivide_offset,
     kernel_maximum_filter_3x3,
     kernel_minimum_filter_3x3,
-    kernel_minimum_with_floor,
-    kernel_owners_from_masks,
-    kernel_paint_blocks_level,
-    kernel_refine_transition,
-    kernel_balance_need_coarsen,
-    kernel_balance_need_refine,
 )
 from xlb.utils.mesher import (
     _align_domain_origin_for_dyadic,
@@ -103,10 +73,6 @@ _NEIGHBOR_OFFSETS_26 = [
     if not (dx == 0 and dy == 0 and dz == 0)
 ]
 
-_MAX_MASK_LEVELS = 8
-_DUMMY_MASK_SHAPE = (1, 1, 1)
-
-
 @dataclass
 class AdaptiveMeshConfig:
     """Configuration for surface-adaptive multires meshing."""
@@ -117,8 +83,6 @@ class AdaptiveMeshConfig:
     finest_band_cells: int = 3
     domain_padding: Sequence[float] = field(default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     stl_filename: str = ""
-    tile_size: int = 64
-    max_dense_cells: int = 128**3
 
     def __post_init__(self):
         if self.num_levels < 1:
@@ -273,66 +237,6 @@ def _record_assignments(
 
 
 # ---------------------------------------------------------------------------
-# Mask building (greedy coarsest-first)
-# ---------------------------------------------------------------------------
-
-def _build_masks_greedy_coarsest(owner: np.ndarray, num_levels: int) -> List[np.ndarray]:
-    """Build non-overlapping, fully-covering masks using GPU-accelerated greedy strategy.
-
-    The algorithm activates cells level-by-level:
-      1. L0 is activated first wherever owner == 0 (tight, coherent surface band).
-      2. Remaining volume is filled coarsest-first (L(n-1) down to L1): a block
-         at level L is activated iff all its cells have owner >= L and none are
-         already covered by a finer level.
-      3. Any leftover uncovered cells are assigned to L0.
-
-    All steps run on GPU via Warp kernels to avoid CPU bottlenecks on large grids.
-
-    Args:
-        owner: 3D int32 array of per-cell target levels (0=finest, num_levels-1=coarsest).
-        num_levels: Total number of refinement levels.
-
-    Returns:
-        List of boolean mask arrays, one per level (mask[L] has shape grid//2^L).
-    """
-    nx, ny, nz = owner.shape
-    owner_wp = wp.array(owner, dtype=wp.int32)
-    covered = wp.zeros((nx, ny, nz), dtype=wp.uint8)
-
-    masks_wp: List[wp.array] = []
-    for level in range(num_levels):
-        stride = 2**level
-        sx, sy, sz = nx // stride, ny // stride, nz // stride
-        masks_wp.append(wp.zeros((sx, sy, sz), dtype=wp.uint8))
-
-    # Step 1: Activate L0 wherever owner == 0
-    wp.launch(kernel_greedy_activate_l0, dim=(nx, ny, nz), inputs=[owner_wp, masks_wp[0], covered])
-
-    # Step 2: Coarsest-first for levels > 0
-    for level in range(num_levels - 1, 0, -1):
-        stride = 2**level
-        sx, sy, sz = nx // stride, ny // stride, nz // stride
-        if sx == 0 or sy == 0 or sz == 0:
-            continue
-        block_ok = wp.zeros((sx, sy, sz), dtype=wp.uint8)
-        wp.launch(
-            kernel_greedy_check_block, dim=(sx, sy, sz),
-            inputs=[owner_wp, covered, wp.int32(level), wp.int32(stride), block_ok],
-        )
-        wp.launch(
-            kernel_greedy_mark_covered,
-            dim=(sx * stride, sy * stride, sz * stride),
-            inputs=[block_ok, wp.int32(stride), covered, masks_wp[level]],
-        )
-
-    # Step 3: Fill any remaining uncovered cells into L0
-    wp.launch(kernel_greedy_fill_remaining, dim=(nx, ny, nz), inputs=[covered, masks_wp[0]])
-
-    wp.synchronize()
-    return [m.numpy().astype(bool) for m in masks_wp]
-
-
-# ---------------------------------------------------------------------------
 # Shift helper (used by validate_level_data)
 # ---------------------------------------------------------------------------
 
@@ -374,15 +278,6 @@ def _max_query_distance(origin: np.ndarray, grid_shape: Tuple[int, int, int], vo
     """
     extent = np.array(grid_shape, dtype=np.float64) * voxel_size
     return float(np.linalg.norm(extent) * 2.0 + 1.0)
-
-
-def _pad_mask_list(masks: List[wp.array], num_levels: int) -> List[wp.array]:
-    """Return exactly ``_MAX_MASK_LEVELS`` mask arrays (dummy 1³ for unused slots)."""
-    dummy = wp.zeros(_DUMMY_MASK_SHAPE, dtype=wp.uint8, device=masks[0].device)
-    out = list(masks)
-    while len(out) < _MAX_MASK_LEVELS:
-        out.append(dummy)
-    return out[: _MAX_MASK_LEVELS]
 
 
 def _edt_scratch_buffers(nx: int, ny: int, nz: int):
@@ -449,26 +344,16 @@ def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
 class WarpAdaptiveMesherOps:
     """GPU-accelerated operations for adaptive multi-resolution meshing.
 
-    This class encapsulates all Warp-based mesh operations including:
-    - Distance field computation (dense and tiled)
-    - Level assignment from distance fields
-    - Owner grid finalization (strong-balance enforcement)
-    - Dyadic block alignment
-    - Mask extraction and balance repair
+    Encapsulates Warp BVH distance queries and morphology filters used by the
+    octree refinement path. All GPU kernels run on the same CUDA device.
 
-    The class holds a reference to a Warp BVH mesh built from the input
-    trimesh geometry. All GPU kernels are launched via Warp and operate on
-    the same CUDA device.
-
-    Thread safety: Instances are NOT thread-safe. Create one per thread if
-    needed (each will allocate its own BVH mesh on the device).
+    Thread safety: Instances are NOT thread-safe. Create one per thread if needed.
 
     Example::
 
         ops = WarpAdaptiveMesherOps(trimesh_mesh)
-        distances = ops.compute_distance_field(origin, shape, voxel_size, config)
-        assigned = ops.assign_levels_from_distance(distances, config)
-        masks = ops.build_masks_from_owner(assigned, num_levels)
+        dists = ops.batched_distances(centers, max_dist)
+        levels = ops.assign_levels_from_distances_1d(dists, config)
     """
 
     def __init__(self, mesh: trimesh.Trimesh):
@@ -486,10 +371,6 @@ class WarpAdaptiveMesherOps:
     def mesh_id(self) -> wp.uint64:
         return self._mesh_id
 
-    def _sync_counter(self, counter: wp.array) -> int:
-        wp.synchronize()
-        return int(counter.numpy()[0])
-
     def euclidean_edt_3d(self, background: np.ndarray) -> np.ndarray:
         """Compute exact Euclidean distance transform on the GPU.
 
@@ -498,129 +379,10 @@ class WarpAdaptiveMesherOps:
         """
         return euclidean_edt_3d(background)
 
-    def compute_distance_field_dense(
-        self,
-        origin: np.ndarray,
-        grid_shape: Tuple[int, int, int],
-        voxel_size: float,
-    ) -> np.ndarray:
-        """Compute unsigned distance field for the entire grid in a single GPU launch.
-
-        Args:
-            origin: Physical (x, y, z) origin of the domain.
-            grid_shape: (nx, ny, nz) grid dimensions at finest level.
-            voxel_size: Physical size of each cell.
-
-        Returns:
-            (nx, ny, nz) float64 array of unsigned distances to the STL surface.
-        """
-        nx, ny, nz = grid_shape
-        max_dist = _max_query_distance(origin, grid_shape, voxel_size)
-        distances = wp.zeros((nx, ny, nz), dtype=wp.float64)
-        wp.launch(
-            kernel_dense_distances,
-            dim=(nx, ny, nz),
-            inputs=[
-                self._mesh_id,
-                wp.vec3d(float(origin[0]), float(origin[1]), float(origin[2])),
-                wp.float64(voxel_size),
-                wp.float64(max_dist),
-                distances,
-            ],
-        )
-        wp.synchronize()
-        return distances.numpy()
-
-    def compute_distance_field(
-        self,
-        origin: np.ndarray,
-        grid_shape: Tuple[int, int, int],
-        voxel_size: float,
-        config: AdaptiveMeshConfig,
-    ) -> np.ndarray:
-        """Compute unsigned distance field, choosing dense or tiled strategy.
-
-        Uses a single dense GPU launch when the grid fits in ``max_dense_cells``,
-        otherwise tiles the domain into chunks of size ``config.tile_size`` to
-        limit per-launch memory usage.
-
-        Args:
-            origin: Physical domain origin.
-            grid_shape: Finest-level grid dimensions.
-            voxel_size: Finest cell size.
-            config: Configuration (provides tile_size and max_dense_cells).
-
-        Returns:
-            (nx, ny, nz) float64 distance array.
-        """
-        nx, ny, nz = grid_shape
-        if nx * ny * nz <= config.max_dense_cells:
-            return self.compute_distance_field_dense(origin, grid_shape, voxel_size)
-        distances = np.empty(grid_shape, dtype=np.float64)
-        tile = config.tile_size
-        max_dist = _max_query_distance(origin, grid_shape, voxel_size)
-        origin_wp = wp.vec3d(float(origin[0]), float(origin[1]), float(origin[2]))
-        for i0 in range(0, nx, tile):
-            i1 = min(i0 + tile, nx)
-            for j0 in range(0, ny, tile):
-                j1 = min(j0 + tile, ny)
-                for k0 in range(0, nz, tile):
-                    k1 = min(k0 + tile, nz)
-                    tile_shape = (i1 - i0, j1 - j0, k1 - k0)
-                    tile_dist = wp.zeros(tile_shape, dtype=wp.float64)
-                    wp.launch(
-                        kernel_dense_distances_tiled,
-                        dim=tile_shape,
-                        inputs=[
-                            self._mesh_id,
-                            origin_wp,
-                            wp.float64(voxel_size),
-                            wp.float64(max_dist),
-                            wp.int32(i0),
-                            wp.int32(j0),
-                            wp.int32(k0),
-                            tile_dist,
-                        ],
-                    )
-                    wp.synchronize()
-                    distances[i0:i1, j0:j1, k0:k1] = tile_dist.numpy()
-        return distances
-
-    def assign_levels_from_distance(self, distances: np.ndarray, config: AdaptiveMeshConfig) -> np.ndarray:
-        """Assign refinement levels from a 3D distance field using geometric shells.
-
-        Level 0 (finest) is assigned to cells within ``finest_band_cells * voxel_size``.
-        Each subsequent level extends by ``expansion_ratio`` multiplicatively.
-
-        Args:
-            distances: 3D float64 distance array.
-            config: Configuration with shell parameters.
-
-        Returns:
-            3D int32 array of assigned levels (0=finest, num_levels-1=coarsest).
-        """
-        d_band = config.finest_band_cells * config.voxel_size
-        log_ratio = math.log(config.expansion_ratio)
-        assigned = wp.zeros(distances.shape, dtype=wp.int32)
-        dist_wp = wp.array(distances, dtype=wp.float64)
-        wp.launch(
-            kernel_assign_levels,
-            dim=distances.shape,
-            inputs=[
-                dist_wp,
-                wp.float64(d_band),
-                wp.float64(log_ratio),
-                wp.int32(config.num_levels),
-                assigned,
-            ],
-        )
-        wp.synchronize()
-        return assigned.numpy()
-
     def assign_levels_from_distances_1d(self, distances: np.ndarray, config: AdaptiveMeshConfig) -> np.ndarray:
         """Assign levels from a flat 1D array of distances (for batched point queries).
 
-        Same geometric-shell logic as :meth:`assign_levels_from_distance` but
+        Same geometric-shell logic as the octree distance assignment but
         operates on a 1D distance vector (e.g., from octree child centers).
 
         Args:
@@ -729,421 +491,10 @@ class WarpAdaptiveMesherOps:
         wp.launch(kernel_maximum_filter_3x3, dim=field.shape, inputs=[field, out])
         return out
 
-    def _any_nonzero_uint8(self, flags: wp.array) -> bool:
-        counter = wp.zeros(1, dtype=wp.int32)
-        wp.launch(kernel_any_nonzero_uint8, dim=flags.shape, inputs=[flags, counter])
-        return self._sync_counter(counter) > 0
-
-    def enforce_strong_balance_bidirectional(self, assigned: np.ndarray, max_passes: int = 64) -> np.ndarray:
-        """Enforce strong balance (ΔL ≤ 1) using both refinement and coarsening.
-
-        Iteratively applies 3x3x3 min/max filters to detect violations, then
-        refines or coarsens cells until convergence. Unlike :meth:`finalize_owner_grid`,
-        this allows both directions of change.
-
-        Args:
-            assigned: 3D int32 owner grid.
-            max_passes: Maximum iteration count (safety limit).
-
-        Returns:
-            Balanced 3D int32 owner grid.
-        """
-        shape = assigned.shape
-        cur = wp.array(assigned, dtype=wp.int32)
-        tmp = wp.zeros(shape, dtype=wp.int32)
-        refine_flags = wp.zeros(shape, dtype=wp.uint8)
-        coarsen_flags = wp.zeros(shape, dtype=wp.uint8)
-
-        for _ in range(max_passes):
-            nmin = self._min_filter_3x3(cur)
-            nmax = self._max_filter_3x3(cur)
-            wp.launch(kernel_balance_need_refine, dim=shape, inputs=[cur, nmin, refine_flags])
-            wp.launch(kernel_balance_need_coarsen, dim=shape, inputs=[cur, nmax, coarsen_flags])
-            need_refine = self._any_nonzero_uint8(refine_flags)
-            need_coarsen = self._any_nonzero_uint8(coarsen_flags)
-            if not need_refine and not need_coarsen:
-                break
-            if need_refine:
-                wp.launch(kernel_apply_balance_refine, dim=shape, inputs=[cur, nmin, tmp])
-                cur = tmp
-                tmp = wp.zeros(shape, dtype=wp.int32)
-            if need_coarsen:
-                wp.launch(kernel_apply_balance_coarsen, dim=shape, inputs=[cur, nmax, tmp])
-                cur = tmp
-                tmp = wp.zeros(shape, dtype=wp.int32)
-        wp.synchronize()
-        return cur.numpy()
-
-    def minimum_with_floor(self, a: np.ndarray, floor: np.ndarray) -> np.ndarray:
-        """Element-wise minimum clamped by a floor: result = max(min(a, ...), floor).
-
-        Used to prevent the owner grid from being coarsened below its
-        distance-based assignment.
-        """
-        a_wp = wp.array(a, dtype=wp.int32)
-        f_wp = wp.array(floor, dtype=wp.int32)
-        out = wp.zeros(a.shape, dtype=wp.int32)
-        wp.launch(kernel_minimum_with_floor, dim=a.shape, inputs=[a_wp, f_wp, out])
-        wp.synchronize()
-        return out.numpy()
-
-    def refine_transition_layers(
-        self, owner: np.ndarray, owner_floor: np.ndarray, num_levels: int
-    ) -> np.ndarray:
-        """Refine transition bands between levels using min-filter promotion.
-
-        For each level from coarsest-1 down to 0, cells adjacent to finer
-        regions are promoted (lowered in level number) to create smooth
-        transition bands.
-
-        Args:
-            owner: 3D int32 owner grid.
-            owner_floor: Per-cell minimum level (prevents excessive coarsening).
-            num_levels: Total levels.
-
-        Returns:
-            Refined 3D int32 owner grid.
-        """
-        cur = wp.array(owner, dtype=wp.int32)
-        tmp = wp.zeros(owner.shape, dtype=wp.int32)
-        for level in range(num_levels - 2, -1, -1):
-            nmin = self._min_filter_3x3(cur)
-            wp.launch(
-                kernel_refine_transition,
-                dim=owner.shape,
-                inputs=[cur, nmin, wp.int32(level), tmp],
-            )
-            cur = tmp
-            tmp = wp.zeros(owner.shape, dtype=wp.int32)
-        wp.synchronize()
-        result = cur.numpy()
-        return np.minimum(result, owner_floor)
-
-    def finalize_owner_grid(
-        self, owner: np.ndarray, owner_floor: np.ndarray, num_levels: int
-    ) -> np.ndarray:
-        """Enforce strong balance (ΔL ≤ 1) using refine-only passes."""
-        shape = owner.shape
-        cur = wp.array(owner, dtype=wp.int32)
-        tmp = wp.zeros(shape, dtype=wp.int32)
-        refine_flags = wp.zeros(shape, dtype=wp.uint8)
-
-        for _ in range(64):
-            nmin = self._min_filter_3x3(cur)
-            wp.launch(kernel_balance_need_refine, dim=shape, inputs=[cur, nmin, refine_flags])
-            if not self._any_nonzero_uint8(refine_flags):
-                break
-            wp.launch(kernel_apply_balance_refine, dim=shape, inputs=[cur, nmin, tmp])
-            cur = tmp
-            tmp = wp.zeros(shape, dtype=wp.int32)
-
-        wp.synchronize()
-        return cur.numpy()
-
-    @staticmethod
-    def _align_owner_dyadic(owner_wp: wp.array, num_levels: int) -> wp.array:
-        """Enforce dyadic block alignment on GPU so mask extraction has no orphans.
-
-        For each level L in [0, num_levels-2], any 2^(L+1)-aligned block that
-        contains at least one cell with owner <= L is fully absorbed (all cells
-        in the block are set to L). This guarantees clean, non-overlapping masks.
-
-        Args:
-            owner_wp: Warp int32 3D array of owner levels (modified in-place).
-            num_levels: Total number of refinement levels.
-
-        Returns:
-            The same Warp array (modified in-place).
-        """
-        nx, ny, nz = owner_wp.shape
-        for level in range(num_levels - 1):
-            stride = 2 ** (level + 1)
-            sx, sy, sz = nx // stride, ny // stride, nz // stride
-            if sx == 0 or sy == 0 or sz == 0:
-                continue
-            flags = wp.zeros((sx, sy, sz), dtype=wp.int32)
-            wp.launch(
-                kernel_dyadic_flag_blocks,
-                dim=(nx, ny, nz),
-                inputs=[owner_wp, wp.int32(level), wp.int32(stride), flags],
-            )
-            wp.launch(
-                kernel_dyadic_apply_flags,
-                dim=(nx, ny, nz),
-                inputs=[owner_wp, wp.int32(level), wp.int32(stride), flags],
-            )
-        return owner_wp
-
-    def build_masks_from_owner(
-        self, owner: np.ndarray, num_levels: int, owner_floor: np.ndarray | None = None,
-        origin: np.ndarray | None = None,
-        voxel_size: float = 1.0,
-        config=None,
-    ) -> List[np.ndarray]:
-        """Build non-overlapping, fully-covering, strongly-balanced masks from an owner grid.
-
-        Algorithm stages:
-          1. Enforce strong balance (refine-only) on the initial owner grid.
-          2. If origin/config provided, recompute true STL distances for cells
-             near the surface and reassign their levels (removes octree artifacts).
-          3. Iterate finalize + dyadic alignment to a fixed point (both on GPU).
-          4. Extract masks using greedy coarsest-first partitioning.
-          5. Repair any remaining balance violations by subdivision.
-
-        Args:
-            owner: 3D int32 array of per-cell target levels (0=finest).
-            num_levels: Total refinement levels.
-            owner_floor: Maximum coarseness per cell (distance-based ceiling).
-            origin: Physical origin of the grid (for distance recomputation).
-            voxel_size: Physical size of finest cell.
-            config: AdaptiveMeshConfig for distance-based reassignment.
-
-        Returns:
-            List of boolean mask arrays, one per level.
-        """
-        floor = owner.copy() if owner_floor is None else owner_floor
-        owner = self.finalize_owner_grid(owner, floor, num_levels)
-
-        if origin is not None and config is not None:
-            coarsest = num_levels - 1
-            band_region = owner < coarsest
-            # GPU-accelerated face-connected dilation for band growth
-            radius = 2**coarsest
-            band_wp = wp.array(band_region.astype(np.uint8), dtype=wp.uint8)
-            tmp_wp = wp.zeros_like(band_wp)
-            for _ in range(radius):
-                wp.launch(kernel_dilate_mask_uint8, dim=band_wp.shape, inputs=[band_wp, tmp_wp])
-                band_wp, tmp_wp = tmp_wp, band_wp
-            band_region = band_wp.numpy().astype(bool)
-
-            cells = np.argwhere(band_region)
-            if len(cells) > 0:
-                orig = origin.astype(np.float64)
-                centers = orig + (cells.astype(np.float64) + 0.5) * voxel_size
-                max_dist = float(np.linalg.norm(np.array(owner.shape) * voxel_size))
-                dists = self.batched_distances(centers, max_dist)
-                new_levels = self.assign_levels_from_distances_1d(dists, config)
-                ci, cj, ck = cells[:, 0], cells[:, 1], cells[:, 2]
-                owner[ci, cj, ck] = new_levels.astype(owner.dtype)
-
-        # Fixed-point iteration: finalize (refine-only balance) + dyadic alignment.
-        # Both are monotonically refining so convergence is guaranteed.
-        for _ in range(num_levels + 2):
-            owner = self.finalize_owner_grid(owner, floor, num_levels)
-            owner_wp = wp.array(owner, dtype=wp.int32)
-            owner_wp = self._align_owner_dyadic(owner_wp, num_levels)
-            owner_new = owner_wp.numpy()
-            if np.array_equal(owner, owner_new):
-                break
-            owner = owner_new
-
-        masks = _build_masks_greedy_coarsest(owner, num_levels)
-        masks = self.repair_balance_by_subdivision(masks, num_levels, owner.shape)
-        return masks
-
-    def build_non_overlapping_masks_vectorized(
-        self, owner: np.ndarray, num_levels: int
-    ) -> List[np.ndarray]:
-        """Extract per-level masks where each block is uniform in owner (GPU)."""
-        nx, ny, nz = owner.shape
-        owner_wp = wp.array(owner, dtype=wp.int32)
-        masks = []
-        for level in range(num_levels):
-            stride = 2**level
-            sx, sy, sz = nx // stride, ny // stride, nz // stride
-            mask_wp = wp.zeros((sx, sy, sz), dtype=wp.uint8)
-            wp.launch(
-                kernel_extract_level_mask,
-                dim=(sx, sy, sz),
-                inputs=[owner_wp, wp.int32(level), wp.int32(stride), mask_wp],
-            )
-            masks.append(mask_wp)
-        wp.synchronize()
-        return [m.numpy().astype(bool) for m in masks]
-
-    def repair_balance_by_subdivision(
-        self,
-        masks: List[np.ndarray],
-        num_levels: int,
-        grid_shape: Tuple[int, int, int],
-        max_passes: int = 96,
-    ) -> List[np.ndarray]:
-        """Repair strong-balance violations in extracted masks by subdividing coarse blocks.
-
-        After greedy mask extraction, some block boundaries may violate the
-        ΔL ≤ 1 constraint. This method iteratively identifies violating coarse
-        blocks (via 26-neighbor owner checks) and subdivides them into the next
-        finer level until the constraint is satisfied everywhere.
-
-        Args:
-            masks: List of boolean mask arrays (one per level).
-            num_levels: Total levels.
-            grid_shape: Finest-grid dimensions.
-            max_passes: Safety limit on iterations.
-
-        Returns:
-            Repaired list of boolean mask arrays.
-        """
-        nx, ny, nz = grid_shape
-        mask_wps = [wp.array(m.astype(np.uint8), dtype=wp.uint8) for m in masks]
-        padded_masks = _pad_mask_list(mask_wps, num_levels)
-        owners = wp.zeros((nx, ny, nz), dtype=wp.int32)
-        subdivide = [wp.zeros(m.shape, dtype=wp.uint8) for m in mask_wps]
-        padded_sub = _pad_mask_list(subdivide, num_levels)
-        counter = wp.zeros(1, dtype=wp.int32)
-
-        for _ in range(max_passes):
-            wp.launch(
-                kernel_owners_from_masks,
-                dim=(nx, ny, nz),
-                inputs=[wp.int32(num_levels), *padded_masks, owners],
-            )
-            for sub in subdivide:
-                sub.zero_()
-            for di, dj, dk in _NEIGHBOR_OFFSETS_26:
-                wp.launch(
-                    kernel_mark_subdivide_offset,
-                    dim=(nx, ny, nz),
-                    inputs=[owners, wp.int32(di), wp.int32(dj), wp.int32(dk), *padded_sub],
-                )
-            counter.zero_()
-            for sub in subdivide:
-                wp.launch(kernel_any_nonzero_uint8, dim=sub.shape, inputs=[sub, counter])
-            if self._sync_counter(counter) == 0:
-                break
-            changed = False
-            for level in range(1, num_levels):
-                wp.launch(
-                    kernel_apply_subdivide_level,
-                    dim=mask_wps[level].shape,
-                    inputs=[subdivide[level], mask_wps[level], mask_wps[level - 1]],
-                )
-                counter.zero_()
-                wp.launch(kernel_any_nonzero_uint8, dim=subdivide[level].shape, inputs=[subdivide[level], counter])
-                if self._sync_counter(counter) > 0:
-                    changed = True
-            if not changed:
-                break
-
-        wp.synchronize()
-        return [m.numpy().astype(bool) for m in mask_wps]
-
-    def fill_coverage_gaps(
-        self,
-        masks: List[np.ndarray],
-        grid_shape: Tuple[int, int, int],
-        num_levels: int,
-    ) -> List[np.ndarray]:
-        """Fill any uncovered finest-grid cells by activating them in the coarsest mask.
-
-        This is a safety net to ensure the mesh is fully covering even if the
-        greedy extraction missed edge cases (e.g., domain boundaries).
-
-        Args:
-            masks: List of boolean mask arrays.
-            grid_shape: Finest-grid dimensions.
-            num_levels: Total levels.
-
-        Returns:
-            Updated list of masks with coverage gaps filled.
-        """
-        nx, ny, nz = grid_shape
-        mask_wps = [wp.array(m.astype(np.uint8), dtype=wp.uint8) for m in masks]
-        padded_masks = _pad_mask_list(mask_wps, num_levels)
-        covered = wp.zeros((nx, ny, nz), dtype=wp.uint8)
-        wp.launch(
-            kernel_mark_coverage,
-            dim=(nx, ny, nz),
-            inputs=[wp.int32(num_levels), *padded_masks, covered],
-        )
-        counter = wp.zeros(1, dtype=wp.int32)
-        wp.launch(kernel_any_uncovered, dim=(nx, ny, nz), inputs=[covered, counter])
-        if self._sync_counter(counter) == 0:
-            return masks
-        coarsest = num_levels - 1
-        coarse_stride = 2**coarsest
-        wp.launch(
-            kernel_fill_coverage_gaps,
-            dim=(nx, ny, nz),
-            inputs=[covered, mask_wps[coarsest], wp.int32(coarse_stride)],
-        )
-        wp.synchronize()
-        return [m.numpy().astype(bool) for m in mask_wps]
-
-    def paint_owner_from_assignments(
-        self,
-        level_indices: List[np.ndarray],
-        tight_shape: Tuple[int, int, int],
-        fi_min: int,
-        fj_min: int,
-        fk_min: int,
-        num_levels: int,
-    ) -> np.ndarray:
-        """GPU scatter of octree assignments into a tight owner grid."""
-        owner = wp.full(tight_shape, wp.int32(num_levels - 1), dtype=wp.int32)
-        for target in range(num_levels):
-            cells = level_indices[target]
-            n_blocks = len(cells)
-            if n_blocks == 0:
-                continue
-            stride = 2**target
-            block_i = wp.array(cells[:, 0].astype(np.int32), dtype=wp.int32)
-            block_j = wp.array(cells[:, 1].astype(np.int32), dtype=wp.int32)
-            block_k = wp.array(cells[:, 2].astype(np.int32), dtype=wp.int32)
-            wp.launch(
-                kernel_paint_blocks_level,
-                dim=(n_blocks, stride, stride, stride),
-                inputs=[
-                    wp.int32(target),
-                    block_i,
-                    block_j,
-                    block_k,
-                    wp.int32(fi_min),
-                    wp.int32(fj_min),
-                    wp.int32(fk_min),
-                    wp.int32(stride),
-                    owner,
-                ],
-            )
-        wp.synchronize()
-        return owner.numpy()
-
-
 # ---------------------------------------------------------------------------
-# Dense and octree meshing paths
 # ---------------------------------------------------------------------------
-
-def _make_masks_dense(
-    mesh: trimesh.Trimesh,
-    origin_phys: np.ndarray,
-    grid_shape: Tuple[int, int, int],
-    config: AdaptiveMeshConfig,
-) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-    """Dense-path mesh generation: compute full finest-grid distances then build masks.
-
-    Suitable for small-to-medium domains (below ``max_dense_cells``). Computes
-    the distance field for every finest-grid cell, assigns levels, and builds
-    masks via the owner-grid pipeline.
-
-    Args:
-        mesh: Input triangle mesh.
-        origin_phys: Physical domain origin.
-        grid_shape: Finest-grid dimensions.
-        config: Mesh configuration.
-
-    Returns:
-        Tuple of (masks list, mask_origins list).
-    """
-    ops = WarpAdaptiveMesherOps(mesh)
-    distances = ops.compute_distance_field(origin_phys, grid_shape, config.voxel_size, config)
-    assigned = ops.assign_levels_from_distance(distances, config)
-    owner_floor = assigned.copy()
-    masks = ops.build_masks_from_owner(assigned, config.num_levels, owner_floor=owner_floor,
-                                        origin=origin_phys, voxel_size=config.voxel_size,
-                                        config=config)
-    mask_origins = [np.zeros(3, dtype=int) for _ in range(config.num_levels)]
-    return masks, mask_origins
-
+# Octree meshing path
+# ---------------------------------------------------------------------------
 
 def _make_masks_octree(
     mesh: trimesh.Trimesh,
@@ -1164,7 +515,7 @@ def _make_masks_octree(
         config: Mesh configuration.
 
     Returns:
-        Tuple of (masks list, mask_origins list).
+        Tuple of (sparse coordinate arrays per level, mask_origins list).
     """
     ops = WarpAdaptiveMesherOps(mesh)
     num_levels = config.num_levels
@@ -1234,58 +585,6 @@ def _make_masks_octree(
     return active_coords, mask_origins
 
 
-def _build_masks_from_assignments(
-    ops: WarpAdaptiveMesherOps,
-    assignments: List[List[np.ndarray]],
-    grid_shape_finest: Tuple[int, int, int],
-    num_levels: int,
-    max_dense_cells: int,
-    origin: np.ndarray | None = None,
-    config=None,
-) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-    """Convert octree cell assignments into non-overlapping masks via GPU paint + build.
-
-    Takes accumulated per-level cell indices from the octree traversal, paints
-    them onto a full-resolution owner grid using GPU scatter, and then runs the
-    standard mask-building pipeline (balance, alignment, greedy extraction).
-
-    Args:
-        ops: WarpAdaptiveMesherOps instance with loaded BVH mesh.
-        assignments: Per-level lists of (N, 3) cell-index arrays.
-        grid_shape_finest: Finest grid dimensions.
-        num_levels: Total levels.
-        max_dense_cells: Unused (kept for API compatibility).
-        origin: Physical domain origin (for distance recomputation).
-        config: Mesh configuration.
-
-    Returns:
-        Tuple of (masks list, mask_origins list).
-    """
-    nx, ny, nz = grid_shape_finest
-
-    level_indices: List[np.ndarray] = []
-    for target in range(num_levels):
-        if assignments[target]:
-            arr = np.unique(np.vstack(assignments[target]), axis=0)
-        else:
-            arr = np.empty((0, 3), dtype=int)
-        level_indices.append(arr)
-
-    if all(len(a) == 0 for a in level_indices):
-        raise RuntimeError("No cell assignments collected during octree refinement.")
-
-    owner = ops.paint_owner_from_assignments(
-        level_indices, (nx, ny, nz), 0, 0, 0, num_levels
-    )
-    owner_floor = owner.copy()
-    voxel_size = config.voxel_size if config is not None else 1.0
-    masks = ops.build_masks_from_owner(owner, num_levels, owner_floor=owner_floor,
-                                       origin=origin, voxel_size=voxel_size,
-                                       config=config)
-    mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
-    return masks, mask_origins
-
-
 # ---------------------------------------------------------------------------
 # Level-data packing
 # ---------------------------------------------------------------------------
@@ -1296,24 +595,21 @@ def _pack_level_data(
     origin_phys: np.ndarray,
     voxel_size_finest: float,
     num_levels: int,
-    *,
-    sparse: bool = False,
 ) -> list:
-    """Pack per-level masks or sparse coords into level_data tuples.
+    """Pack per-level sparse active-voxel coordinates into level_data tuples.
 
     Output ordering is coarsest-first (reversed from the internal finest-first
     convention) to match the format expected by :func:`_normalize_level_data`.
 
-    Each entry is ``(mask_or_coords, voxel_size_at_level, physical_origin, build_level)``.
-    When ``sparse=True``, the first element is an (N, 3) int32 coordinate array.
+    Each entry is ``(coords, voxel_size_at_level, physical_origin, build_level)`` where
+    ``coords`` is an (N, 3) int32 array of active lattice indices.
 
     Args:
-        patterns: Per-level boolean masks or sparse coordinate arrays (finest-first).
+        patterns: Per-level sparse coordinate arrays (finest-first).
         mask_origins: Per-level grid-index origins.
         origin_phys: Physical domain origin.
         voxel_size_finest: Finest cell physical size.
         num_levels: Total levels.
-        sparse: When True, ``patterns`` holds (N, 3) coordinate arrays.
 
     Returns:
         List of tuples in coarsest-first order.
@@ -1325,14 +621,9 @@ def _pack_level_data(
         offset = mask_origins[finest_level]
         sub_origin_phys = origin_phys + offset.astype(float) * voxel_size_finest
         cuboid_build_level = num_levels - 1 - finest_level
-        if sparse:
-            active = int(pattern.shape[0])
-            shape_desc = f"coords ({active:,} x 3)"
-            packed = np.ascontiguousarray(pattern, dtype=np.int32)
-        else:
-            active = int(np.count_nonzero(pattern))
-            shape_desc = f"shape {pattern.shape}"
-            packed = pattern.copy()
+        active = int(pattern.shape[0])
+        shape_desc = f"coords ({active:,} x 3)"
+        packed = np.ascontiguousarray(pattern, dtype=np.int32)
 
         print(
             f"Level {finest_level}: {shape_desc}, active {active:,}, "
@@ -1356,8 +647,6 @@ def make_adaptive_surface_mesh(
     domain_padding: Sequence[float] = None,
     expansion_ratio: float = 2.0,
     finest_band_cells: int = 3,
-    tile_size: int = 64,
-    max_dense_cells: int = 128**3,
 ) -> list:
     """
     Create a strongly-balanced surface-adaptive multires mesh from an STL file.
@@ -1365,6 +654,9 @@ def make_adaptive_surface_mesh(
     Fine cells are placed within ``finest_band_cells * voxel_size`` of the
     surface; coarser levels extend outward with geometric ``expansion_ratio``
     growth between consecutive shells.
+
+    Uses octree refinement with sparse ``(N, 3)`` active-voxel output at every
+    scale — no dense finest-grid allocation.
 
     Args:
         voxel_size: Physical size of the finest lattice cell.
@@ -1374,8 +666,6 @@ def make_adaptive_surface_mesh(
             for the coarsest outer domain (relative to geometry extent).
         expansion_ratio: Geometric ratio between consecutive distance shells.
         finest_band_cells: Thickness of the finest shell in finest-cell counts.
-        tile_size: Tile edge length for chunked distance queries on large domains.
-        max_dense_cells: Use dense distance computation when the domain is smaller.
 
     Returns:
         ``level_data`` list (finest-first), compatible with
@@ -1391,15 +681,13 @@ def make_adaptive_surface_mesh(
         finest_band_cells=finest_band_cells,
         domain_padding=list(domain_padding),
         stl_filename=stl_filename,
-        tile_size=tile_size,
-        max_dense_cells=max_dense_cells,
     )
 
     mesh, origin_phys, grid_shape = _compute_domain(config)
     nx, ny, nz = grid_shape
     n_finest = nx * ny * nz
     print(f"Adaptive mesh domain (finest): {grid_shape}, origin {origin_phys}, voxel_size {voxel_size}")
-    print(f"  Finest-grid cell count: {n_finest:,} (dense limit: {max_dense_cells:,})")
+    print(f"  Finest-grid cell count: {n_finest:,}")
 
     factor = 2 ** (num_levels - 1)
     pad_x = (factor - nx % factor) % factor
@@ -1420,16 +708,9 @@ def make_adaptive_surface_mesh(
         n_finest = int(np.prod(grid_shape))
         print(f"Aligned domain to {grid_shape} for adaptive partitioning (align={align})")
 
-    if n_finest > max_dense_cells:
-        print("Using octree surface meshing (avoids full finest-grid allocation).", flush=True)
-        patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
-        raw_level_data = _pack_level_data(
-            patterns, mask_origins, origin_phys, voxel_size, num_levels, sparse=True
-        )
-    else:
-        print("Using dense finest-grid meshing.", flush=True)
-        masks, mask_origins = _make_masks_dense(mesh, origin_phys, grid_shape, config)
-        raw_level_data = _pack_level_data(masks, mask_origins, origin_phys, voxel_size, num_levels)
+    print("Using octree surface meshing (sparse active-voxel output).", flush=True)
+    patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
+    raw_level_data = _pack_level_data(patterns, mask_origins, origin_phys, voxel_size, num_levels)
 
     level_data = LevelDataList(_normalize_level_data(raw_level_data, voxel_size))
     level_data.grid_shape_finest = grid_shape
@@ -1709,12 +990,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compare-cuboid", action="store_true", help="Compare vs nested cuboid mesh.")
     parser.add_argument("--export-mesh", action="store_true", help="Export HDF5/XDMF for ParaView.")
     parser.add_argument("-o", "--output", default=None, help="Export basename (default: <stl_stem>_adaptive_mesh).")
-    parser.add_argument(
-        "--max-dense-cells",
-        type=int,
-        default=128**3,
-        help="Dense distance field limit (default: 128^3).",
-    )
     return parser
 
 
@@ -1757,7 +1032,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             domain_padding=domain_padding,
             expansion_ratio=args.expansion_ratio,
             finest_band_cells=args.finest_band_cells,
-            max_dense_cells=args.max_dense_cells,
         )
         print(f"\nAdaptive mesh built in {time.perf_counter() - t0:.1f} s")
 
@@ -1775,7 +1049,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             print("\nComparison")
             print("==========")
-            print(f"  Adaptive finest-level cells: {int(np.count_nonzero(level_data[0][0])):,}")
+            adaptive_finest = int(level_data[0][0].shape[0])
+            print(f"  Adaptive finest-level cells: {adaptive_finest:,}")
             print(f"  Cuboid finest-level cells:   {int(np.count_nonzero(cuboid_data[0][0])):,}")
             print(f"  Adaptive total active:       {adaptive_total:,}")
             print(f"  Cuboid total active:         {cuboid_total:,}")

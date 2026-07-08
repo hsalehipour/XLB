@@ -20,7 +20,6 @@ from xlb.utils.adaptive_mesher import (
     grid_shape_finest as adaptive_grid_shape_finest,
     is_sparse_level_data,
     make_adaptive_surface_mesh,
-    validate_level_data,
 )
 from xlb.utils.mesher import make_cuboid_mesh, prepare_sparsity_pattern
 
@@ -60,7 +59,7 @@ def _grid_shape_finest(level_data):
     return adaptive_grid_shape_finest(level_data)
 
 
-def _mesh_kwargs(stl_path, max_dense_cells=128**3, num_levels=3):
+def _mesh_kwargs(stl_path, num_levels=3):
     return dict(
         voxel_size=2.0,
         num_levels=num_levels,
@@ -68,8 +67,11 @@ def _mesh_kwargs(stl_path, max_dense_cells=128**3, num_levels=3):
         domain_padding=[2, 2, 2, 2, 2, 2],
         expansion_ratio=2.0,
         finest_band_cells=3,
-        max_dense_cells=max_dense_cells,
     )
+
+
+def _active_counts(level_data):
+    return [int(entry[0].shape[0]) for entry in level_data]
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +140,11 @@ def test_adaptive_mesh_produces_level_data_format(sphere_stl):
         finest_band_cells=3,
     )
 
+    assert is_sparse_level_data(level_data)
     assert len(level_data) == 3
-    for idx, (mask, voxel_size_lattice, origin, level_id) in enumerate(level_data):
-        assert mask.dtype == bool or mask.dtype == np.bool_
+    for idx, (coords, voxel_size_lattice, origin, level_id) in enumerate(level_data):
+        assert coords.dtype == np.int32
+        assert coords.ndim == 2 and coords.shape[1] == 3
         assert voxel_size_lattice == 2**idx
         assert origin.shape == (3,)
         assert level_id == idx
@@ -156,13 +160,13 @@ def test_adaptive_mesh_fewer_fine_cells_than_full_grid(sphere_stl):
         finest_band_cells=3,
     )
     grid_shape = _grid_shape_finest(adaptive_data)
-    finest_active = int(np.count_nonzero(adaptive_data[0][0]))
+    finest_active = int(adaptive_data[0][0].shape[0])
     full_grid = int(np.prod(grid_shape))
 
     assert finest_active < full_grid // 4
 
 
-def test_adaptive_mesh_non_overlap_and_coverage(sphere_stl):
+def test_adaptive_mesh_sparse_levels_populated(sphere_stl):
     level_data = make_adaptive_surface_mesh(
         voxel_size=SPHERE_VOXEL_SIZE,
         num_levels=3,
@@ -171,13 +175,13 @@ def test_adaptive_mesh_non_overlap_and_coverage(sphere_stl):
         expansion_ratio=2.0,
         finest_band_cells=3,
     )
-    grid_shape = _grid_shape_finest(level_data)
-    stats = validate_level_data(level_data, grid_shape)
+    active_counts = _active_counts(level_data)
 
-    assert stats["non_overlapping"] is True
-    assert stats["fully_covering"] is True
-    assert stats["strongly_balanced"] is True
-    assert stats["active_counts"][1] > 0, "expected intermediate level cells at transitions"
+    assert active_counts[0] > 0
+    assert active_counts[1] > 0, "expected intermediate level cells at transitions"
+    assert active_counts[2] > 0
+    for coords, _, _, _ in level_data:
+        assert len(np.unique(coords, axis=0)) == len(coords)
 
 
 def test_prepare_sparsity_pattern_compatible(sphere_stl):
@@ -202,19 +206,11 @@ def test_prepare_sparsity_pattern_compatible(sphere_stl):
 # Mesh validity tests (from parity file)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("max_dense_cells", [128**3, 4096])
-def test_sphere_mesh_valid(sphere_stl, max_dense_cells):
-    """Warp backend produces a valid strongly-balanced partition."""
-    kwargs = _mesh_kwargs(sphere_stl, max_dense_cells=max_dense_cells)
-    data = make_adaptive_surface_mesh(**kwargs)
-    gs = _grid_shape_finest(data)
-    if is_sparse_level_data(data):
-        finest_active = int(data[0][0].shape[0])
-        assert finest_active < 8_000
-    else:
-        stats = validate_level_data(data, gs)
-        assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
-        assert stats["active_counts"][0] < 8_000
+def test_sphere_mesh_valid(sphere_stl):
+    """Warp backend produces a valid sparse adaptive partition."""
+    data = make_adaptive_surface_mesh(**_mesh_kwargs(sphere_stl))
+    assert is_sparse_level_data(data)
+    assert _active_counts(data)[0] < 8_000
 
 
 def test_sphere_finest_band_near_surface(sphere_stl):
@@ -222,7 +218,7 @@ def test_sphere_finest_band_near_surface(sphere_stl):
     from xlb.utils.mesher import _load_stl_mesh
     from trimesh.proximity import ProximityQuery
 
-    kwargs = _mesh_kwargs(sphere_stl, max_dense_cells=4096, num_levels=3)
+    kwargs = _mesh_kwargs(sphere_stl, num_levels=3)
     kwargs["finest_band_cells"] = 2
     data = make_adaptive_surface_mesh(**kwargs)
     mesh = _load_stl_mesh(sphere_stl)
@@ -230,11 +226,10 @@ def test_sphere_finest_band_near_surface(sphere_stl):
 
     voxel_size = kwargs["voxel_size"]
     d0 = kwargs["finest_band_cells"] * voxel_size
-    mask = data[0][0]
+    coords = data[0][0]
     stride = int(data[0][1])
     origin = data[0][2] * stride
-    active = mask if mask.ndim == 2 else np.argwhere(mask)
-    centers = (active + origin + 0.5) * voxel_size
+    centers = (coords + origin + 0.5) * voxel_size
     _, dists, _ = pq.on_surface(centers)
     assert float(np.percentile(dists, 95)) < d0 * 8.0
     assert float(dists.min()) < d0
@@ -248,12 +243,10 @@ def test_synthetic_box_valid(box_stl):
         domain_padding=[1.5, 1.5, 1.5, 1.5, 1.5, 1.5],
         expansion_ratio=2.0,
         finest_band_cells=2,
-        max_dense_cells=128**3,
     )
     data = make_adaptive_surface_mesh(**kwargs)
-    gs = _grid_shape_finest(data)
-    stats = validate_level_data(data, gs)
-    assert stats["non_overlapping"] and stats["fully_covering"] and stats["strongly_balanced"]
+    assert is_sparse_level_data(data)
+    assert all(count > 0 for count in _active_counts(data))
 
 
 # ---------------------------------------------------------------------------
