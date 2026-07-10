@@ -691,6 +691,39 @@ def _pack_level_data(
 # Public API
 # ---------------------------------------------------------------------------
 
+
+def _filter_phantom_cells(level_data):
+    """Remove cells that Neon cannot address (virtual finest coord < 0 on any axis).
+
+    Dyadic padding can produce negative origins.  A cell at local coord ``l``
+    with origin ``o`` and stride ``s = 2^level`` has virtual finest coord
+    ``(l + o) * s``.  Neon's base grid iterates ``[0, dim)`` so any cell with
+    a negative virtual component is unreachable phantom padding.
+    """
+    filtered = []
+    for lvl in range(len(level_data)):
+        pattern, stride_or_voxel, origin_arr, level_idx = level_data[lvl]
+        origin = np.asarray(origin_arr, dtype=np.int64)
+        stride = 1 << lvl
+
+        if pattern.ndim == 2:
+            coords = np.asarray(pattern, dtype=np.int64)
+            virtual = (coords + origin) * stride
+            valid = np.all(virtual >= 0, axis=1)
+            new_pattern = np.ascontiguousarray(coords[valid], dtype=pattern.dtype)
+        else:
+            new_pattern = pattern
+
+        filtered.append((new_pattern, stride_or_voxel, origin_arr, level_idx))
+
+    grid_shape = getattr(level_data, "grid_shape_finest", None)
+    if grid_shape is not None:
+        result = LevelDataList(filtered)
+        result.grid_shape_finest = grid_shape
+        return result
+    return filtered
+
+
 def make_adaptive_surface_mesh(
     voxel_size: float,
     num_levels: int,
@@ -757,6 +790,8 @@ def make_adaptive_surface_mesh(
 
     level_data = LevelDataList(_normalize_level_data(raw_level_data, voxel_size))
     level_data.grid_shape_finest = grid_shape
+
+    level_data = _filter_phantom_cells(level_data)
     return level_data
 
 

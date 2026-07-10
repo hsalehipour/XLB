@@ -159,6 +159,23 @@ def grid_shape_finest_from_level_data(level_data) -> np.ndarray:
     return np.asarray(level_data[-1][0].shape, dtype=np.int64) * (2 ** (num_levels - 1))
 
 
+def _level_box_shape(level_data, level_idx: int) -> Tuple[int, int, int]:
+    """Return the full lattice shape ``(nx, ny, nz)`` at one refinement level."""
+    pattern = level_data[level_idx][0]
+    if pattern.ndim == 2:
+        finest = grid_shape_finest_from_level_data(level_data)
+        stride = int(level_data[level_idx][1])
+        return tuple(int(x) for x in (finest // stride))
+    return tuple(int(x) for x in pattern.shape)
+
+
+def _extract_active_field_values(field_np_card: np.ndarray, pattern: np.ndarray) -> np.ndarray:
+    """Gather per-voxel field values for a dense mask or sparse ``(N, 3)`` coords."""
+    if pattern.ndim == 2:
+        return field_np_card[pattern[:, 0], pattern[:, 1], pattern[:, 2]]
+    return field_np_card[pattern]
+
+
 def prepare_sparsity_pattern(level_data):
     """
     Prepare the sparsity pattern for the multiresolution grid based on the level data.
@@ -172,12 +189,7 @@ def prepare_sparsity_pattern(level_data):
     sparsity_pattern = []
     for lvl in range(num_levels):
         pattern = level_data[lvl][0]
-
-        if pattern.ndim == 2:
-            level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
-        else:
-            level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
-
+        level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
         sparsity_pattern.append(level_pattern)
         level_origins.append(level_data[lvl][2])
 
@@ -590,7 +602,7 @@ class MultiresIO(object):
             field_warp_dict[field_name] = []
             for level in range(num_levels):
                 # get the shape of the grid at this level
-                box_shape = self.levels_data[level][0].shape
+                box_shape = _level_box_shape(self.levels_data, level)
 
                 # Use the warp backend to create dense fields to be written in multi-res NEON fields
                 grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
@@ -621,11 +633,12 @@ class MultiresIO(object):
                 @wp.func
                 def kernel(index: Any):
                     cIdx = wp.neon_global_idx(field_neon_hdl, index)
-                    # Get local indices by dividing the global indices (associated with the finest level) by 2^level
-                    # Subtract the origin to get the local indices in the warp field
-                    lx = wp.neon_get_x(cIdx) // refinement - origin[0]
-                    ly = wp.neon_get_y(cIdx) // refinement - origin[1]
-                    lz = wp.neon_get_z(cIdx) // refinement - origin[2]
+                    gx = wp.neon_get_x(cIdx)
+                    gy = wp.neon_get_y(cIdx)
+                    gz = wp.neon_get_z(cIdx)
+                    lx = gx // refinement - origin[0]
+                    ly = gy // refinement - origin[1]
+                    lz = gz // refinement - origin[2]
 
                     # write the values to the warp field
                     cardinality = field_warp.shape[0]
@@ -674,6 +687,11 @@ class MultiresIO(object):
             if field_name not in field_neon_dict:
                 continue
             for level in range(num_levels):
+                mask = self.levels_data[level][0]
+                active_count = mask.shape[0] if mask.ndim == 2 else int(np.count_nonzero(mask))
+                if active_count == 0:
+                    continue
+
                 # Create the container and run it to fill the warp fields
                 c = self.container(field_neon_dict[field_name], self.field_warp_dict[field_name][level], self.origin_list[level], level)
                 c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
@@ -682,10 +700,9 @@ class MultiresIO(object):
                 wp.synchronize()
 
                 # Convert the warp fields to numpy arrays and use level's mask to filter the data
-                mask = self.levels_data[level][0]
                 field_np = self.field_warp_dict[field_name][level].numpy()
                 for card in range(cardinality):
-                    field_np_card = field_np[card][mask]
+                    field_np_card = _extract_active_field_values(field_np[card], mask)
                     fields_data[f"{field_name}_{card}"].append(field_np_card)
 
         # Concatenate all field data

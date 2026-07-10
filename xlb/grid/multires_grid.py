@@ -58,6 +58,9 @@ class NeonMultiresGrid(Grid):
             and sparsity_pattern_list[0].ndim == 2
             and sparsity_pattern_list[0].shape[1] == 3
         )
+        self.domain_min_finest, self.domain_max_finest = self._domain_finest_bounds_from_sparsity(
+            sparsity_pattern_list, sparsity_pattern_origins
+        )
 
         super().__init__(shape, ComputeBackend.NEON)
 
@@ -176,7 +179,8 @@ class NeonMultiresGrid(Grid):
         - level_data: Level data containing the origins and sparsity patterns for each level as prepared by mesher/make_cuboid_mesh function!
         - box_side: The side of the bounding box to get indices for (default is "front").
         returns:
-        - A list of lists, where each sublist contains the indices for the boundary condition at that level.
+        - A list of lists, where each sublist contains the **local** lattice indices for the boundary condition at that level.
+          The Neon masker converts these to finest-level indices via ``(local + origin) << level``.
         """
         num_levels = len(level_data)
         bc_indices_list = []
@@ -185,19 +189,19 @@ class NeonMultiresGrid(Grid):
         # Define side configurations (adjust if your conventions differ)
         if d == 3:
             side_config = {
-                "left": {"dim": 0, "value": 0},
-                "right": {"dim": 0, "value": lambda s: s[0] - 1},
-                "front": {"dim": 1, "value": 0},
-                "back": {"dim": 1, "value": lambda s: s[1] - 1},
-                "bottom": {"dim": 2, "value": 0},
-                "top": {"dim": 2, "value": lambda s: s[2] - 1},
+                "left": {"dim": 0, "min": True},
+                "right": {"dim": 0, "min": False},
+                "front": {"dim": 1, "min": True},
+                "back": {"dim": 1, "min": False},
+                "bottom": {"dim": 2, "min": True},
+                "top": {"dim": 2, "min": False},
             }
         elif d == 2:
             side_config = {
-                "left": {"dim": 0, "value": 0},
-                "right": {"dim": 0, "value": lambda s: s[0] - 1},
-                "bottom": {"dim": 1, "value": 0},
-                "top": {"dim": 1, "value": lambda s: s[1] - 1},
+                "left": {"dim": 0, "min": True},
+                "right": {"dim": 0, "min": False},
+                "bottom": {"dim": 1, "min": True},
+                "top": {"dim": 1, "min": False},
             }
         else:
             raise ValueError(f"Unsupported dimensionality: {d}")
@@ -205,40 +209,112 @@ class NeonMultiresGrid(Grid):
         if box_side not in side_config:
             raise ValueError(f"Unsupported box_side: {box_side}")
 
+        domain_min_finest, domain_max_finest = self._domain_finest_bounds(level_data, d)
+
         for level in range(num_levels):
             pattern = level_data[level][0]
-            origin = level_data[level][2]  # Assume np.array of shape (d,)
-            grid_shape = self.level_to_shape(level)  # tuple of length d
+            origin = np.asarray(level_data[level][2], dtype=np.int64)
+            stride = 1 << level
 
             conf = side_config[box_side]
             dim_idx = conf["dim"]
-            grid_bounds = conf["value"](grid_shape) if callable(conf["value"]) else conf["value"]
+            # Neon base indices are in [0, dim).  A cell at local L with origin O
+            # and stride S lives at base_idx = (L + O) * S.  The leftmost
+            # addressable local satisfies (L + O) * S >= 0, i.e. L >= -O.
+            # Cells below that are phantom padding Neon cannot address.
+            if conf["min"]:
+                local_bound = int(-origin[dim_idx])
+            else:
+                local_bound = int(domain_max_finest[dim_idx] // stride - origin[dim_idx])
 
             if pattern.ndim == 2:
-                local_coords = tuple(pattern[:, i] for i in range(d))
+                local_coords = tuple(pattern[:, i].astype(np.int64) for i in range(d))
             else:
-                local_coords = np.nonzero(pattern)  # Tuple of d arrays, each of length num_active
+                local_coords = tuple(c.astype(np.int64) for c in np.nonzero(pattern))
             if not local_coords[0].size:
                 bc_indices_list.append([])
                 continue
 
-            # Compute global coords (list of d arrays)
-            global_coords = [local_coords[i] + origin[i] for i in range(d)]
+            finest_coords = [(local_coords[i] + origin[i]) * stride for i in range(d)]
 
-            # Filter: must match grid_bounds along the dimension associated with the selected box_side
-            cond = global_coords[dim_idx] == grid_bounds
+            cond = local_coords[dim_idx] == local_bound
 
-            # If remove_edges, exclude perimeter of the face
+            # If remove_edges, exclude perimeter of the face.
+            # Only cells with virtual >= 0 are addressable; use 0 as effective min.
             if remove_edges:
                 for i in range(d):
                     if i != dim_idx:
-                        cond &= (global_coords[i] > 0) & (global_coords[i] < grid_shape[i] - 1)
+                        effective_min = max(0, int(domain_min_finest[i]))
+                        cond &= (finest_coords[i] > effective_min) & (
+                            finest_coords[i] < domain_max_finest[i]
+                        )
 
-            # Collect filtered indices
             if np.any(cond):
-                active_bc = [gc[cond] for gc in global_coords]
-                bc_indices_list.append([arr.tolist() for arr in active_bc])
+                active_bc = [lc[cond].tolist() for lc in local_coords]
+                bc_indices_list.append(active_bc)
             else:
                 bc_indices_list.append([])
 
         return bc_indices_list
+
+    @staticmethod
+    def virtual_finest_to_neon_global(
+        finest_virtual: np.ndarray,
+        domain_min_finest: np.ndarray,
+        domain_max_finest: np.ndarray | None = None,
+        level: int = 0,
+        num_levels: int = 1,
+    ) -> np.ndarray:
+        """Map virtual finest lattice indices to Neon base-index space.
+
+        Neon's ``getGlobalIndex`` returns the base-grid index of a cell, which
+        is identical to its virtual finest coordinate for all cells that exist
+        in the grid (base indices are in ``[0, dim)``).  Cells at
+        ``virtual < 0`` are phantom padding that Neon cannot address.
+
+        Therefore this function is the **identity**: it returns the input
+        unchanged.  It exists solely to document this contract and to keep call
+        sites explicit about the coordinate system they operate in.
+        """
+        return np.asarray(finest_virtual, dtype=np.int32)
+
+    @staticmethod
+    def neon_global_to_virtual_finest(
+        neon_global: np.ndarray,
+        domain_min_finest: np.ndarray,
+        domain_max_finest: np.ndarray,
+        level: int = 0,
+        num_levels: int = 1,
+    ) -> np.ndarray:
+        """Inverse of :meth:`virtual_finest_to_neon_global` — also identity."""
+        return np.asarray(neon_global, dtype=np.int32)
+
+    @staticmethod
+    def _domain_finest_bounds_from_sparsity(sparsity_pattern_list, sparsity_pattern_origins, d: int = 3):
+        """Return inclusive min/max finest lattice indices covered by active voxels."""
+        level_data = []
+        for level, pattern in enumerate(sparsity_pattern_list):
+            origin_pt = sparsity_pattern_origins[level]
+            origin = np.array([origin_pt.x, origin_pt.y, origin_pt.z], dtype=np.int64)
+            level_data.append((pattern, None, origin, level))
+        return NeonMultiresGrid._domain_finest_bounds(level_data, d)
+
+    @staticmethod
+    def _domain_finest_bounds(level_data, d: int):
+        """Return inclusive min/max finest lattice indices covered by active voxels."""
+        mins = np.full(d, np.iinfo(np.int64).max, dtype=np.int64)
+        maxs = np.full(d, np.iinfo(np.int64).min, dtype=np.int64)
+        for level in range(len(level_data)):
+            pattern = level_data[level][0]
+            origin = np.asarray(level_data[level][2], dtype=np.int64)
+            stride = 1 << level
+            if pattern.ndim == 2:
+                coords = pattern.astype(np.int64)
+            else:
+                coords = np.stack(np.nonzero(pattern), axis=1).astype(np.int64)
+            if coords.size == 0:
+                continue
+            finest = (coords + origin) * stride
+            mins = np.minimum(mins, finest.min(axis=0))
+            maxs = np.maximum(maxs, finest.max(axis=0))
+        return mins, maxs
