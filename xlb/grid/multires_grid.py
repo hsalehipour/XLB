@@ -53,14 +53,8 @@ class NeonMultiresGrid(Grid):
         self.sparsity_pattern_origins = sparsity_pattern_origins
         self.count_levels = len(sparsity_pattern_list)
         self.refinement_factor = 2
-        self._sparse_pattern = (
-            sparsity_pattern_list
-            and sparsity_pattern_list[0].ndim == 2
-            and sparsity_pattern_list[0].shape[1] == 3
-        )
-        self.domain_min_finest, self.domain_max_finest = self._domain_finest_bounds_from_sparsity(
-            sparsity_pattern_list, sparsity_pattern_origins
-        )
+        self._sparse_pattern = sparsity_pattern_list and sparsity_pattern_list[0].ndim == 2 and sparsity_pattern_list[0].shape[1] == 3
+        self.domain_min_finest, self.domain_max_finest = self._domain_finest_bounds_from_sparsity(sparsity_pattern_list, sparsity_pattern_origins)
 
         super().__init__(shape, ComputeBackend.NEON)
 
@@ -91,10 +85,7 @@ class NeonMultiresGrid(Grid):
         self.bk = neon.Backend(runtime=neon.Backend.Runtime.stream, dev_idx_list=dev_idx_list)
 
         if self._sparse_pattern:
-            active_voxels = [
-                np.ascontiguousarray(pattern, dtype=np.int32)
-                for pattern in self.sparsity_pattern_list
-            ]
+            active_voxels = [np.ascontiguousarray(pattern, dtype=np.int32) for pattern in self.sparsity_pattern_list]
             self.grid = neon.multires.mGrid.from_active_voxels(
                 backend=self.bk,
                 dim=self.dim,
@@ -245,9 +236,7 @@ class NeonMultiresGrid(Grid):
                 for i in range(d):
                     if i != dim_idx:
                         effective_min = max(0, int(domain_min_finest[i]))
-                        cond &= (finest_coords[i] > effective_min) & (
-                            finest_coords[i] < domain_max_finest[i]
-                        )
+                        cond &= (finest_coords[i] > effective_min) & (finest_coords[i] < domain_max_finest[i])
 
             if np.any(cond):
                 active_bc = [lc[cond].tolist() for lc in local_coords]

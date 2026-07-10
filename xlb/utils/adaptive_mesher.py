@@ -1,10 +1,16 @@
 """
 Surface-adaptive multi-resolution mesh generation (Warp GPU backend).
 
-This module generates strongly-balanced multi-resolution grids that conform
-tightly to STL/OBJ surfaces. Fine cells are placed within a configurable
-distance band of the geometry, and progressively coarser cells fill the
-remaining domain volume using geometric expansion-ratio shells.
+This module generates graded-octree multi-resolution grids that conform
+tightly to STL/OBJ surfaces with a non-overlap guarantee across levels.
+Fine cells are placed within a configurable distance band of the geometry,
+and progressively coarser cells fill the remaining domain volume using
+geometric expansion-ratio shells.
+
+Note: Final strong-balance enforcement (delta-L <= 1 between face-adjacent
+cells) is performed by Neon's internal ``mGrid`` construction pass.  The
+octree produced here is *graded* but may not be strictly strongly-balanced
+until Neon processes it.
 
 **Architecture:**
 
@@ -62,16 +68,13 @@ from xlb.utils.mesher import (
     _normalize_level_data,
     _stl_bounds,
     adjust_bbox,
+    grid_shape_finest_from_level_data,
+    is_sparse_level_data,
 )
 
 # 26-neighbor offsets (excluding self) on a 3-D Cartesian grid.
-_NEIGHBOR_OFFSETS_26 = [
-    (dx, dy, dz)
-    for dx in (-1, 0, 1)
-    for dy in (-1, 0, 1)
-    for dz in (-1, 0, 1)
-    if not (dx == 0 and dy == 0 and dz == 0)
-]
+_NEIGHBOR_OFFSETS_26 = [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1) if not (dx == 0 and dy == 0 and dz == 0)]
+
 
 @dataclass
 class AdaptiveMeshConfig:
@@ -87,6 +90,8 @@ class AdaptiveMeshConfig:
     def __post_init__(self):
         if self.num_levels < 1:
             raise ValueError("num_levels must be at least 1.")
+        if self.num_levels > 8:
+            raise ValueError("num_levels must be <= 8 (internal Warp kernels use fixed-size mask arrays that cannot exceed 8 levels).")
         if self.expansion_ratio <= 1.0:
             raise ValueError("expansion_ratio must be greater than 1.")
         if self.finest_band_cells < 1:
@@ -98,6 +103,7 @@ class AdaptiveMeshConfig:
 # ---------------------------------------------------------------------------
 # Domain helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_domain(config: AdaptiveMeshConfig):
     """Compute the physical domain parameters for adaptive meshing.
@@ -116,9 +122,7 @@ def _compute_domain(config: AdaptiveMeshConfig):
 
     cuboid_min, cuboid_max = _domain_bbox_from_padding(min_bound, max_bound, part_size, config.domain_padding)
     adjusted_min, adjusted_max = adjust_bbox(cuboid_max, cuboid_min, config.voxel_size)
-    origin, grid_shape = _align_domain_origin_for_dyadic(
-        adjusted_min, adjusted_max, config.voxel_size, config.num_levels
-    )
+    origin, grid_shape = _align_domain_origin_for_dyadic(adjusted_min, adjusted_max, config.voxel_size, config.num_levels)
 
     return mesh, origin, grid_shape
 
@@ -187,6 +191,12 @@ def _pad_domain_for_dyadic(
 # Octree helpers
 # ---------------------------------------------------------------------------
 
+_CHILD_OFFSETS_2x2x2 = np.array(
+    [[di, dj, dk] for di in range(2) for dj in range(2) for dk in range(2)],
+    dtype=np.int64,
+)
+
+
 def _child_centers_and_keys(
     parent_refine: np.ndarray,
     origin: np.ndarray,
@@ -203,15 +213,7 @@ def _child_centers_and_keys(
     # child. (Previously the integer offsets were sliced with a stride that did
     # not match the centre ordering, scrambling child coordinates and scattering
     # active cells into diagonal stripes.)
-    int_offsets = np.array(
-        [
-            [di, dj, dk]
-            for di in range(2)
-            for dj in range(2)
-            for dk in range(2)
-        ],
-        dtype=np.int64,
-    )
+    int_offsets = _CHILD_OFFSETS_2x2x2
 
     bases = origin + parent_refine.astype(np.float64) * parent_voxel
     centers = (bases[:, None, :] + (int_offsets[None, :, :] + 0.5) * child_voxel).reshape(-1, 3)
@@ -225,14 +227,6 @@ class LevelDataList(list):
     """Level data list with optional attached finest-grid shape metadata."""
 
     grid_shape_finest: Tuple[int, int, int] | None = None
-
-
-def is_sparse_level_data(level_data: list) -> bool:
-    """Return True when level_data stores (N, 3) sparse coords instead of dense masks."""
-    if not level_data:
-        return False
-    pattern = level_data[0][0]
-    return pattern.ndim == 2 and pattern.shape[1] == 3
 
 
 def _assignments_to_active_coords(
@@ -253,43 +247,10 @@ def _assignments_to_active_coords(
     return active_coords
 
 
-def _record_assignments(
-    assignments: List[List[np.ndarray]],
-    keys: np.ndarray,
-    targets: np.ndarray,
-    source_level: int,
-    num_levels: int,
-):
-    """Record octree cell indices at each target level from child keys.
-
-    Converts child indices on the ``source_level`` grid to equivalent block
-    coordinates at the ``target`` level via bit-shifting (left-shift to go
-    finer, right-shift to go coarser).
-
-    Args:
-        assignments: Mutable list-of-lists accumulating (N, 3) index arrays per level.
-        keys: (N, 3) int array of child cell indices at source_level resolution.
-        targets: (N,) int array of assigned target levels for each child.
-        source_level: The refinement level at which keys are expressed.
-        num_levels: Total number of refinement levels.
-    """
-    for target in range(num_levels):
-        sel = targets == target
-        if not np.any(sel):
-            continue
-        t_keys = keys[sel]
-        if target < source_level:
-            idx = t_keys << (source_level - target)
-        elif target == source_level:
-            idx = t_keys
-        else:
-            idx = t_keys >> (target - source_level)
-        assignments[target].append(idx)
-
-
 # ---------------------------------------------------------------------------
 # Shift helper (used by validate_level_data)
 # ---------------------------------------------------------------------------
+
 
 def _shift_toward_offset(arr: np.ndarray, di: int, dj: int, dk: int, fill: int = -1) -> np.ndarray:
     """Return ``out[i,j,k] = arr[i+di,j+dj,k+dk]`` in bounds, else ``fill``."""
@@ -310,6 +271,7 @@ def _shift_toward_offset(arr: np.ndarray, di: int, dj: int, dk: int, fill: int =
 # ---------------------------------------------------------------------------
 # Warp mesh conversion helpers
 # ---------------------------------------------------------------------------
+
 
 def trimesh_to_warp(mesh: trimesh.Trimesh) -> wp.Mesh:
     """Build a Warp BVH mesh from a trimesh surface."""
@@ -355,6 +317,7 @@ def _edt_scratch_buffers(nx: int, ny: int, nz: int):
 # Euclidean distance transform (Warp-native, SciPy parity)
 # ---------------------------------------------------------------------------
 
+
 def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
     """Exact Euclidean distance transform using Meijster's separable algorithm on GPU.
 
@@ -391,6 +354,7 @@ def euclidean_edt_3d(background: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # WarpAdaptiveMesherOps – GPU-accelerated adaptive mesher operations
 # ---------------------------------------------------------------------------
+
 
 class WarpAdaptiveMesherOps:
     """GPU-accelerated operations for adaptive multi-resolution meshing.
@@ -542,16 +506,19 @@ class WarpAdaptiveMesherOps:
         wp.launch(kernel_maximum_filter_3x3, dim=field.shape, inputs=[field, out])
         return out
 
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Octree meshing path
 # ---------------------------------------------------------------------------
+
 
 def _make_masks_octree(
     mesh: trimesh.Trimesh,
     origin: np.ndarray,
     grid_shape_finest: Tuple[int, int, int],
     config: AdaptiveMeshConfig,
+    verbose: bool = True,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Octree-path mesh generation: refine hierarchically from coarsest to finest.
 
@@ -576,13 +543,15 @@ def _make_masks_octree(
     shape_c = _shape_at_level(grid_shape_finest, coarsest)
     voxel_c = config.voxel_size * (2**coarsest)
     n_c = int(np.prod(shape_c))
-    print(
-        f"  Level {coarsest} (coarsest): conservative distance on {shape_c} ({n_c:,} cells, voxel={voxel_c:.1f} m)",
-        flush=True,
-    )
+    if verbose:
+        print(
+            f"  Level {coarsest} (coarsest): conservative distance on {shape_c} ({n_c:,} cells, voxel={voxel_c:.1f} m)",
+            flush=True,
+        )
     t0 = time.perf_counter()
     target_c = ops.conservative_coarse_targets(origin, shape_c, voxel_c, config)
-    print(f"    distance done in {time.perf_counter() - t0:.1f}s", flush=True)
+    if verbose:
+        print(f"    distance done in {time.perf_counter() - t0:.1f}s", flush=True)
     coarse_keep = np.argwhere(target_c == coarsest)
     if len(coarse_keep):
         assignments[coarsest].append(coarse_keep)
@@ -593,7 +562,8 @@ def _make_masks_octree(
 
     for level in range(coarsest - 1, -1, -1):
         n_refine = len(parent_refine)
-        print(f"  Level {level}: refining {n_refine:,} parent cells", flush=True)
+        if verbose:
+            print(f"  Level {level}: refining {n_refine:,} parent cells", flush=True)
         if n_refine == 0:
             continue
 
@@ -617,22 +587,24 @@ def _make_masks_octree(
         if len(leaf_keys):
             assignments[level].append(leaf_keys)
         n_active = int(len(leaf_keys))
-        print(
-            f"    {len(parent_refine):,} parents, {n_active:,} active at level {level} "
-            f"in {time.perf_counter() - t0:.1f}s",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"    {len(parent_refine):,} parents, {n_active:,} active at level {level} in {time.perf_counter() - t0:.1f}s",
+                flush=True,
+            )
 
         parent_refine = keys[~is_leaf] if level > 0 else np.empty((0, 3), dtype=int)
         parent_level = level
 
-    print("  Building sparse active-voxel coordinates from assignments...", flush=True)
+    if verbose:
+        print("  Building sparse active-voxel coordinates from assignments...", flush=True)
     t0 = time.perf_counter()
     active_coords = _assignments_to_active_coords(assignments, num_levels)
     mask_origins = [np.zeros(3, dtype=int) for _ in range(num_levels)]
-    print(f"    sparse coords built in {time.perf_counter() - t0:.1f}s", flush=True)
-    for level, coords in enumerate(active_coords):
-        print(f"    level {level}: {len(coords):,} active voxels", flush=True)
+    if verbose:
+        print(f"    sparse coords built in {time.perf_counter() - t0:.1f}s", flush=True)
+        for level, coords in enumerate(active_coords):
+            print(f"    level {level}: {len(coords):,} active voxels", flush=True)
     return active_coords, mask_origins
 
 
@@ -640,12 +612,14 @@ def _make_masks_octree(
 # Level-data packing
 # ---------------------------------------------------------------------------
 
+
 def _pack_level_data(
     patterns: List[np.ndarray],
     mask_origins: List[np.ndarray],
     origin_phys: np.ndarray,
     voxel_size_finest: float,
     num_levels: int,
+    verbose: bool = True,
 ) -> list:
     """Pack per-level sparse active-voxel coordinates into level_data tuples.
 
@@ -676,12 +650,10 @@ def _pack_level_data(
         shape_desc = f"coords ({active:,} x 3)"
         packed = np.ascontiguousarray(pattern, dtype=np.int32)
 
-        print(
-            f"Level {finest_level}: {shape_desc}, active {active:,}, "
-            f"origin offset {offset}, voxel_size {voxel_size_level}"
-        )
-        if active == 0:
-            print(f"  (level {finest_level} unused: finer levels fully cover the domain)")
+        if verbose:
+            print(f"Level {finest_level}: {shape_desc}, active {active:,}, origin offset {offset}, voxel_size {voxel_size_level}")
+            if active == 0:
+                print(f"  (level {finest_level} unused: finer levels fully cover the domain)")
         raw_level_data.append((packed, voxel_size_level, sub_origin_phys, cuboid_build_level))
 
     return list(reversed(raw_level_data))
@@ -731,13 +703,16 @@ def make_adaptive_surface_mesh(
     domain_padding: Sequence[float] = None,
     expansion_ratio: float = 2.0,
     finest_band_cells: int = 3,
+    verbose: bool = True,
 ) -> list:
     """
-    Create a strongly-balanced surface-adaptive multires mesh from an STL file.
+    Create a graded-octree surface-adaptive multires mesh from an STL file.
 
     Fine cells are placed within ``finest_band_cells * voxel_size`` of the
     surface; coarser levels extend outward with geometric ``expansion_ratio``
-    growth between consecutive shells.
+    growth between consecutive shells.  The output guarantees non-overlap
+    across levels; final strong-balance enforcement (delta-L <= 1) is
+    delegated to Neon's ``mGrid`` construction.
 
     Uses octree refinement with sparse ``(N, 3)`` active-voxel output at every
     scale — no dense finest-grid allocation.
@@ -750,6 +725,7 @@ def make_adaptive_surface_mesh(
             for the coarsest outer domain (relative to geometry extent).
         expansion_ratio: Geometric ratio between consecutive distance shells.
         finest_band_cells: Thickness of the finest shell in finest-cell counts.
+        verbose: If True (default), print progress and statistics to stdout.
 
     Returns:
         ``level_data`` list (finest-first), compatible with
@@ -769,24 +745,22 @@ def make_adaptive_surface_mesh(
 
     mesh, origin_phys, grid_shape = _compute_domain(config)
     n_finest = int(np.prod(grid_shape))
-    print(f"Adaptive mesh domain (finest): {grid_shape}, origin {origin_phys}, voxel_size {voxel_size}")
-    print(f"  Finest-grid cell count: {n_finest:,}")
+    if verbose:
+        print(f"Adaptive mesh domain (finest): {grid_shape}, origin {origin_phys}, voxel_size {voxel_size}")
+        print(f"  Finest-grid cell count: {n_finest:,}")
 
     align = 2**num_levels
-    aligned_shape, origin_phys = _pad_domain_for_dyadic(
-        grid_shape, origin_phys, voxel_size, num_levels, config.domain_padding
-    )
+    aligned_shape, origin_phys = _pad_domain_for_dyadic(grid_shape, origin_phys, voxel_size, num_levels, config.domain_padding)
     if aligned_shape != grid_shape:
         grid_shape = aligned_shape
         n_finest = int(np.prod(grid_shape))
-        print(
-            f"Aligned domain to {grid_shape}, origin {origin_phys} "
-            f"(align={align}, padding distributed by domain_padding ratio)"
-        )
+        if verbose:
+            print(f"Aligned domain to {grid_shape}, origin {origin_phys} (align={align}, padding distributed by domain_padding ratio)")
 
-    print("Using octree surface meshing (sparse active-voxel output).", flush=True)
-    patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config)
-    raw_level_data = _pack_level_data(patterns, mask_origins, origin_phys, voxel_size, num_levels)
+    if verbose:
+        print("Using octree surface meshing (sparse active-voxel output).", flush=True)
+    patterns, mask_origins = _make_masks_octree(mesh, origin_phys, grid_shape, config, verbose=verbose)
+    raw_level_data = _pack_level_data(patterns, mask_origins, origin_phys, voxel_size, num_levels, verbose=verbose)
 
     level_data = LevelDataList(_normalize_level_data(raw_level_data, voxel_size))
     level_data.grid_shape_finest = grid_shape
@@ -798,6 +772,7 @@ def make_adaptive_surface_mesh(
 # ---------------------------------------------------------------------------
 # Validation and inspection utilities
 # ---------------------------------------------------------------------------
+
 
 def _embed_level_mask_on_finest(
     mask: np.ndarray,
@@ -829,9 +804,10 @@ def _embed_level_mask_on_finest(
 
 def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int]) -> dict:
     """
-    Validate ``level_data`` for non-overlap and strong balance (ΔL ≤ 1).
+    Validate ``level_data`` for non-overlap and grading (ΔL ≤ 1 between 26-neighbors).
 
     Returns a statistics dictionary with per-level active counts and validation flags.
+    Note: this validation operates on dense level_data only; sparse data is skipped.
     """
     stats = {"num_levels": len(level_data), "active_counts": [], "strongly_balanced": True, "non_overlapping": True}
 
@@ -874,18 +850,104 @@ def validate_level_data(level_data: list, grid_shape_finest: Tuple[int, int, int
     return stats
 
 
-def grid_shape_finest(level_data: list) -> Tuple[int, int, int]:
-    """Finest lattice shape implied by level_data or attached metadata."""
-    stored = getattr(level_data, "grid_shape_finest", None)
-    if stored is not None:
-        return tuple(int(x) for x in stored)
-    if is_sparse_level_data(level_data):
-        raise ValueError(
-            "Sparse level_data has no attached grid_shape_finest; "
-            "call make_adaptive_surface_mesh or set level_data.grid_shape_finest."
-        )
+def validate_sparse_level_data(
+    level_data: list,
+    grid_shape_finest: Tuple[int, int, int],
+    check_balance: bool = False,
+) -> dict:
+    """Validate sparse ``level_data`` for non-overlap and coverage.
+
+    Unlike :func:`validate_level_data` (which requires dense masks), this
+    function works on sparse ``(N, 3)`` coordinate arrays by projecting each
+    cell's finest-grid footprint into a hash set.
+
+    Args:
+        level_data: Sparse level_data list (finest-first).
+        grid_shape_finest: Expected finest lattice shape ``(nx, ny, nz)``.
+        check_balance: If True, also verify grading (ΔL ≤ 1 between
+            face-adjacent finest cells).  This is expensive for large meshes.
+
+    Returns:
+        Dictionary with keys ``non_overlapping``, ``fully_covering``,
+        ``strongly_balanced`` (None if ``check_balance`` is False), and
+        ``overlap_count``.
+    """
     num_levels = len(level_data)
-    return tuple(int(level_data[-1][0].shape[i] * 2 ** (num_levels - 1)) for i in range(3))
+    nx, ny, nz = grid_shape_finest
+    total_finest_cells = nx * ny * nz
+
+    covered: set = set()
+    overlap_count = 0
+    non_overlapping = True
+
+    owners: dict = {} if check_balance else None
+
+    for lvl in range(num_levels):
+        pattern = level_data[lvl][0]
+        if pattern.ndim != 2 or pattern.shape[1] != 3:
+            continue
+        stride = 2**lvl
+        origin = np.asarray(level_data[lvl][2], dtype=np.float64)
+        voxel_size_level = level_data[lvl][1]
+        if isinstance(voxel_size_level, (int, float)) and voxel_size_level > 0:
+            origin_idx = np.round(origin / voxel_size_level).astype(np.int64) if np.any(origin != 0) else np.zeros(3, dtype=np.int64)
+        else:
+            origin_idx = np.zeros(3, dtype=np.int64)
+
+        coords = np.asarray(pattern, dtype=np.int64)
+        for row_idx in range(coords.shape[0]):
+            cx, cy, cz = int(coords[row_idx, 0]), int(coords[row_idx, 1]), int(coords[row_idx, 2])
+            fx = (cx + int(origin_idx[0])) * stride
+            fy = (cy + int(origin_idx[1])) * stride
+            fz = (cz + int(origin_idx[2])) * stride
+            for di in range(stride):
+                for dj in range(stride):
+                    for dk in range(stride):
+                        key = (fx + di, fy + dj, fz + dk)
+                        if key[0] < 0 or key[1] < 0 or key[2] < 0:
+                            continue
+                        if key[0] >= nx or key[1] >= ny or key[2] >= nz:
+                            continue
+                        if key in covered:
+                            overlap_count += 1
+                            non_overlapping = False
+                        else:
+                            covered.add(key)
+                            if owners is not None:
+                                owners[key] = lvl
+
+    fully_covering = len(covered) == total_finest_cells
+
+    strongly_balanced = None
+    if check_balance and owners:
+        strongly_balanced = True
+        face_offsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+        for (x, y, z), lvl in owners.items():
+            for dx, dy, dz in face_offsets:
+                nb = (x + dx, y + dy, z + dz)
+                nb_lvl = owners.get(nb)
+                if nb_lvl is not None and abs(lvl - nb_lvl) > 1:
+                    strongly_balanced = False
+                    break
+            if strongly_balanced is False:
+                break
+
+    return {
+        "non_overlapping": non_overlapping,
+        "fully_covering": fully_covering,
+        "strongly_balanced": strongly_balanced,
+        "overlap_count": overlap_count,
+    }
+
+
+def grid_shape_finest(level_data: list) -> Tuple[int, int, int]:
+    """Finest lattice shape implied by level_data or attached metadata.
+
+    Thin wrapper around :func:`xlb.utils.mesher.grid_shape_finest_from_level_data`
+    that returns a tuple instead of a numpy array.
+    """
+    arr = grid_shape_finest_from_level_data(level_data)
+    return (int(arr[0]), int(arr[1]), int(arr[2]))
 
 
 def default_cuboid_multipliers(domain_padding: Sequence[float], num_levels: int) -> List[List[float]]:
@@ -946,9 +1008,7 @@ def load_and_shift_stl(stl_path: str, domain_padding: Sequence[float]) -> Tuple[
     return temp_path, stl_shift
 
 
-def print_mesh_statistics(
-    label: str, level_data: list, grid_shape_finest_grid: Tuple[int, int, int]
-) -> Tuple[int, int]:
+def print_mesh_statistics(label: str, level_data: list, grid_shape_finest_grid: Tuple[int, int, int]) -> Tuple[int, int]:
     """Print per-level counts, validation flags; return total active / equiv. finest."""
     from xlb.utils.mesher import prepare_sparsity_pattern
 
@@ -968,33 +1028,22 @@ def print_mesh_statistics(
     for lvl in range(num_levels):
         active = _active_count(sparsity_pattern[lvl])
         equiv_finest = active * (2 ** (num_levels - 1 - lvl))
-        shape_desc = (
-            f"coords {sparsity_pattern[lvl].shape}"
-            if sparse
-            else f"mask shape={sparsity_pattern[lvl].shape}"
-        )
-        print(
-            f"  Level {lvl}: active={active:,}, "
-            f"{shape_desc}, "
-            f"origin={level_origins[lvl]}, "
-            f"equiv. finest cells={equiv_finest:,}"
-        )
+        shape_desc = f"coords {sparsity_pattern[lvl].shape}" if sparse else f"mask shape={sparsity_pattern[lvl].shape}"
+        print(f"  Level {lvl}: active={active:,}, {shape_desc}, origin={level_origins[lvl]}, equiv. finest cells={equiv_finest:,}")
 
     total_active = sum(_active_count(m) for m in sparsity_pattern)
-    total_equiv_finest = sum(
-        _active_count(sparsity_pattern[lvl]) * (2 ** (num_levels - 1 - lvl))
-        for lvl in range(num_levels)
-    )
+    total_equiv_finest = sum(_active_count(sparsity_pattern[lvl]) * (2 ** (num_levels - 1 - lvl)) for lvl in range(num_levels))
     print(f"  Total active cells: {total_active:,}")
     print(f"  Total equivalent finest cells: {total_equiv_finest:,}")
 
     if sparse:
-        print("  Validation: skipped (sparse level_data; dense validation not applicable)")
-        stats = {
-            "non_overlapping": None,
-            "fully_covering": None,
-            "strongly_balanced": None,
-        }
+        grid_shape_for_validation = getattr(level_data, "grid_shape_finest", grid_shape_finest_grid)
+        stats = validate_sparse_level_data(level_data, grid_shape_for_validation)
+        print(
+            f"  Validation (sparse): non_overlapping={stats['non_overlapping']}, "
+            f"fully_covering={stats['fully_covering']}, "
+            f"overlap_count={stats['overlap_count']}"
+        )
     else:
         stats = validate_level_data(level_data, grid_shape_finest_grid)
         print(
@@ -1032,25 +1081,19 @@ def export_mesh_xdmf(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for surface-adaptive mesh generation."""
     parser = argparse.ArgumentParser(
         description="Build and inspect a surface-adaptive multires mesh from an STL/OBJ file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Level shells: finest band width = finest_band_cells * voxel_size; "
-            "each outer shell grows by expansion_ratio."
-        ),
+        epilog=("Level shells: finest band width = finest_band_cells * voxel_size; each outer shell grows by expansion_ratio."),
     )
     parser.add_argument("--stl", required=True, help="Path to input STL/OBJ geometry.")
     parser.add_argument("--voxel-size", type=float, default=4.0, help="Finest cell size (default: 4.0).")
     parser.add_argument("--num-levels", type=int, default=4, help="Refinement levels; 0 is finest (default: 4).")
-    parser.add_argument(
-        "--expansion-ratio", type=float, default=2.0, help="Shell growth ratio (default: 2.0)."
-    )
-    parser.add_argument(
-        "--finest-band-cells", type=int, default=3, help="Finest shell thickness in cells (default: 3)."
-    )
+    parser.add_argument("--expansion-ratio", type=float, default=2.0, help="Shell growth ratio (default: 2.0).")
+    parser.add_argument("--finest-band-cells", type=int, default=3, help="Finest shell thickness in cells (default: 3).")
     parser.add_argument(
         "--domain-padding",
         type=float,

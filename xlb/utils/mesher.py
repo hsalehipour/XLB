@@ -114,9 +114,7 @@ def _normalize_level_data(level_data, voxel_size_finest):
         stride = int(voxel_size / voxel_size_finest)
         origin_finest = np.round(origin / voxel_size_finest).astype(int)
         origin_native = (origin_finest // stride).astype(int)
-        normalized.append(
-            (mask, stride, origin_native, num_levels - 1 - build_level)
-        )
+        normalized.append((mask, stride, origin_native, num_levels - 1 - build_level))
     return list(reversed(normalized))
 
 
@@ -152,8 +150,7 @@ def grid_shape_finest_from_level_data(level_data) -> np.ndarray:
         return np.asarray(stored, dtype=np.int64)
     if is_sparse_level_data(level_data):
         raise ValueError(
-            "Sparse level_data is missing grid_shape_finest metadata; "
-            "use make_adaptive_surface_mesh or set level_data.grid_shape_finest."
+            "Sparse level_data is missing grid_shape_finest metadata; use make_adaptive_surface_mesh or set level_data.grid_shape_finest."
         )
     num_levels = len(level_data)
     return np.asarray(level_data[-1][0].shape, dtype=np.int64) * (2 ** (num_levels - 1))
@@ -377,10 +374,7 @@ class MultiresIO(object):
         total_cells : int
             Total number of active voxels across all levels.
         """
-        num_voxels_per_level = [
-            data.shape[0] if data.ndim == 2 else int(np.sum(data))
-            for data, _, _, _ in levels_data
-        ]
+        num_voxels_per_level = [data.shape[0] if data.ndim == 2 else int(np.sum(data)) for data, _, _, _ in levels_data]
         num_points_per_level = [8 * nv for nv in num_voxels_per_level]
         point_id_offsets = np.cumsum([0] + num_points_per_level[:-1])
 
@@ -595,19 +589,17 @@ class MultiresIO(object):
         # Get the number of levels from the levels_data
         num_levels = len(self.levels_data)
 
-        # Prepare lists to hold warp fields and origins allocated for each level
+        # Build origin_list once (indexed by level, independent of fields)
+        origin_list = [wp.vec3i(*([int(x) for x in self.levels_data[level][2]])) for level in range(num_levels)]
+
+        # Prepare warp fields for each (field_name, level) pair
         field_warp_dict = {}
-        origin_list = []
         for field_name, cardinality in self.field_name_cardinality_dict.items():
             field_warp_dict[field_name] = []
             for level in range(num_levels):
-                # get the shape of the grid at this level
                 box_shape = _level_box_shape(self.levels_data, level)
-
-                # Use the warp backend to create dense fields to be written in multi-res NEON fields
                 grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
                 field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=self.store_precision))
-                origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
 
         return field_warp_dict, origin_list
 

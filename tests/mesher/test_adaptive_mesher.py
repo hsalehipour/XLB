@@ -15,7 +15,7 @@ HAS_NEON = importlib.util.find_spec("neon") is not None
 from xlb.utils.adaptive_mesher import (
     AdaptiveMeshConfig,
     WarpAdaptiveMesherOps,
-    _record_assignments,
+    _child_centers_and_keys,
     euclidean_edt_3d,
     grid_shape_finest as adaptive_grid_shape_finest,
     is_sparse_level_data,
@@ -29,9 +29,7 @@ SPHERE_VOXEL_SIZE = 2.0
 @pytest.fixture
 def sphere_stl():
     """Use the checked-in sphere STL when available, else create a temp one."""
-    checked_in = os.path.join(
-        os.path.dirname(__file__), "..", "..", "examples", "cfd", "stl-files", "sphere.stl"
-    )
+    checked_in = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "cfd", "stl-files", "sphere.stl")
     checked_in = os.path.normpath(checked_in)
     if os.path.isfile(checked_in):
         yield checked_in
@@ -78,6 +76,7 @@ def _active_counts(level_data):
 # EDT and morphology tests (from parity file)
 # ---------------------------------------------------------------------------
 
+
 def test_edt_matches_scipy():
     from scipy import ndimage
 
@@ -104,31 +103,43 @@ def test_morphology_filters_match_scipy():
 
 
 # ---------------------------------------------------------------------------
-# Index mapping test
+# Octree helper tests
 # ---------------------------------------------------------------------------
 
-def test_record_assignments_index_mapping():
-    """Child keys on a finer grid must upscale (<<), not downscale (>>), to coarser targets."""
-    num_levels = 4
-    assignments = [[] for _ in range(num_levels)]
-    keys = np.array([[5, 3, 2], [7, 4, 1]], dtype=int)
-    targets = np.array([0, 1], dtype=int)
 
-    _record_assignments(assignments, keys, targets, source_level=1, num_levels=num_levels)
+def test_child_centers_and_keys_offset_ordering():
+    """Single parent at (1,2,3) produces 8 children with correct keys and centres."""
+    parent = np.array([[1, 2, 3]])
+    origin = np.array([0.0, 0.0, 0.0])
+    parent_voxel = 4.0
+    child_voxel = 2.0
 
-    np.testing.assert_array_equal(np.vstack(assignments[0]), [[10, 6, 4]])
-    np.testing.assert_array_equal(np.vstack(assignments[1]), [[7, 4, 1]])
+    centers, keys = _child_centers_and_keys(parent, origin, parent_voxel, child_voxel)
 
-    assignments = [[] for _ in range(num_levels)]
-    _record_assignments(
-        assignments, np.array([[2, 1, 0]]), np.array([2]), source_level=1, num_levels=num_levels
-    )
-    np.testing.assert_array_equal(np.vstack(assignments[2]), [[1, 0, 0]])
+    assert centers.shape == (8, 3)
+    assert keys.shape == (8, 3)
+
+    expected_keys = np.array([
+        [2, 4, 6],
+        [2, 4, 7],
+        [2, 5, 6],
+        [2, 5, 7],
+        [3, 4, 6],
+        [3, 4, 7],
+        [3, 5, 6],
+        [3, 5, 7],
+    ])
+    np.testing.assert_array_equal(np.sort(keys, axis=0), np.sort(expected_keys, axis=0))
+
+    for i in range(8):
+        expected_center = origin + (keys[i] + 0.5) * child_voxel
+        np.testing.assert_allclose(centers[i], expected_center, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
 # Mesh generation tests
 # ---------------------------------------------------------------------------
+
 
 def test_adaptive_mesh_produces_level_data_format(sphere_stl):
     level_data = make_adaptive_surface_mesh(
@@ -206,6 +217,7 @@ def test_prepare_sparsity_pattern_compatible(sphere_stl):
 # Mesh validity tests (from parity file)
 # ---------------------------------------------------------------------------
 
+
 def test_sphere_mesh_valid(sphere_stl):
     """Warp backend produces a valid sparse adaptive partition."""
     data = make_adaptive_surface_mesh(**_mesh_kwargs(sphere_stl))
@@ -253,6 +265,7 @@ def test_synthetic_box_valid(box_stl):
 # Config validation
 # ---------------------------------------------------------------------------
 
+
 def test_adaptive_mesh_config_validation():
     with pytest.raises(ValueError):
         AdaptiveMeshConfig(voxel_size=1.0, num_levels=0, stl_filename="dummy.stl")
@@ -264,6 +277,7 @@ def test_adaptive_mesh_config_validation():
 # ---------------------------------------------------------------------------
 # Neon integration test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not HAS_NEON, reason="Neon backend required")
 def test_neon_grid_construction(sphere_stl):

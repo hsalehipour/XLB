@@ -69,8 +69,8 @@ def test_min_face_bound_with_shifted_domain_origin():
     origin_finest = np.array([-32, -32, 0], dtype=int)
     coords = np.array(
         [
-            [32, 32, 4],   # left + front on first addressable face
-            [33, 33, 4],   # one cell inward
+            [32, 32, 4],  # left + front on first addressable face
+            [33, 33, 4],  # one cell inward
             [32, 33, 4],
         ],
         dtype=np.int32,
@@ -148,14 +148,10 @@ def test_virtual_finest_to_neon_global_negative_min_x():
         ],
         dtype=np.int64,
     ).T
-    neon = NeonMultiresGrid.virtual_finest_to_neon_global(
-        virtual, domain_min, domain_max, level=3, num_levels=num_levels
-    )
+    neon = NeonMultiresGrid.virtual_finest_to_neon_global(virtual, domain_min, domain_max, level=3, num_levels=num_levels)
     # Identity: neon == virtual
     assert np.all(neon == virtual.astype(np.int32))
-    roundtrip = NeonMultiresGrid.neon_global_to_virtual_finest(
-        neon, domain_min, domain_max, level=3, num_levels=num_levels
-    )
+    roundtrip = NeonMultiresGrid.neon_global_to_virtual_finest(neon, domain_min, domain_max, level=3, num_levels=num_levels)
     assert np.all(roundtrip == virtual.astype(np.int32))
 
 
@@ -172,9 +168,7 @@ def test_virtual_finest_to_neon_l3_row_matches_embedding():
         virtual_x = (local_x + origin_l3) * stride
         assert virtual_x >= 0
         virtual = np.array([[virtual_x, 0, 0]], dtype=np.int64).T
-        neon = NeonMultiresGrid.virtual_finest_to_neon_global(
-            virtual, domain_min, domain_max, level=3, num_levels=4
-        )
+        neon = NeonMultiresGrid.virtual_finest_to_neon_global(virtual, domain_min, domain_max, level=3, num_levels=4)
         assert neon[0, 0] == virtual_x
 
 

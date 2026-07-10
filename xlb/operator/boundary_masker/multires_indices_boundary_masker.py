@@ -173,15 +173,15 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                 continue
 
             # find grid shape at current level
-            # TODO: this is a hack. Should be corrected in the helper function when getting neon global indices
-            grid_shape_at_level = tuple([shape // 2**level for shape in grid_shape_finest])
             grid_shape_finest_warp = wp.vec3i(*grid_shape_finest)
 
             # find interior boundary conditions
-            bc_interior = self._find_bclist_interior(bclist_at_level, grid_shape_at_level)
+            # Indices are in finest-space after virtual_finest_to_neon_global, so
+            # interior detection must compare against grid_shape_finest.
+            bc_interior = self._find_bclist_interior(bclist_at_level, grid_shape_finest)
 
             # Prepare the first kernel inputs for all items in boundary condition list
-            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, grid_shape_at_level)
+            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, grid_shape_finest)
 
             # Launch the first container
             container_domain_bounds = self.neon_container["container_domain_bounds"](
@@ -202,7 +202,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             # Prepare the second and third kernel inputs for only a subset of boundary conditions associated with the interior
             # Note 1: launching order of the following kernels are important here!
             # Note 2: Due to race conditioning, the two kernels cannot be fused together.
-            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, grid_shape_at_level)
+            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, grid_shape_finest)
             container_interior_missing_mask = self.neon_container["container_interior_missing_mask"](
                 wp_bc_indices,
                 bc_mask,
