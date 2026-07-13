@@ -44,7 +44,7 @@ kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s 1.508e-5
 voxel_size = 0.005  # Finest voxel size in meters
 
 # STL filename
-stl_filename = "../stl-files/Ahmed_25_NoLegs.stl"
+stl_filename = "examples/cfd/stl-files/Ahmed_25_NoLegs.stl"
 script_name = "Ahmed"
 
 # I/O settings

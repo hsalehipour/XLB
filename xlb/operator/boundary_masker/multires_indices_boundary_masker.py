@@ -16,6 +16,7 @@ from xlb.velocity_set.velocity_set import VelocitySet
 from xlb.precision_policy import PrecisionPolicy
 from xlb.compute_backend import ComputeBackend
 from xlb.operator.boundary_masker import IndicesBoundaryMasker
+from xlb.grid.multires_grid import NeonMultiresGrid
 
 
 class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
@@ -145,15 +146,26 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
         grid = bc_mask.get_grid()
         num_levels = grid.num_levels
         grid_shape_finest = self.helper_masker.get_grid_shape(bc_mask)
+        domain_min_finest, domain_max_finest = self._domain_bounds_from_neon_grid(grid)
         for level in range(num_levels):
+            origin_pt = grid.sparsity_pattern_origins[level]
+            origin = np.array([origin_pt.x, origin_pt.y, origin_pt.z], dtype=np.int64).reshape(3, 1)
             # Create a copy of the boundary condition list for the current level if the indices at that level are not empty
             bclist_at_level = []
             for bc in bclist:
                 if bc.indices is not None and bc.indices[level]:
                     bc_copy = copy.copy(bc)  # shallow copy of the whole object
                     indices = copy.deepcopy(bc.indices[level])  # deep copy only the modified part
-                    indices = np.array(indices) * 2**level  # TODO: This is a hack
-                    bc_copy.indices = tuple(indices.tolist())  # convert to tuple
+                    indices = np.asarray(indices, dtype=np.int64)
+                    finest_virtual = ((indices + origin) * (2**level)).astype(np.int32)
+                    finest_indices = NeonMultiresGrid.virtual_finest_to_neon_global(
+                        finest_virtual,
+                        domain_min_finest,
+                        domain_max_finest,
+                        level=level,
+                        num_levels=num_levels,
+                    )
+                    bc_copy.indices = tuple(finest_indices.tolist())  # convert to tuple
                     bclist_at_level.append(bc_copy)
 
             # If the boundary condition list is empty, skip to the next level
@@ -161,15 +173,25 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                 continue
 
             # find grid shape at current level
-            # TODO: this is a hack. Should be corrected in the helper function when getting neon global indices
-            grid_shape_at_level = tuple([shape // 2**level for shape in grid_shape_finest])
             grid_shape_finest_warp = wp.vec3i(*grid_shape_finest)
 
+            # BC indices are stored in finest-lattice space via ``(local + origin) * 2**level``.
+            # A level-L voxel that sits on the max-side domain face has its finest starting
+            # index at ``grid_shape_finest[i] - 2**level`` (it spans the last ``2**level``
+            # finest cells).  ``are_indices_in_interior`` treats an index as interior when
+            # ``idx < shape - 1``, so comparing against ``grid_shape_finest`` incorrectly
+            # marks such face voxels as interior for every level except the finest.
+            # Build a per-level "interior shape" where ``shape - 1`` equals the finest
+            # starting index of the last voxel at this level; this makes the classifier
+            # consistent across all refinement levels.
+            stride = 2**level
+            interior_shape = tuple(int(grid_shape_finest[i]) - stride + 1 for i in range(len(grid_shape_finest)))
+
             # find interior boundary conditions
-            bc_interior = self._find_bclist_interior(bclist_at_level, grid_shape_at_level)
+            bc_interior = self._find_bclist_interior(bclist_at_level, interior_shape)
 
             # Prepare the first kernel inputs for all items in boundary condition list
-            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, grid_shape_at_level)
+            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, interior_shape)
 
             # Launch the first container
             container_domain_bounds = self.neon_container["container_domain_bounds"](
@@ -190,7 +212,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             # Prepare the second and third kernel inputs for only a subset of boundary conditions associated with the interior
             # Note 1: launching order of the following kernels are important here!
             # Note 2: Due to race conditioning, the two kernels cannot be fused together.
-            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, grid_shape_at_level)
+            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, interior_shape)
             container_interior_missing_mask = self.neon_container["container_interior_missing_mask"](
                 wp_bc_indices,
                 bc_mask,
@@ -210,3 +232,17 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             container_interior_bc_mask.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
 
         return bc_mask, missing_mask
+
+    @staticmethod
+    def _domain_bounds_from_neon_grid(grid, d: int = 3):
+        """Compute finest domain bounds from a Neon ``mGrid`` sparsity data."""
+        level_data = []
+        for level in range(grid.num_levels):
+            origin_pt = grid.sparsity_pattern_origins[level]
+            origin = np.array([origin_pt.x, origin_pt.y, origin_pt.z], dtype=np.int64)
+            if getattr(grid, "is_sparse", False):
+                pattern = grid.active_voxels_list[level]
+            else:
+                pattern = grid.sparsity_pattern_list[level]
+            level_data.append((pattern, None, origin, level))
+        return NeonMultiresGrid._domain_finest_bounds(level_data, d)

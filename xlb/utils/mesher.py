@@ -5,6 +5,8 @@ Provides geometry preparation and I/O for multi-resolution LBM simulations:
 
 * :func:`make_cuboid_mesh` — builds a strongly-balanced cuboid mesh hierarchy
   from an STL file and a sequence of domain multipliers.
+* :func:`make_adaptive_surface_mesh` — builds a surface-distance-driven
+  strongly-balanced hierarchy (see :mod:`xlb.utils.adaptive_mesher`).
 * :func:`prepare_sparsity_pattern` — converts level data into the sparsity
   arrays required by :func:`multires_grid_factory`.
 * :class:`MultiresIO` — exports multi-resolution Neon field data to HDF5 /
@@ -13,10 +15,107 @@ Provides geometry preparation and I/O for multi-resolution LBM simulations:
 
 import numpy as np
 import trimesh
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import warp as wp
 from xlb.utils.utils import UnitConvertor
+
+
+def _load_stl_mesh(stl_filename):
+    """Load an STL/OBJ mesh and validate it is non-empty."""
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    assert not mesh.is_empty, "Loaded mesh is empty or invalid."
+    return mesh
+
+
+def _stl_bounds(mesh):
+    """Return (min_bound, max_bound, partSize) for a trimesh object."""
+    mesh_vertices = mesh.vertices
+    min_bound = mesh_vertices.min(axis=0)
+    max_bound = mesh_vertices.max(axis=0)
+    part_size = max_bound - min_bound
+    return min_bound, max_bound, part_size
+
+
+def _domain_bbox_from_padding(min_bound, max_bound, part_size, padding):
+    """
+    Compute a physical domain bounding box from a 6-tuple padding specification.
+
+    Padding format: [-x, +x, -y, +y, -z, +z] multipliers relative to part_size.
+    """
+    cuboid_min = np.array(
+        [
+            min_bound[0] - padding[0] * part_size[0],
+            min_bound[1] - padding[2] * part_size[1],
+            min_bound[2] - padding[4] * part_size[2],
+        ],
+        dtype=float,
+    )
+    cuboid_max = np.array(
+        [
+            max_bound[0] + padding[1] * part_size[0],
+            max_bound[1] + padding[3] * part_size[1],
+            max_bound[2] + padding[5] * part_size[2],
+        ],
+        dtype=float,
+    )
+    return cuboid_min, cuboid_max
+
+
+def _finest_grid_from_bbox(adjusted_min, adjusted_max, voxel_size):
+    """Return (grid_shape, origin) for the finest lattice covering a physical bbox."""
+    nx = int(np.round((adjusted_max[0] - adjusted_min[0]) / voxel_size))
+    ny = int(np.round((adjusted_max[1] - adjusted_min[1]) / voxel_size))
+    nz = int(np.round((adjusted_max[2] - adjusted_min[2]) / voxel_size))
+    return (nx, ny, nz), adjusted_min.copy()
+
+
+def _align_domain_origin_for_dyadic(
+    origin_phys: np.ndarray,
+    adjusted_max: np.ndarray,
+    voxel_size: float,
+    num_levels: int,
+) -> Tuple[np.ndarray, Tuple[int, int, int]]:
+    """
+    Snap the physical domain origin so its finest-lattice index is divisible by
+    ``2 ** (num_levels - 1)``.
+
+    Unified-grid adaptive meshes assign mask[0,0,0] at every level to the same
+    physical corner.  ``_normalize_level_data`` stores per-level native origins as
+    ``origin_finest // stride``; that only maps back to a common finest corner when
+    ``origin_finest`` is divisible by every stride.
+    """
+    if num_levels <= 1:
+        grid_shape, _ = _finest_grid_from_bbox(origin_phys, adjusted_max, voxel_size)
+        return origin_phys.copy(), grid_shape
+
+    coarse_factor = 2 ** (num_levels - 1)
+    origin_finest = np.floor(origin_phys / voxel_size + 1e-9).astype(np.int64)
+    origin_finest_aligned = (origin_finest // coarse_factor) * coarse_factor
+    origin_aligned = origin_finest_aligned.astype(np.float64) * voxel_size
+    grid_shape, _ = _finest_grid_from_bbox(origin_aligned, adjusted_max, voxel_size)
+    return origin_aligned, grid_shape
+
+
+def _normalize_level_data(level_data, voxel_size_finest):
+    """
+    Convert physical voxel sizes and origins to finest-lattice units and reorder finest-first.
+
+    Each input entry is (mask, voxel_size_physical, origin_physical, build_level_index).
+
+    Origins are snapped once in finest-lattice units, then converted to per-level native
+    indices.  Rounding physical origins independently at each level (old behaviour) shifts
+    coarse masks relative to fine ones and produces false overlaps, coverage holes, and
+    apparent diagonal level jumps in ParaView.
+    """
+    num_levels = len(level_data)
+    normalized = []
+    for mask, voxel_size, origin, build_level in level_data:
+        stride = int(voxel_size / voxel_size_finest)
+        origin_finest = np.round(origin / voxel_size_finest).astype(int)
+        origin_native = (origin_finest // stride).astype(int)
+        normalized.append((mask, stride, origin_native, num_levels - 1 - build_level))
+    return list(reversed(normalized))
 
 
 def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
@@ -36,25 +135,59 @@ def adjust_bbox(cuboid_max, cuboid_min, voxel_size_up):
     return adjusted_min, adjusted_max
 
 
+def is_sparse_level_data(level_data) -> bool:
+    """Return True when level_data stores (N, 3) sparse coords instead of dense masks."""
+    if not level_data:
+        return False
+    pattern = level_data[0][0]
+    return pattern.ndim == 2 and pattern.shape[1] == 3
+
+
+def grid_shape_finest_from_level_data(level_data) -> np.ndarray:
+    """Return finest-grid shape as int64 array for dense or sparse level_data."""
+    stored = getattr(level_data, "grid_shape_finest", None)
+    if stored is not None:
+        return np.asarray(stored, dtype=np.int64)
+    if is_sparse_level_data(level_data):
+        raise ValueError(
+            "Sparse level_data is missing grid_shape_finest metadata; use make_adaptive_surface_mesh or set level_data.grid_shape_finest."
+        )
+    num_levels = len(level_data)
+    return np.asarray(level_data[-1][0].shape, dtype=np.int64) * (2 ** (num_levels - 1))
+
+
+def _level_box_shape(level_data, level_idx: int) -> Tuple[int, int, int]:
+    """Return the full lattice shape ``(nx, ny, nz)`` at one refinement level."""
+    pattern = level_data[level_idx][0]
+    if pattern.ndim == 2:
+        finest = grid_shape_finest_from_level_data(level_data)
+        stride = int(level_data[level_idx][1])
+        return tuple(int(x) for x in (finest // stride))
+    return tuple(int(x) for x in pattern.shape)
+
+
+def _extract_active_field_values(field_np_card: np.ndarray, pattern: np.ndarray) -> np.ndarray:
+    """Gather per-voxel field values for a dense mask or sparse ``(N, 3)`` coords."""
+    if pattern.ndim == 2:
+        return field_np_card[pattern[:, 0], pattern[:, 1], pattern[:, 2]]
+    return field_np_card[pattern]
+
+
 def prepare_sparsity_pattern(level_data):
     """
-    Prepare the sparsity pattern for the multiresolution grid based on the level data. "level_data" is expected to be formatted as in
-    the output of "make_cuboid_mesh".
+    Prepare the sparsity pattern for the multiresolution grid based on the level data.
+
+    ``level_data`` is expected to be formatted as in the output of
+    ``make_cuboid_mesh`` or ``make_adaptive_surface_mesh``. Each entry may hold
+    either a dense 3-D mask or a sparse (N, 3) integer coordinate array.
     """
     num_levels = len(level_data)
     level_origins = []
     sparsity_pattern = []
     for lvl in range(num_levels):
-        # Get the level mask from the level data
-        level_mask = level_data[lvl][0]
-
-        # Ensure level_0 is contiguous int32
-        level_mask = np.ascontiguousarray(level_mask, dtype=np.int32)
-
-        # Append the padded level mask to the sparsity pattern
-        sparsity_pattern.append(level_mask)
-
-        # Get the origin for this level
+        pattern = level_data[lvl][0]
+        level_pattern = np.ascontiguousarray(pattern, dtype=np.int32)
+        sparsity_pattern.append(level_pattern)
         level_origins.append(level_data[lvl][2])
 
     return sparsity_pattern, level_origins
@@ -74,13 +207,8 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         list: Level data with mask arrays, voxel sizes, origins, and levels.
     """
     # Load the mesh and get its bounding box
-    mesh = trimesh.load_mesh(stl_filename, process=False)
-    assert not mesh.is_empty, "Loaded mesh is empty or invalid."
-
-    mesh_vertices = mesh.vertices
-    min_bound = mesh_vertices.min(axis=0)
-    max_bound = mesh_vertices.max(axis=0)
-    partSize = max_bound - min_bound
+    mesh = _load_stl_mesh(stl_filename)
+    min_bound, max_bound, partSize = _stl_bounds(mesh)
 
     level_data = []
     adjusted_bboxes = []
@@ -155,10 +283,7 @@ def make_cuboid_mesh(voxel_size, cuboids, stl_filename):
         voxel_matrix_k[i_start:i_end, j_start:j_end, k_start:k_end] = 0
 
     # Step 3 Convert to Indices from STL units
-    num_levels = len(level_data)
-    level_data = [(dr, int(v / voxel_size), np.round(dOrigin / v).astype(int), num_levels - 1 - l) for dr, v, dOrigin, l in level_data]
-
-    return list(reversed(level_data))
+    return _normalize_level_data(level_data, voxel_size)
 
 
 class MultiresIO(object):
@@ -249,7 +374,7 @@ class MultiresIO(object):
         total_cells : int
             Total number of active voxels across all levels.
         """
-        num_voxels_per_level = [np.sum(data) for data, _, _, _ in levels_data]
+        num_voxels_per_level = [data.shape[0] if data.ndim == 2 else int(np.sum(data)) for data, _, _, _ in levels_data]
         num_points_per_level = [8 * nv for nv in num_voxels_per_level]
         point_id_offsets = np.cumsum([0] + num_points_per_level[:-1])
 
@@ -263,7 +388,8 @@ class MultiresIO(object):
             corners_list, conn_list = self._process_level(data, voxel_size, origin, point_id_offsets[level_idx])
 
             if corners_list:
-                print(f"\tProcessing level {level}: Voxel size {voxel_size}, Origin {origin}, Shape {data.shape}")
+                shape_desc = f"coords {data.shape}" if data.ndim == 2 else f"shape {data.shape}"
+                print(f"\tProcessing level {level}: Voxel size {voxel_size}, Origin {origin}, {shape_desc}")
                 all_corners.extend(corners_list)
                 all_connectivity.extend(conn_list)
                 num_cells = sum(c.shape[0] for c in conn_list)
@@ -281,9 +407,12 @@ class MultiresIO(object):
 
     def _process_level(self, data, voxel_size, origin, point_id_offset):
         """
-        Given a voxel grid, returns all corners and connectivity in NumPy for this resolution level.
+        Given a voxel grid or sparse coordinate list, returns all corners and connectivity.
         """
-        true_indices = np.argwhere(data)
+        if data.ndim == 2:
+            true_indices = data
+        else:
+            true_indices = np.argwhere(data)
         if true_indices.size == 0:
             return [], []
 
@@ -423,8 +552,7 @@ class MultiresIO(object):
         unique_idx = 0
 
         # Get the grid shape of computational box at the finest level from the levels_data
-        num_levels = len(levels_data)
-        grid_shape_finest = np.array(levels_data[-1][0].shape) * 2 ** (num_levels - 1)
+        grid_shape_finest = grid_shape_finest_from_level_data(levels_data)
 
         for start in range(0, num_points, chunk_size):
             end = min(start + chunk_size, num_points)
@@ -461,19 +589,17 @@ class MultiresIO(object):
         # Get the number of levels from the levels_data
         num_levels = len(self.levels_data)
 
-        # Prepare lists to hold warp fields and origins allocated for each level
+        # Build origin_list once (indexed by level, independent of fields)
+        origin_list = [wp.vec3i(*([int(x) for x in self.levels_data[level][2]])) for level in range(num_levels)]
+
+        # Prepare warp fields for each (field_name, level) pair
         field_warp_dict = {}
-        origin_list = []
         for field_name, cardinality in self.field_name_cardinality_dict.items():
             field_warp_dict[field_name] = []
             for level in range(num_levels):
-                # get the shape of the grid at this level
-                box_shape = self.levels_data[level][0].shape
-
-                # Use the warp backend to create dense fields to be written in multi-res NEON fields
+                box_shape = _level_box_shape(self.levels_data, level)
                 grid_dense = grid_factory(box_shape, compute_backend=ComputeBackend.WARP)
                 field_warp_dict[field_name].append(grid_dense.create_field(cardinality=cardinality, dtype=self.store_precision))
-                origin_list.append(wp.vec3i(*([int(x) for x in self.levels_data[level][2]])))
 
         return field_warp_dict, origin_list
 
@@ -499,11 +625,12 @@ class MultiresIO(object):
                 @wp.func
                 def kernel(index: Any):
                     cIdx = wp.neon_global_idx(field_neon_hdl, index)
-                    # Get local indices by dividing the global indices (associated with the finest level) by 2^level
-                    # Subtract the origin to get the local indices in the warp field
-                    lx = wp.neon_get_x(cIdx) // refinement - origin[0]
-                    ly = wp.neon_get_y(cIdx) // refinement - origin[1]
-                    lz = wp.neon_get_z(cIdx) // refinement - origin[2]
+                    gx = wp.neon_get_x(cIdx)
+                    gy = wp.neon_get_y(cIdx)
+                    gz = wp.neon_get_z(cIdx)
+                    lx = gx // refinement - origin[0]
+                    ly = gy // refinement - origin[1]
+                    lz = gz // refinement - origin[2]
 
                     # write the values to the warp field
                     cardinality = field_warp.shape[0]
@@ -552,6 +679,11 @@ class MultiresIO(object):
             if field_name not in field_neon_dict:
                 continue
             for level in range(num_levels):
+                mask = self.levels_data[level][0]
+                active_count = mask.shape[0] if mask.ndim == 2 else int(np.count_nonzero(mask))
+                if active_count == 0:
+                    continue
+
                 # Create the container and run it to fill the warp fields
                 c = self.container(field_neon_dict[field_name], self.field_warp_dict[field_name][level], self.origin_list[level], level)
                 c.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
@@ -560,10 +692,9 @@ class MultiresIO(object):
                 wp.synchronize()
 
                 # Convert the warp fields to numpy arrays and use level's mask to filter the data
-                mask = self.levels_data[level][0]
                 field_np = self.field_warp_dict[field_name][level].numpy()
                 for card in range(cardinality):
-                    field_np_card = field_np[card][mask]
+                    field_np_card = _extract_active_field_values(field_np[card], mask)
                     fields_data[f"{field_name}_{card}"].append(field_np_card)
 
         # Concatenate all field data
