@@ -175,13 +175,23 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             # find grid shape at current level
             grid_shape_finest_warp = wp.vec3i(*grid_shape_finest)
 
+            # BC indices are stored in finest-lattice space via ``(local + origin) * 2**level``.
+            # A level-L voxel that sits on the max-side domain face has its finest starting
+            # index at ``grid_shape_finest[i] - 2**level`` (it spans the last ``2**level``
+            # finest cells).  ``are_indices_in_interior`` treats an index as interior when
+            # ``idx < shape - 1``, so comparing against ``grid_shape_finest`` incorrectly
+            # marks such face voxels as interior for every level except the finest.
+            # Build a per-level "interior shape" where ``shape - 1`` equals the finest
+            # starting index of the last voxel at this level; this makes the classifier
+            # consistent across all refinement levels.
+            stride = 2**level
+            interior_shape = tuple(int(grid_shape_finest[i]) - stride + 1 for i in range(len(grid_shape_finest)))
+
             # find interior boundary conditions
-            # Indices are in finest-space after virtual_finest_to_neon_global, so
-            # interior detection must compare against grid_shape_finest.
-            bc_interior = self._find_bclist_interior(bclist_at_level, grid_shape_finest)
+            bc_interior = self._find_bclist_interior(bclist_at_level, interior_shape)
 
             # Prepare the first kernel inputs for all items in boundary condition list
-            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, grid_shape_finest)
+            wp_bc_indices, wp_id_numbers, wp_is_interior = self._prepare_kernel_inputs(bclist_at_level, interior_shape)
 
             # Launch the first container
             container_domain_bounds = self.neon_container["container_domain_bounds"](
@@ -202,7 +212,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             # Prepare the second and third kernel inputs for only a subset of boundary conditions associated with the interior
             # Note 1: launching order of the following kernels are important here!
             # Note 2: Due to race conditioning, the two kernels cannot be fused together.
-            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, grid_shape_finest)
+            wp_bc_indices, wp_id_numbers, _ = self._prepare_kernel_inputs(bc_interior, interior_shape)
             container_interior_missing_mask = self.neon_container["container_interior_missing_mask"](
                 wp_bc_indices,
                 bc_mask,
