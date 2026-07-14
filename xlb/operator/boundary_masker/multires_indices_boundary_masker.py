@@ -145,8 +145,18 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
 
         grid = bc_mask.get_grid()
         num_levels = grid.num_levels
-        grid_shape_finest = self.helper_masker.get_grid_shape(bc_mask)
         domain_min_finest, domain_max_finest = self._domain_bounds_from_neon_grid(grid)
+
+        # For adaptive meshes grid_shape_finest (from get_grid_shape) may
+        # include dyadic-alignment padding cells that have no active voxels.
+        # Using the padded dimensions for interior classification and
+        # is_in_bounds causes max-side boundary voxels to be misclassified
+        # as interior and outward-facing pulls to appear "in bounds",
+        # leaving missing_mask empty and destabilising the outlet.
+        # Use the actual active-domain extent instead.
+        effective_dims = tuple(int(domain_max_finest[i]) + 1 for i in range(3))
+        effective_grid_shape = wp.vec3i(*effective_dims)
+
         for level in range(num_levels):
             origin_pt = grid.sparsity_pattern_origins[level]
             origin = np.array([origin_pt.x, origin_pt.y, origin_pt.z], dtype=np.int64).reshape(3, 1)
@@ -172,20 +182,14 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
             if not bclist_at_level:
                 continue
 
-            # find grid shape at current level
-            grid_shape_finest_warp = wp.vec3i(*grid_shape_finest)
-
             # BC indices are stored in finest-lattice space via ``(local + origin) * 2**level``.
-            # A level-L voxel that sits on the max-side domain face has its finest starting
-            # index at ``grid_shape_finest[i] - 2**level`` (it spans the last ``2**level``
-            # finest cells).  ``are_indices_in_interior`` treats an index as interior when
-            # ``idx < shape - 1``, so comparing against ``grid_shape_finest`` incorrectly
-            # marks such face voxels as interior for every level except the finest.
-            # Build a per-level "interior shape" where ``shape - 1`` equals the finest
-            # starting index of the last voxel at this level; this makes the classifier
-            # consistent across all refinement levels.
+            # A level-L voxel on the max-side domain face has its finest starting
+            # index at ``domain_max[i] // stride * stride``.
+            # ``are_indices_in_interior`` treats an index as interior when
+            # ``idx < shape - 1``, so we build a per-level "interior shape"
+            # from the actual domain extent (not the padded grid_shape_finest).
             stride = 2**level
-            interior_shape = tuple(int(grid_shape_finest[i]) - stride + 1 for i in range(len(grid_shape_finest)))
+            interior_shape = tuple(int(domain_max_finest[i]) - stride + 2 for i in range(3))
 
             # find interior boundary conditions
             bc_interior = self._find_bclist_interior(bclist_at_level, interior_shape)
@@ -200,7 +204,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                 wp_is_interior,
                 bc_mask,
                 missing_mask,
-                grid_shape_finest_warp,
+                effective_grid_shape,
                 level,
             )
             container_domain_bounds.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
@@ -217,7 +221,7 @@ class MultiresIndicesBoundaryMasker(IndicesBoundaryMasker):
                 wp_bc_indices,
                 bc_mask,
                 missing_mask,
-                grid_shape_finest_warp,
+                effective_grid_shape,
                 level,
             )
             container_interior_missing_mask.run(0, container_runtime=neon.Container.ContainerRuntime.neon)
