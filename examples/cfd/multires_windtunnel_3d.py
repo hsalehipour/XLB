@@ -26,7 +26,8 @@ from xlb.operator.boundary_condition import (
     RegularizedBC,
 )
 from xlb.operator.boundary_masker import MeshVoxelizationMethod
-from xlb.utils.mesher import prepare_sparsity_pattern, make_cuboid_mesh, MultiresIO
+from xlb.utils.mesher import prepare_sparsity_pattern, make_cuboid_mesh, MultiresIO, is_sparse_level_data
+from xlb.utils.adaptive_mesher import grid_shape_finest, load_and_shift_stl, make_adaptive_surface_mesh
 from xlb.utils import UnitConvertor
 from xlb.operator.force import MultiresMomentumTransfer
 from xlb.helper.initializers import CustomMultiresInitializer
@@ -42,6 +43,24 @@ wind_speed_mps = 38.0  # Physical inlet velocity in m/s (user input)
 flow_passes = 2  # Domain flow passes
 kinematic_viscosity = 1.508e-5  # Kinematic viscosity of air in m^2/s 1.508e-5
 voxel_size = 0.005  # Finest voxel size in meters
+
+# Mesh generation: "cuboid" or "adaptive"
+mesher_type = "adaptive"
+
+# Cuboid mesher: nested domain multipliers per level [-x, +x, -y, +y, -z, +z]
+domain_multiplier = [
+    [3.0, 4.0, 2.5, 2.5, 0.0, 4.0],
+    [1.2, 1.25, 1.75, 1.75, 0.0, 1.5],
+    [0.8, 1.0, 1.25, 1.25, 0.0, 1.2],
+    [0.5, 0.65, 0.6, 0.60, 0.0, 0.6],
+    [0.25, 0.25, 0.25, 0.25, 0.0, 0.25],
+]
+
+# Adaptive mesher: outer domain padding (uses domain_multiplier[0] by default)
+num_levels = len(domain_multiplier)
+domain_padding = domain_multiplier[0]
+expansion_ratio = 2.0
+finest_band_cells = 3
 
 # STL filename
 stl_filename = "examples/cfd/stl-files/Ahmed_25_NoLegs.stl"
@@ -59,65 +78,87 @@ precision_policy = PrecisionPolicy.FP32FP32
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
 
 
+def _active_voxel_count(mask):
+    """Return active voxel count for dense masks or sparse (N, 3) coordinate arrays."""
+    return mask.shape[0] if mask.ndim == 2 else int(np.count_nonzero(mask))
+
+
 def generate_cuboid_mesh(stl_filename, voxel_size):
     """
-    Alternative cuboid mesh generation based on Apolo's method with domain multipliers per level.
+    Cuboid mesh generation with nested domain multipliers per refinement level.
     """
-    # Domain multipliers for each refinement level
-    domain_multiplier = [
-        [3.0, 4.0, 2.5, 2.5, 0.0, 4.0],  # -x, x, -y, y, -z, z
-        [1.2, 1.25, 1.75, 1.75, 0.0, 1.5],
-        [0.8, 1.0, 1.25, 1.25, 0.0, 1.2],
-        [0.5, 0.65, 0.6, 0.60, 0.0, 0.6],
-        [0.25, 0.25, 0.25, 0.25, 0.0, 0.25],
-    ]
-
-    # Load the mesh
     mesh = trimesh.load_mesh(stl_filename, process=False)
     if mesh.is_empty:
         raise ValueError("Loaded mesh is empty or invalid.")
 
-    # Compute original bounds
     min_bound = mesh.vertices.min(axis=0)
     max_bound = mesh.vertices.max(axis=0)
-    partSize = max_bound - min_bound
-    x0 = max_bound[0]  # End of car for Ahmed
+    part_size = max_bound - min_bound
+    x0 = max_bound[0]  # End of car for Ahmed (original STL frame)
 
-    # Compute translation to put mesh into first octant of the domain
     stl_shift = np.array(
         [
-            domain_multiplier[0][0] * partSize[0] - min_bound[0],
-            domain_multiplier[0][2] * partSize[1] - min_bound[1],
-            domain_multiplier[0][4] * partSize[2] - min_bound[2],
+            domain_multiplier[0][0] * part_size[0] - min_bound[0],
+            domain_multiplier[0][2] * part_size[1] - min_bound[1],
+            domain_multiplier[0][4] * part_size[2] - min_bound[2],
         ],
         dtype=float,
     )
 
-    # Apply translation and save out temp STL
     mesh.apply_translation(stl_shift)
     _ = mesh.vertex_normals
     mesh_vertices = np.asarray(mesh.vertices)
     mesh.export("temp.stl")
 
-    # Generate mesh using make_cuboid_mesh
-    level_data = make_cuboid_mesh(
-        voxel_size,
-        domain_multiplier,
-        "temp.stl",
-    )
-
-    num_levels = len(level_data)
-    grid_shape_finest = tuple([int(i * 2 ** (num_levels - 1)) for i in level_data[-1][0].shape])
-    print(f"Full shape based on finest voxel size is {grid_shape_finest}")
+    level_data = make_cuboid_mesh(voxel_size, domain_multiplier, "temp.stl")
+    num_levels_local = len(level_data)
+    grid_shape_finest_local = tuple(int(i * 2 ** (num_levels_local - 1)) for i in level_data[-1][0].shape)
+    print(f"[cuboid] levels={num_levels_local}, grid_shape_finest={grid_shape_finest_local}")
     os.remove("temp.stl")
 
-    return (
-        level_data,
-        mesh_vertices,
-        tuple([int(a) for a in grid_shape_finest]),
-        stl_shift,
-        x0,
-    )
+    return level_data, mesh_vertices, grid_shape_finest_local, stl_shift, x0
+
+
+def generate_adaptive_mesh(stl_filename, voxel_size):
+    """
+    Surface-adaptive mesh generation with distance-based refinement near the body.
+    """
+    mesh = trimesh.load_mesh(stl_filename, process=False)
+    if mesh.is_empty:
+        raise ValueError("Loaded mesh is empty or invalid.")
+    x0 = mesh.vertices.max(axis=0)[0]
+
+    temp_stl, stl_shift = load_and_shift_stl(stl_filename, domain_padding)
+    try:
+        level_data = make_adaptive_surface_mesh(
+            voxel_size=voxel_size,
+            num_levels=num_levels,
+            stl_filename=temp_stl,
+            domain_padding=domain_padding,
+            expansion_ratio=expansion_ratio,
+            finest_band_cells=finest_band_cells,
+        )
+        grid_shape_finest_local = grid_shape_finest(level_data)
+
+        shifted_mesh = trimesh.load_mesh(temp_stl, process=False)
+        mesh_vertices = np.asarray(shifted_mesh.vertices)
+
+        print(f"[adaptive] levels={len(level_data)}, sparse={is_sparse_level_data(level_data)}")
+        print(f"[adaptive] grid_shape_finest={grid_shape_finest_local}")
+
+        return level_data, mesh_vertices, grid_shape_finest_local, stl_shift, x0
+    finally:
+        if os.path.isfile(temp_stl):
+            os.remove(temp_stl)
+
+
+def generate_mesh(stl_filename, voxel_size):
+    """Dispatch to cuboid or adaptive mesher based on ``mesher_type``."""
+    if mesher_type == "cuboid":
+        return generate_cuboid_mesh(stl_filename, voxel_size)
+    if mesher_type == "adaptive":
+        return generate_adaptive_mesh(stl_filename, voxel_size)
+    raise ValueError(f"Unknown mesher_type: {mesher_type!r}. Use 'cuboid' or 'adaptive'.")
 
 
 # Boundary Conditions Setup
@@ -146,7 +187,7 @@ def setup_boundary_conditions(grid, level_data, body_vertices, wind_speed_mps):
     bc_body = HybridBC(
         bc_method="nonequilibrium_regularized",
         mesh_vertices=unit_convertor.length_to_lbm(body_vertices),
-        voxelization_method=MeshVoxelizationMethod("AABB_CLOSE", close_voxels=4),
+        voxelization_method=MeshVoxelizationMethod("AABB_CLOSE", close_voxels=1),
         use_mesh_distance=True,
     )
 
@@ -219,6 +260,13 @@ def plot_force_coefficients(drag_values, output_dir, print_interval, script_name
     plt.close()
 
 
+def _active_voxel_indices(mask):
+    """Return active voxel indices as (N, 3) for dense or sparse level patterns."""
+    if mask.ndim == 2:
+        return mask
+    return np.argwhere(mask)
+
+
 def compute_voxel_statistics(sim, bc_mask_exporter, sparsity_pattern, boundary_conditions, unit_convertor):
     """
     Compute active/solid voxels, totals, lattice updates, and reference area based on simulation data.
@@ -234,7 +282,7 @@ def compute_voxel_statistics(sim, bc_mask_exporter, sparsity_pattern, boundary_c
         solid_voxels.append(np.sum(bc_mask_data[level_mask] == 255))
 
     # Compute active voxels (total non-zero in sparsity minus solids)
-    active_voxels = [np.count_nonzero(mask) for mask in sparsity_pattern]
+    active_voxels = [_active_voxel_count(mask) for mask in sparsity_pattern]
     active_voxels = [max(0, active_voxels[lvl] - solid_voxels[lvl]) for lvl in range(num_levels)]
 
     # Totals
@@ -245,7 +293,7 @@ def compute_voxel_statistics(sim, bc_mask_exporter, sparsity_pattern, boundary_c
     finest_level = 0
     mask_finest = level_id_field == finest_level
     bc_mask_finest = bc_mask_data[mask_finest]
-    active_indices_finest = np.argwhere(sparsity_pattern[0])
+    active_indices_finest = _active_voxel_indices(sparsity_pattern[0])
     bc_body_id = boundary_conditions[-1].id  # Assuming last BC is bc_body
     solid_voxels_indices = active_indices_finest[bc_mask_finest == bc_body_id]
     unique_jk = np.unique(solid_voxels_indices[:, 1:3], axis=0)
@@ -364,7 +412,7 @@ xlb.init(
 )
 
 # Generate mesh
-level_data, body_vertices, grid_shape_zip, stl_shift, x0 = generate_cuboid_mesh(stl_filename, voxel_size)
+level_data, body_vertices, grid_shape_zip, stl_shift, x0 = generate_mesh(stl_filename, voxel_size)
 
 # Prepare the sparsity pattern and origins from the level data
 sparsity_pattern, level_origins = prepare_sparsity_pattern(level_data)
@@ -476,7 +524,8 @@ print(f"Number of flow passes: {flow_passes}")
 print(f"Calculated iterations: {num_steps:,}")
 print(f"Finest voxel size: {voxel_size} meters")
 print(f"Coarsest voxel size: {delta_x_coarse} meters")
-print(f"Total voxels: {sum(np.count_nonzero(mask) for mask in sparsity_pattern):,}")
+print(f"Mesher: {mesher_type}")
+print(f"Total voxels: {sum(_active_voxel_count(mask) for mask in sparsity_pattern):,}")
 print(f"Total active voxels: {total_voxels:,}")
 print(f"Active voxels per level: {[int(v) for v in active_voxels]}")
 print(f"Solid voxels per level: {[int(v) for v in solid_voxels]}")
