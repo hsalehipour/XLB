@@ -100,7 +100,7 @@ def save_image(fld, timestep=None, prefix=None, **kwargs):
     plt.imsave(fname + ".png", fld.T, cmap=cmap, origin="lower", **kwargs)
 
 
-def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
+def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields", spacing=(1.0, 1.0, 1.0), origin=(0.0, 0.0, 0.0)):
     """
     Save VTK fields to the specified directory.
 
@@ -115,6 +115,11 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
         The key value for each field in the dictionary must be a string containing the name of the field.
     output_dir (str, optional, default: '.'): The directory in which to save the VTK files. Defaults to the current directory.
     prefix (str, optional, default: 'fields'): A prefix to be added to the filename. Defaults to 'fields'.
+    spacing (tuple of float, optional, default: (1.0, 1.0, 1.0)): The physical size of a single cell along each
+        axis. Use (1.0, 1.0, 1.0) to write coordinates in lattice units, or the physical voxel size
+        (e.g. (dx, dx, dx) in meters) to write coordinates in physical units.
+    origin (tuple of float, optional, default: (0.0, 0.0, 0.0)): The physical coordinate of the grid origin,
+        expressed in the same units as ``spacing``.
 
     Returns
     -------
@@ -127,27 +132,43 @@ def save_fields_vtk(fields, timestep, output_dir=".", prefix="fields"):
     will be saved as 'fields_0000010.vtk'in the specified directory.
 
     """
-    # Assert that all fields have the same dimensions
-    for key, value in fields.items():
-        if key == list(fields.keys())[0]:
-            dimensions = value.shape
+    # Materialize as numpy (handles JAX/Warp arrays) and classify each field as a scalar
+    # (ndim == spatial dims) or a component-first vector (ndim == spatial dims + 1, e.g. (3, nx, ny, nz)).
+    values = {key: np.asarray(value) for key, value in fields.items()}
+    spatial_ndim = min(value.ndim for value in values.values())
+
+    dimensions = next(value.shape for value in values.values() if value.ndim == spatial_ndim)
+    for key, value in values.items():
+        if value.ndim == spatial_ndim:
+            assert value.shape == dimensions, "All scalar fields must have the same dimensions!"
+        elif value.ndim == spatial_ndim + 1:
+            assert value.shape[1:] == dimensions, f"Vector field '{key}' must be component-first with matching spatial dimensions!"
         else:
-            assert value.shape == dimensions, "All fields must have the same dimensions!"
+            raise ValueError(f"Field '{key}' has unsupported shape {value.shape} for a {spatial_ndim}D grid.")
 
     output_filename = os.path.join(output_dir, prefix + "_" + f"{timestep:07d}.vtk")
 
     # Add 1 to the dimensions tuple as we store cell values
-    dimensions = tuple([dim + 1 for dim in dimensions])
+    grid_dimensions = tuple(dim + 1 for dim in dimensions)
 
     # Create a uniform grid
-    if value.ndim == 2:
-        dimensions = dimensions + (1,)
+    if spatial_ndim == 2:
+        grid_dimensions = grid_dimensions + (1,)
 
-    grid = pv.ImageData(dimensions=dimensions)
+    # Normalize spacing/origin to length-3 tuples so 2D fields are handled consistently
+    spacing = tuple(float(s) for s in spacing)[:3]
+    spacing = spacing + (1.0,) * (3 - len(spacing))
+    origin = tuple(float(o) for o in origin)[:3]
+    origin = origin + (0.0,) * (3 - len(origin))
 
-    # Add the fields to the grid
-    for key, value in fields.items():
-        grid[key] = value.flatten(order="F")
+    grid = pv.ImageData(dimensions=grid_dimensions, spacing=spacing, origin=origin)
+
+    # Add the fields to the grid: scalars flattened directly, vectors stacked into (N, ncomp) arrays
+    for key, value in values.items():
+        if value.ndim == spatial_ndim:
+            grid[key] = value.flatten(order="F")
+        else:
+            grid[key] = np.stack([value[c].flatten(order="F") for c in range(value.shape[0])], axis=-1)
 
     # Save the grid to a VTK file
     start = time()
