@@ -46,8 +46,8 @@ voxel_size = 8  # Finest lattice cell size [m]
 # Adaptive mesh parameters (see xlb.utils.adaptive_mesher)
 num_levels = 4
 domain_padding = [1.5, 3.0, 1.5, 1.5, 0.0, 4.0]  # [-x, +x, -y, +y, -z, +z] x geometry extent
-expansion_ratio = 2.0  # Geometric ratio between consecutive refinement shells
-finest_band_cells = 6  # Thickness of finest-level band near surfaces [cells]
+expansion_ratio = 2  # Geometric ratio between consecutive refinement shells
+finest_band_cells = 10  # Thickness of finest-level band near surfaces [cells]
 
 # Geometry and output
 stl_filename = "examples/cfd/stl-files/07022026_SEPULVEDA_SITE_MODEL_FORMA_NOTREES.stl"
@@ -183,18 +183,18 @@ def setup_boundary_conditions(grid, level_data, building_vertices, wind_speed_mp
         filtered_bottom.append(_set_to_indices(_coords_to_set(indices["bottom"][lvl]) - lr_exclude))
 
     return [
-        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(wind_speed_lbm_local, 0.0, 0.0), indices=indices["front"]),
-        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(wind_speed_lbm_local, 0.0, 0.0), indices=indices["back"]),
+        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(0.0, 0.0, 0.0), indices=indices["front"]),
+        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(0.0, 0.0, 0.0), indices=indices["back"]),
         HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(0.0, 0.0, 0.0), indices=filtered_bottom),
-        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(wind_speed_lbm_local, 0.0, 0.0), indices=filtered_top),
+        HybridBC(bc_method="nonequilibrium_regularized", prescribed_value=(0.0, 0.0, 0.0), indices=filtered_top),
         RegularizedBC("velocity", prescribed_value=(wind_speed_lbm_local, 0.0, 0.0), indices=indices["left"]),
         DoNothingBC(indices=indices["right"]),
-        # HybridBC(
-        #     bc_method="nonequilibrium_regularized",
-        #     mesh_vertices=unit_convertor.length_to_lbm(building_vertices),
-        #     voxelization_method=MeshVoxelizationMethod("AABB"),
-        #     use_mesh_distance=False,
-        # ),
+        HybridBC(
+            bc_method="nonequilibrium_regularized",
+            mesh_vertices=unit_convertor.length_to_lbm(building_vertices),
+            voxelization_method=MeshVoxelizationMethod("AABB_CLOSE", close_voxels=4),
+            use_mesh_distance=False,
+        ),
     ]
 
 
@@ -288,7 +288,7 @@ file_output_interval_post = (
 # --- Boundary conditions, initializer, and simulation manager ---
 boundary_conditions = setup_boundary_conditions(grid, level_data, building_vertices, wind_speed_mps)
 initializer = CustomMultiresInitializer(
-    bc_id=boundary_conditions[-1].id,
+    bc_id=boundary_conditions[-2].id,
     constant_velocity_vector=(wind_speed_lbm, 0.0, 0.0),
     velocity_set=velocity_set,
     precision_policy=precision_policy,
