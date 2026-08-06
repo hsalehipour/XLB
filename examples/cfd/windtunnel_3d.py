@@ -14,7 +14,7 @@ from xlb.operator.boundary_condition import (
 )
 from xlb.operator.force.momentum_transfer import MomentumTransfer
 from xlb.operator.macroscopic import Macroscopic
-from xlb.utils import save_fields_vtk, save_image
+from xlb.utils import save_fields_vtk, save_image, UnitConvertor
 import warp as wp
 import numpy as np
 import jax.numpy as jnp
@@ -33,16 +33,14 @@ compute_backend = ComputeBackend.WARP
 precision_policy = PrecisionPolicy.FP32FP32
 
 velocity_set = xlb.velocity_set.D3Q27(precision_policy=precision_policy, compute_backend=compute_backend)
-wind_speed = 0.02
 num_steps = 100000
 print_interval = 1000
 post_process_interval = 1000
 
-# Physical Parameters
-Re = 50000.0
-clength = grid_size_x - 1
-visc = wind_speed * clength / Re
-omega = 1.0 / (3.0 * visc + 0.5)
+# Physical reference parameters (used for unit conversion between physical and lattice units)
+wind_speed_lbm = 0.02  # Reference inlet velocity in lattice units
+wind_speed_mps = 5.0  # Physical inlet velocity [m/s]
+Re = 50000.0  # Reynolds number (sets the lattice viscosity)
 
 # Print simulation info
 print("\n" + "=" * 50 + "\n")
@@ -51,7 +49,7 @@ print(f"Grid size: {grid_size_x} x {grid_size_y} x {grid_size_z}")
 print(f"Backend: {compute_backend}")
 print(f"Velocity set: {velocity_set}")
 print(f"Precision policy: {precision_policy}")
-print(f"Prescribed velocity: {wind_speed}")
+print(f"Prescribed velocity: {wind_speed_lbm} (lattice) / {wind_speed_mps} m/s (physical)")
 print(f"Reynolds number: {Re}")
 print(f"Max iterations: {num_steps}")
 print("\n" + "=" * 50 + "\n")
@@ -80,13 +78,29 @@ voxelization_method = MeshVoxelizationMethod("RAY")
 mesh = trimesh.load_mesh(stl_filename, process=False)
 mesh_vertices = mesh.vertices
 
-# Transform the mesh points to align with the grid
-mesh_vertices -= mesh_vertices.min(axis=0)
+# Shift the mesh to the origin and measure its physical extents (STL units, assumed meters).
+# Remember the STL's original min corner so exported fields can be mapped back to the STL's own
+# authored frame (the mesh may not be defined with its origin at the min corner).
+stl_origin = np.array(mesh_vertices.min(axis=0), dtype=float)
+mesh_vertices -= stl_origin
 mesh_extents = mesh_vertices.max(axis=0)
 length_phys_unit = mesh_extents.max()
+
+# Fit the longest mesh dimension into the domain to set the physical size of a single
+# lattice cell (voxel). This voxel size anchors all physical <-> lattice unit conversions.
 length_lbm_unit = grid_shape[0] / 4
-dx = length_phys_unit / length_lbm_unit
-mesh_vertices = mesh_vertices / dx
+voxel_size = length_phys_unit / length_lbm_unit
+
+# Unit convertor: maps between physical units (m, m/s, m^2/s) and lattice units
+unit_convertor = UnitConvertor(
+    velocity_lbm_unit=wind_speed_lbm,
+    velocity_physical_unit=wind_speed_mps,
+    voxel_size_physical_unit=voxel_size,
+)
+
+# Convert the mesh vertices and extents from physical units to lattice units
+mesh_vertices = unit_convertor.length_to_lbm(mesh_vertices)
+mesh_extents_lbm = unit_convertor.length_to_lbm(mesh_extents)
 
 # Depending on the voxelization method, shift_z ensures the bottom ground does not intersect with the voxelized mesh
 # Any smaller shift value would lead to large lift computations due to the initial equilibrium distributions. Bigger
@@ -95,12 +109,29 @@ if voxelization_method in (MeshVoxelizationMethod("RAY"), MeshVoxelizationMethod
     shift_z = 2
 elif voxelization_method in (MeshVoxelizationMethod("AABB"), MeshVoxelizationMethod("AABB_CLOSE", close_voxels=3)):
     shift_z = 3
-shift = np.array([grid_shape[0] / 4, (grid_shape[1] - mesh_extents[1] / dx) / 2, shift_z])
+shift = np.array([grid_shape[0] / 4, (grid_shape[1] - mesh_extents_lbm[1]) / 2, shift_z])
 car_vertices = mesh_vertices + shift
-car_cross_section = np.prod(mesh_extents[1:]) / dx**2
+
+# Projected cross-sectional area (y-z plane) in lattice units and physical units [m^2]
+car_cross_section = np.prod(mesh_extents_lbm[1:])
+car_cross_section_physical = car_cross_section * unit_convertor.reference_length**2
+
+# Lattice viscosity from the target Reynolds number; report the equivalent physical viscosity
+clength = grid_size_x - 1
+visc = wind_speed_lbm * clength / Re
+omega = 1.0 / (3.0 * visc + 0.5)
+kinematic_viscosity = unit_convertor.viscosity_to_physical(visc)
+
+print("Unit Conversion:")
+print(f"Voxel size (dx): {voxel_size:.6g} m")
+print(f"Physical time step (dt): {unit_convertor.time_step_physical:.6g} s")
+print(f"Lattice viscosity: {visc:.6g}  |  omega: {omega:.6f}")
+print(f"Physical kinematic viscosity: {kinematic_viscosity:.6g} m^2/s")
+print(f"Car cross-section: {car_cross_section:.2f} lattice units^2 / {car_cross_section_physical:.6g} m^2")
+print("\n" + "=" * 50 + "\n")
 
 
-bc_left = RegularizedBC("velocity", prescribed_value=(wind_speed, 0.0, 0.0), indices=inlet)
+bc_left = RegularizedBC("velocity", prescribed_value=(wind_speed_lbm, 0.0, 0.0), indices=inlet)
 bc_walls = FullwayBounceBackBC(indices=walls)
 bc_do_nothing = ExtrapolationOutflowBC(indices=outlet)
 bc_car = HalfwayBounceBackBC(mesh_vertices=car_vertices, voxelization_method=voxelization_method)
@@ -172,6 +203,9 @@ def post_process(
     bc_mask,
     wind_speed,
     car_cross_section,
+    unit_convertor,
+    mesh_shift,
+    stl_origin,
     drag_coefficients,
     lift_coefficients,
     time_steps,
@@ -187,8 +221,11 @@ def post_process(
         momentum_transfer: MomentumTransfer operator object.
         missing_mask: Missing mask from stepper.
         bc_mask: Boundary condition mask from stepper.
-        wind_speed (float): Prescribed wind speed.
-        car_cross_section (float): Cross-sectional area of the car.
+        wind_speed (float): Prescribed wind speed (lattice units).
+        car_cross_section (float): Cross-sectional area of the car (lattice units).
+        unit_convertor (UnitConvertor): Converts lattice quantities to physical units.
+        mesh_shift (np.ndarray): Translation (lattice units) applied to place the mesh in the domain.
+        stl_origin (np.ndarray): Original min corner of the STL (physical units) subtracted at load time.
         drag_coefficients (list): List to store drag coefficients.
         lift_coefficients (list): List to store lift coefficients.
         time_steps (list): List to store time steps.
@@ -202,18 +239,25 @@ def post_process(
     # Compute macroscopic quantities
     rho, u = macro(f_0_jax)
 
-    # Remove boundary cells
+    # Remove boundary cells and convert the velocity field from lattice units to m/s
     u = u[:, 1:-1, 1:-1, 1:-1]
+    u = unit_convertor.velocity_to_physical(u)
     u_magnitude = jnp.sqrt(u[0] ** 2 + u[1] ** 2 + u[2] ** 2)
 
-    fields = {"u_magnitude": u_magnitude}
+    fields = {"u_magnitude_mps": u_magnitude, "velocity_mps": u}
 
-    # Save fields in VTK format
-    save_fields_vtk(fields, timestep=step)
+    # Save fields in VTK format with physical (metre) coordinates, anchored to the original STL frame.
+    # Three corrections go into the origin (all in physical units):
+    #   +1 voxel        undoes the [1:-1] boundary slice,
+    #   -mesh_shift     undoes the translation applied to place the mesh in the domain,
+    #   +stl_origin     restores the STL's authored origin that was subtracted at load time.
+    voxel_size = unit_convertor.reference_length
+    origin = tuple((np.array([1.0, 1.0, 1.0]) - np.asarray(mesh_shift)) * voxel_size + np.asarray(stl_origin))
+    save_fields_vtk(fields, timestep=step, spacing=(voxel_size,) * 3, origin=origin)
 
     # Save the u_magnitude slice at the mid y-plane
     mid_y = grid_shape[1] // 2
-    save_image(fields["u_magnitude"][:, mid_y, :], timestep=step)
+    save_image(fields["u_magnitude_mps"][:, mid_y, :], timestep=step)
 
     # Compute lift and drag
     boundary_force = momentum_transfer(f_0, f_1, bc_mask, missing_mask)
@@ -275,8 +319,11 @@ for step in range(num_steps):
             momentum_transfer,
             missing_mask,
             bc_mask,
-            wind_speed,
+            wind_speed_lbm,
             car_cross_section,
+            unit_convertor,
+            shift,
+            stl_origin,
             drag_coefficients,
             lift_coefficients,
             time_steps,
